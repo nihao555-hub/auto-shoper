@@ -32,3 +32,10 @@ def test_confirmation_blocks_publish_readiness() -> None:
 def test_all_trusted_required_fields_are_ready() -> None:
     result = validate_product_fields(trusted_fields(), [])
     assert result.ready_to_publish is True
+
+
+def test_schema_required_field_is_enforced() -> None:
+    fields = trusted_fields()
+    result = validate_product_fields(fields, ["voltage"])
+    assert result.ready_to_publish is False
+    assert result.missing_fields == ["voltage"]

@@ -60,6 +60,12 @@ class AlibabaPublishRequest(AlibabaSchemaRequest):
     confirmed_by_user: bool = False
 
 
+class AlibabaDraftRenderRequest(BaseModel):
+    category_id: str
+    product_id: str
+    language: str = "en_US"
+
+
 class AlibabaOperation(BaseModel):
     key: str
     operation: str

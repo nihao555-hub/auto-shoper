@@ -13,6 +13,7 @@ from backend.app.clients.alibaba import (
 from backend.app.config import get_settings
 from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.models import (
+    AlibabaDraftRenderRequest,
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
     ImageGenerationRequest,
@@ -50,6 +51,25 @@ async def get_category(
     return await _alibaba_call(client, "category_get", {"cat_id": category_id})
 
 
+@router.get("/alibaba/products")
+async def list_products(
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    current_page: int = 1,
+    page_size: int = 30,
+    subject: str | None = None,
+    category_id: str | None = None,
+) -> dict[str, Any]:
+    parameters: dict[str, Any] = {
+        "current_page": current_page,
+        "page_size": page_size,
+    }
+    if subject:
+        parameters["subject"] = subject
+    if category_id:
+        parameters["category_id"] = category_id
+    return await _alibaba_call(client, "product_list", parameters)
+
+
 @router.get("/alibaba/categories/{category_id}/schema")
 async def get_schema(
     category_id: str,
@@ -58,12 +78,36 @@ async def get_schema(
     return await _alibaba_call(client, "schema_get", {"cat_id": category_id})
 
 
+@router.post("/alibaba/products/drafts/render")
+async def render_draft(
+    request: AlibabaDraftRenderRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "draft_render",
+        {
+            "cat_id": request.category_id,
+            "product_id": request.product_id,
+            "language": request.language,
+        },
+    )
+
+
 @router.get("/alibaba/products/{product_id}")
 async def get_product(
     product_id: str,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
     return await _alibaba_call(client, "product_get", {"product_id": product_id})
+
+
+@router.get("/alibaba/products/{product_id}/score")
+async def get_product_score(
+    product_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(client, "product_score", {"product_id": product_id})
 
 
 @router.post("/alibaba/products/drafts")

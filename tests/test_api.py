@@ -51,3 +51,9 @@ def test_operations_catalog_contains_core_publish_flow() -> None:
     client = TestClient(app)
     operations = {item["key"] for item in client.get("/api/v1/alibaba/operations").json()}
     assert {"category_get", "schema_get", "photo_upload", "draft_create", "publish"} <= operations
+
+
+def test_unconfigured_alibaba_endpoint_returns_service_unavailable() -> None:
+    client = TestClient(app)
+    response = client.get("/api/v1/alibaba/categories/123")
+    assert response.status_code == 503

@@ -23,12 +23,13 @@ MANUAL_REQUIREMENTS = [
 
 MANUAL_FIELD_NAMES = {item.name for item in MANUAL_REQUIREMENTS}
 TRUSTED_SOURCES = {FieldSource.USER_PROVIDED, FieldSource.BUSINESS_SYSTEM}
+BASE_REQUIRED_FIELDS = {"category_id"}
 
 
 def validate_product_fields(
     fields: dict[str, DraftField], schema_required_fields: list[str]
 ) -> ProductValidationResult:
-    required = MANUAL_FIELD_NAMES | set(schema_required_fields)
+    required = BASE_REQUIRED_FIELDS | set(schema_required_fields)
     missing = sorted(
         name
         for name in required
