@@ -60,6 +60,26 @@ class AlibabaPublishRequest(AlibabaSchemaRequest):
     confirmed_by_user: bool = False
 
 
+class AlibabaBatchItem(AlibabaSchemaRequest):
+    reference: str | None = None
+
+
+class AlibabaBatchRequest(BaseModel):
+    items: list[AlibabaBatchItem] = Field(min_length=1, max_length=100)
+    concurrency: int = Field(default=3, ge=1, le=10)
+
+
+class AlibabaBatchPublishRequest(AlibabaBatchRequest):
+    confirmed_by_user: bool = False
+
+
+class AlibabaBatchResult(BaseModel):
+    reference: str | None
+    success: bool
+    response: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class AlibabaDraftRenderRequest(BaseModel):
     category_id: str
     product_id: str

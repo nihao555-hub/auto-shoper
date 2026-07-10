@@ -57,3 +57,40 @@ def test_unconfigured_alibaba_endpoint_returns_service_unavailable() -> None:
     client = TestClient(app)
     response = client.get("/api/v1/alibaba/categories/123")
     assert response.status_code == 503
+
+
+def test_batch_drafts_return_one_result_per_item() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/alibaba/products/batch/drafts",
+            json={
+                "items": [
+                    {"reference": "A", "category_id": "123", "schema_data": {"title": "A"}},
+                    {"reference": "B", "category_id": "123", "schema_data": {"title": "B"}},
+                ],
+                "concurrency": 2,
+            },
+        )
+        assert response.status_code == 200
+        assert [item["reference"] for item in response.json()] == ["A", "B"]
+        assert all(item["success"] for item in response.json())
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_batch_publish_requires_confirmation() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/alibaba/products/batch/publish",
+            json={
+                "items": [{"category_id": "123", "schema_data": {}}],
+                "confirmed_by_user": False,
+            },
+        )
+        assert response.status_code == 409
+    finally:
+        app.dependency_overrides.clear()

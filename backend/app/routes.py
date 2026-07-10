@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Annotated, Any
 
@@ -13,6 +14,9 @@ from backend.app.clients.alibaba import (
 from backend.app.config import get_settings
 from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.models import (
+    AlibabaBatchPublishRequest,
+    AlibabaBatchRequest,
+    AlibabaBatchResult,
     AlibabaDraftRenderRequest,
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
@@ -122,6 +126,14 @@ async def create_draft(
     )
 
 
+@router.post("/alibaba/products/batch/drafts", response_model=list[AlibabaBatchResult])
+async def create_batch_drafts(
+    request: AlibabaBatchRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> list[AlibabaBatchResult]:
+    return await _batch_alibaba_call(client, "draft_create", request)
+
+
 @router.post("/alibaba/products/publish")
 async def publish_product(
     request: AlibabaPublishRequest,
@@ -137,6 +149,19 @@ async def publish_product(
         "publish",
         {"cat_id": request.category_id, "schema_data": request.schema_data},
     )
+
+
+@router.post("/alibaba/products/batch/publish", response_model=list[AlibabaBatchResult])
+async def publish_batch_products(
+    request: AlibabaBatchPublishRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> list[AlibabaBatchResult]:
+    if not request.confirmed_by_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Batch publishing requires confirmed_by_user=true",
+        )
+    return await _batch_alibaba_call(client, "publish", request)
 
 
 @router.post("/alibaba/photo-bank/images")
@@ -209,6 +234,40 @@ async def _alibaba_call(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AlibabaAPIError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+async def _batch_alibaba_call(
+    client: AlibabaClient,
+    operation_key: str,
+    request: AlibabaBatchRequest,
+) -> list[AlibabaBatchResult]:
+    semaphore = asyncio.Semaphore(request.concurrency)
+
+    async def process_item(index: int) -> tuple[int, AlibabaBatchResult]:
+        item = request.items[index]
+        async with semaphore:
+            try:
+                response = await client.call(
+                    OPERATIONS[operation_key].operation,
+                    {"cat_id": item.category_id, "schema_data": item.schema_data},
+                )
+                result = AlibabaBatchResult(
+                    reference=item.reference,
+                    success=True,
+                    response=response,
+                )
+            except AlibabaAPIError as exc:
+                result = AlibabaBatchResult(
+                    reference=item.reference,
+                    success=False,
+                    error=str(exc),
+                )
+            return index, result
+
+    indexed_results = await asyncio.gather(
+        *(process_item(index) for index in range(len(request.items)))
+    )
+    return [result for _, result in sorted(indexed_results)]
 
 
 def _validate_upload(image: UploadFile, content: bytes) -> None:
