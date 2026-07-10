@@ -19,6 +19,18 @@ OPERATIONS = {
         purpose="上传图片银行",
         safety="可自动执行",
     ),
+    "photo_list": AlibabaOperation(
+        key="photo_list",
+        operation="/icbu/product/photobank/list",
+        purpose="分页查询图片银行图片",
+        safety="可自动执行",
+    ),
+    "photo_group_list": AlibabaOperation(
+        key="photo_group_list",
+        operation="/icbu/product/photobank/group/list",
+        purpose="分页查询图片银行分组",
+        safety="可自动执行",
+    ),
     "draft_create": AlibabaOperation(
         key="draft_create",
         operation="/icbu/product/schema/add/draft",
@@ -30,6 +42,12 @@ OPERATIONS = {
         operation="/icbu/product/schema/render/draft",
         purpose="回读草稿数据和规则",
         safety="可自动执行",
+    ),
+    "schema_update": AlibabaOperation(
+        key="schema_update",
+        operation="/icbu/product/schema/update",
+        purpose="增量更新已发布商品 Schema",
+        safety="事实字段变更需要人工或业务系统确认",
     ),
     "publish": AlibabaOperation(
         key="publish",

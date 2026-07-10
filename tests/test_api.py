@@ -50,7 +50,17 @@ def test_publish_requires_explicit_confirmation() -> None:
 def test_operations_catalog_contains_core_publish_flow() -> None:
     client = TestClient(app)
     operations = {item["key"] for item in client.get("/api/v1/alibaba/operations").json()}
-    assert {"category_get", "schema_get", "photo_upload", "draft_create", "publish"} <= operations
+    assert {
+        "category_get",
+        "schema_get",
+        "photo_upload",
+        "draft_create",
+        "draft_render",
+        "publish",
+        "schema_update",
+        "inventory_update",
+        "display_update",
+    } <= operations
 
 
 def test_unconfigured_alibaba_endpoint_returns_service_unavailable() -> None:
@@ -92,5 +102,94 @@ def test_batch_publish_requires_confirmation() -> None:
             },
         )
         assert response.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_render_draft_supports_gop_draft_id() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/alibaba/products/drafts/render",
+            json={"draft_id": "draft-1", "language": "en_US"},
+        )
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {
+            "draft_id": "draft-1",
+            "language": "en_US",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_inventory_and_display_requests_use_gop_request_shapes() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        inventory = client.put(
+            "/api/v1/alibaba/products/product-1/inventory",
+            json={"sku_id": "sku-1", "amount": 20},
+        )
+        assert inventory.status_code == 200
+        assert inventory.json()["parameters"]["inventory_update_request"] == {
+            "inventoryItems": [
+                {
+                    "productId": "product-1",
+                    "skuId": "sku-1",
+                    "inventory": {"amount": 20},
+                }
+            ]
+        }
+
+        display = client.patch(
+            "/api/v1/alibaba/products/product-1/display",
+            json={"display": False},
+        )
+        assert display.status_code == 200
+        assert display.json()["parameters"]["request"] == {
+            "productId": "product-1",
+            "display": False,
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_inventory_update_requires_exactly_one_amount_mode() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        missing = client.put(
+            "/api/v1/alibaba/products/product-1/inventory",
+            json={"sku_id": "sku-1"},
+        )
+        both = client.put(
+            "/api/v1/alibaba/products/product-1/inventory",
+            json={"sku_id": "sku-1", "amount": 10, "amount_diff": 2},
+        )
+        assert missing.status_code == 422
+        assert both.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_schema_update_and_photo_bank_queries() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        updated = client.patch(
+            "/api/v1/alibaba/schemas/schema-1",
+            json={"schema_data": {"productTitle": "Updated"}},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["operation"] == "/icbu/product/schema/update"
+
+        groups = client.get("/api/v1/alibaba/photo-bank/groups?page_size=10")
+        assert groups.status_code == 200
+        assert groups.json()["parameters"]["request"]["pageSize"] == 10
+
+        images = client.get("/api/v1/alibaba/photo-bank/images?group_id=group-1")
+        assert images.status_code == 200
+        assert images.json()["parameters"]["request"]["groupId"] == "group-1"
     finally:
         app.dependency_overrides.clear()

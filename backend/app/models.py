@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FieldSource(StrEnum):
@@ -81,9 +81,36 @@ class AlibabaBatchResult(BaseModel):
 
 
 class AlibabaDraftRenderRequest(BaseModel):
-    category_id: str
-    product_id: str
+    draft_id: str | None = None
+    category_id: str | None = None
+    product_id: str | None = None
     language: str = "en_US"
+
+    @model_validator(mode="after")
+    def validate_identifier(self) -> "AlibabaDraftRenderRequest":
+        if self.draft_id or (self.category_id and self.product_id):
+            return self
+        raise ValueError("Provide draft_id, or both category_id and product_id")
+
+
+class AlibabaSchemaUpdateRequest(BaseModel):
+    schema_data: dict[str, Any] | str
+
+
+class AlibabaInventoryUpdateRequest(BaseModel):
+    sku_id: str
+    amount: int | None = Field(default=None, ge=0)
+    amount_diff: int | None = None
+
+    @model_validator(mode="after")
+    def validate_amount(self) -> "AlibabaInventoryUpdateRequest":
+        if (self.amount is None) == (self.amount_diff is None):
+            raise ValueError("Provide exactly one of amount or amount_diff")
+        return self
+
+
+class AlibabaDisplayUpdateRequest(BaseModel):
+    display: bool
 
 
 class AlibabaOperation(BaseModel):

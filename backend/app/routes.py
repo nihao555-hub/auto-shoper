@@ -17,9 +17,12 @@ from backend.app.models import (
     AlibabaBatchPublishRequest,
     AlibabaBatchRequest,
     AlibabaBatchResult,
+    AlibabaDisplayUpdateRequest,
     AlibabaDraftRenderRequest,
+    AlibabaInventoryUpdateRequest,
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
+    AlibabaSchemaUpdateRequest,
     ImageGenerationRequest,
     ProductImageAnalysis,
     ProductValidationRequest,
@@ -87,14 +90,16 @@ async def render_draft(
     request: AlibabaDraftRenderRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
+    parameters: dict[str, Any] = {"language": request.language}
+    if request.draft_id:
+        parameters["draft_id"] = request.draft_id
+    else:
+        parameters["cat_id"] = request.category_id
+        parameters["product_id"] = request.product_id
     return await _alibaba_call(
         client,
         "draft_render",
-        {
-            "cat_id": request.category_id,
-            "product_id": request.product_id,
-            "language": request.language,
-        },
+        parameters,
     )
 
 
@@ -112,6 +117,72 @@ async def get_product_score(
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
     return await _alibaba_call(client, "product_score", {"product_id": product_id})
+
+
+@router.get("/alibaba/products/{product_id}/inventory")
+async def get_product_inventory(
+    product_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "inventory_get",
+        {"inventory_get_request": {"productId": product_id}},
+    )
+
+
+@router.put("/alibaba/products/{product_id}/inventory")
+async def update_product_inventory(
+    product_id: str,
+    request: AlibabaInventoryUpdateRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    inventory: dict[str, int] = {}
+    if request.amount is not None:
+        inventory["amount"] = request.amount
+    if request.amount_diff is not None:
+        inventory["amountDiff"] = request.amount_diff
+    return await _alibaba_call(
+        client,
+        "inventory_update",
+        {
+            "inventory_update_request": {
+                "inventoryItems": [
+                    {
+                        "productId": product_id,
+                        "skuId": request.sku_id,
+                        "inventory": inventory,
+                    }
+                ]
+            }
+        },
+    )
+
+
+@router.patch("/alibaba/products/{product_id}/display")
+async def update_product_display(
+    product_id: str,
+    request: AlibabaDisplayUpdateRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "display_update",
+        {"request": {"productId": product_id, "display": request.display}},
+    )
+
+
+@router.patch("/alibaba/schemas/{schema_id}")
+async def update_product_schema(
+    schema_id: str,
+    request: AlibabaSchemaUpdateRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "schema_update",
+        {"schema_id": schema_id, "schema_data": request.schema_data},
+    )
 
 
 @router.post("/alibaba/products/drafts")
@@ -177,6 +248,39 @@ async def upload_photo(
         "photo_upload",
         {"request": {"groupId": group_id, "imageName": image.filename}},
         files={"file": (image.filename or "image", content, image.content_type or "image/jpeg")},
+    )
+
+
+@router.get("/alibaba/photo-bank/groups")
+async def list_photo_groups(
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    current_page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "photo_group_list",
+        {"request": {"currentPage": current_page, "pageSize": page_size}},
+    )
+
+
+@router.get("/alibaba/photo-bank/images")
+async def list_photos(
+    group_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    current_page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "photo_list",
+        {
+            "request": {
+                "groupId": group_id,
+                "currentPage": current_page,
+                "pageSize": page_size,
+            }
+        },
     )
 
 
