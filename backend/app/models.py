@@ -36,6 +36,7 @@ class ProductImageAnalysis(BaseModel):
 class ProductValidationRequest(BaseModel):
     fields: dict[str, DraftField]
     schema_required_fields: list[str] = Field(default_factory=list)
+    schema_data: dict[str, Any] | str | None = None
 
 
 class ProductValidationResult(BaseModel):
@@ -95,6 +96,70 @@ class AlibabaDraftRenderRequest(BaseModel):
 
 class AlibabaSchemaUpdateRequest(BaseModel):
     schema_data: dict[str, Any] | str
+
+
+class SchemaParseRequest(BaseModel):
+    schema_data: dict[str, Any] | str
+
+
+class SchemaRule(BaseModel):
+    name: str
+    value: str | None = None
+    ex_property: str | None = None
+    unit: str | None = None
+
+
+class SchemaOption(BaseModel):
+    display_name: str | None = None
+    value: str
+
+
+class ParsedSchemaField(BaseModel):
+    id: str
+    name: str | None = None
+    type: str | None = None
+    path: list[str] = Field(default_factory=list)
+    required: bool = False
+    disabled: bool = False
+    value_type: str | None = None
+    rules: list[SchemaRule] = Field(default_factory=list)
+    options: list[SchemaOption] = Field(default_factory=list)
+    children: list["ParsedSchemaField"] = Field(default_factory=list)
+
+
+class SchemaParseResult(BaseModel):
+    fields: list[ParsedSchemaField]
+    required_field_ids: list[str]
+    manual_confirmation_field_ids: list[str]
+
+
+class ListingChecklistItem(BaseModel):
+    phase: str
+    label: str
+    required_fields: list[str]
+    missing_fields: list[str]
+
+
+class OfficialListingValidationResult(ProductValidationResult):
+    schema_required_fields: list[str]
+    manual_confirmation_fields: list[str]
+    checklist: list[ListingChecklistItem]
+
+
+class OfficialListingStep(BaseModel):
+    order: int
+    phase: str
+    label: str
+    actions: list[str]
+    backend_endpoints: list[str]
+    human_confirmation: bool
+
+
+class OfficialListingFlowResponse(BaseModel):
+    steps: list[OfficialListingStep]
+    ai_can_generate: list[str]
+    ai_requires_confirmation: list[str]
+    must_be_user_or_business_system: list[str]
 
 
 class AlibabaInventoryUpdateRequest(BaseModel):

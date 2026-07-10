@@ -6,7 +6,7 @@
 
 - Alibaba.com 官方卖家后台支持逐条发布和 Bulk Upload，Intelligent Posting 会给出优化建议。
 - ICBU OpenAPI 能覆盖自动上品的核心闭环，但公开资料没有证明存在“单次提交 100 个商品”的原生发布接口。本项目的批量接口是受控并发地逐条调用发布 API。
-- 当前后端可完成类目、Schema、AI 文案和生图、图片银行、草稿、回读、确认发布、商品查询、质量分、库存和上下架的主链路。
+- 当前后端可完成类目、Schema、Schema XML 解析、AI 文案和生图、图片银行、草稿、回读、确认发布、商品查询、质量分、库存和上下架的主链路。
 - 当前实现不能称为“完美满足生产全流程”。真实店铺还必须验证应用权限、类目动态字段、SKU/价格联动、贸易物流模板、审核状态、限流、幂等和 OAuth 刷新。
 
 ## 官方完整流程
@@ -24,6 +24,8 @@
 2. AI 可以推荐类目，但商家必须确认最终叶子类目。
 3. 调用 `alibaba.icbu.product.schema.get` 获取该类目当前的发布规则。
 4. 按 Schema 的 `requiredRule`、类型、枚举、长度、正则和字段联动动态生成表单和校验，不能写死一套通用字段。
+
+当前后端新增 `POST /api/v1/alibaba/schemas/parse`，可从官方 XML 中提取字段层级、`requiredRule`、`valueTypeRule`、枚举 `option`、复杂字段和需要人工确认的商业事实字段。
 
 官方 Schema 文档明确要求先获取规则，再填充规则文件，最后调用发布接口。不同类目、商品类型和商家能力会改变必填项。
 
@@ -76,6 +78,9 @@
 | --- | --- | --- | --- |
 | 类目 | `/icbu/product/category/get` | `GET /api/v1/alibaba/categories/{category_id}` | 已封装；叶子类目仍需人工确认 |
 | 发布 Schema | `/alibaba/icbu/product/schema/get` | `GET /api/v1/alibaba/categories/{category_id}/schema` | 已封装 |
+| Schema 解析 | 本地解析 `schema.get` XML | `POST /api/v1/alibaba/schemas/parse` | 已实现；提取必填、枚举、复杂字段和人工确认字段 |
+| 官方流程清单 | 后台 Bulk Upload/Posting 流程 | `GET /api/v1/alibaba/listing-flow` | 已实现；用于前端/任务编排对标 |
+| 官方字段校验 | 本地校验 + Schema 规则 | `POST /api/v1/products/official-listing/validate` | 已实现；合并动态必填项和 AI 字段边界 |
 | 图片银行分组 | `/icbu/product/photobank/group/list` | `GET /api/v1/alibaba/photo-bank/groups` | 已封装 |
 | 图片银行查询 | `/icbu/product/photobank/list` | `GET /api/v1/alibaba/photo-bank/images` | 已封装 |
 | 图片银行上传 | `/alibaba/icbu/photobank/upload` | `POST /api/v1/alibaba/photo-bank/images` | 已封装 |
@@ -98,7 +103,7 @@
 
 1. 用目标店铺验证每个 GOP 方法是否已授权，以及真实参数和响应结构。
 2. 保存并自动刷新 OAuth token，处理失效和重新授权。
-3. 根据 Schema 自动解析必填项、枚举、正则和字段联动，而不是由调用方传入必填字段名。
+3. 用真实类目 Schema 验证解析器是否覆盖所有 Alibaba 返回结构和字段联动。
 4. 完成 SKU、阶梯价、RTS/询盘品、包装、运费模板和合规资料的真实类目样例。
 5. 发布后轮询审核状态，并支持失败修正和重新提交。
 6. 增加限流退避、幂等键、断点续传、任务状态、操作审计和失败重试。

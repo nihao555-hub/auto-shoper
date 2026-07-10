@@ -24,10 +24,50 @@ MANUAL_REQUIREMENTS = [
 MANUAL_FIELD_NAMES = {item.name for item in MANUAL_REQUIREMENTS}
 TRUSTED_SOURCES = {FieldSource.USER_PROVIDED, FieldSource.BUSINESS_SYSTEM}
 BASE_REQUIRED_FIELDS = {"category_id"}
+MANUAL_FACT_ALIASES = {
+    "cat_id",
+    "categoryid",
+    "certification",
+    "certifications",
+    "currency",
+    "deliverytime",
+    "dimension",
+    "dimensions",
+    "fob",
+    "hs_code",
+    "inventory",
+    "ladderprice",
+    "leadtime",
+    "logistics",
+    "material",
+    "moq",
+    "origin",
+    "package",
+    "packaging",
+    "packagedimension",
+    "packageheight",
+    "packagelength",
+    "packageweight",
+    "packagewidth",
+    "port",
+    "price",
+    "priceunit",
+    "shipping",
+    "shippingtemplateid",
+    "sku",
+    "skuouterid",
+    "skuprice",
+    "skustock",
+    "stock",
+    "supplyquantity",
+    "weight",
+}
 
 
 def validate_product_fields(
-    fields: dict[str, DraftField], schema_required_fields: list[str]
+    fields: dict[str, DraftField],
+    schema_required_fields: list[str],
+    manual_fact_fields: list[str] | None = None,
 ) -> ProductValidationResult:
     required = BASE_REQUIRED_FIELDS | set(schema_required_fields)
     missing = sorted(
@@ -37,7 +77,7 @@ def validate_product_fields(
     )
     invalid_ai = sorted(
         name
-        for name in MANUAL_FIELD_NAMES
+        for name in _manual_field_names(fields, manual_fact_fields or [])
         if name in fields
         and fields[name].value not in (None, "")
         and fields[name].source not in TRUSTED_SOURCES
@@ -53,3 +93,23 @@ def validate_product_fields(
         invalid_ai_fields=invalid_ai,
         confirmation_fields=confirmation,
     )
+
+
+def is_manual_fact_field(field_name: str) -> bool:
+    normalized = _normalize_field_name(field_name)
+    parts = {_normalize_field_name(part) for part in field_name.replace("/", ".").split(".")}
+    return bool(
+        normalized in MANUAL_FIELD_NAMES
+        or normalized in MANUAL_FACT_ALIASES
+        or parts & MANUAL_FACT_ALIASES
+    )
+
+
+def _manual_field_names(fields: dict[str, DraftField], schema_manual_fields: list[str]) -> set[str]:
+    manual = set(MANUAL_FIELD_NAMES) | set(schema_manual_fields)
+    manual.update(name for name in fields if is_manual_fact_field(name))
+    return manual
+
+
+def _normalize_field_name(field_name: str) -> str:
+    return "".join(char.lower() for char in field_name if char.isalnum() or char == "_")

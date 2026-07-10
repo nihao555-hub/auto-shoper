@@ -193,3 +193,92 @@ def test_schema_update_and_photo_bank_queries() -> None:
         assert images.json()["parameters"]["request"]["groupId"] == "group-1"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_parse_schema_extracts_official_rules_and_manual_fields() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <fields>
+        <field id="productTitle" name="Product name" type="input">
+          <rules>
+            <rule name="requiredRule" value="true"/>
+            <rule name="maxLengthRule" value="128" unit="byte"/>
+            <rule name="valueTypeRule" value="text"/>
+          </rules>
+        </field>
+        <field id="priceUnit" name="Unit" type="singleCheck">
+          <rules><rule name="requiredRule" value="true"/></rules>
+          <options>
+            <option displayName="Piece/Pieces" value="100000015"/>
+            <option displayName="Other" value="-1"/>
+          </options>
+        </field>
+        <field id="sku" type="multiComplex">
+          <fields>
+            <field id="skuStock" name="Quantity in stock" type="multiInput">
+              <rules><rule name="requiredRule" value="true"/></rules>
+            </field>
+          </fields>
+        </field>
+      </fields>
+    </schema>
+    """
+    response = client.post("/api/v1/alibaba/schemas/parse", json={"schema_data": schema_xml})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["required_field_ids"] == ["priceUnit", "productTitle", "sku.skuStock"]
+    assert "priceUnit" in body["manual_confirmation_field_ids"]
+    assert "sku.skuStock" in body["manual_confirmation_field_ids"]
+    assert body["fields"][1]["options"][0] == {
+        "display_name": "Piece/Pieces",
+        "value": "100000015",
+    }
+
+
+def test_validate_product_uses_schema_xml_required_and_manual_policy() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <field id="productTitle" type="input">
+        <rules><rule name="requiredRule" value="true"/></rules>
+      </field>
+      <field id="ladderPrice" type="complex">
+        <rules><rule name="requiredRule" value="true"/></rules>
+      </field>
+    </schema>
+    """
+    response = client.post(
+        "/api/v1/products/official-listing/validate",
+        json={
+            "schema_data": schema_xml,
+            "fields": {
+                "category_id": {"value": "123", "source": "user_provided"},
+                "ladderPrice": {"value": "9.99", "source": "ai_generated"},
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready_to_publish"] is False
+    assert body["missing_fields"] == ["productTitle"]
+    assert body["invalid_ai_fields"] == ["ladderPrice"]
+    assert "ladderPrice" in body["manual_confirmation_fields"]
+    assert any(item["phase"] == "trade_sku" for item in body["checklist"])
+
+
+def test_official_listing_flow_documents_backend_sequence() -> None:
+    client = TestClient(app)
+    response = client.get("/api/v1/alibaba/listing-flow")
+    assert response.status_code == 200
+    body = response.json()
+    assert [step["phase"] for step in body["steps"]] == [
+        "authorization",
+        "category_schema",
+        "media_ai",
+        "product_data",
+        "draft_preview",
+        "publish_audit",
+        "post_publish",
+    ]
+    assert "POST /api/v1/alibaba/schemas/parse" in body["steps"][1]["backend_endpoints"]

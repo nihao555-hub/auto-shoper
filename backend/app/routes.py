@@ -24,11 +24,22 @@ from backend.app.models import (
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
     ImageGenerationRequest,
+    OfficialListingFlowResponse,
+    OfficialListingValidationResult,
     ProductImageAnalysis,
     ProductValidationRequest,
     ProductValidationResult,
+    SchemaParseRequest,
+    SchemaParseResult,
 )
 from backend.app.services.field_policy import validate_product_fields
+from backend.app.services.official_listing import build_official_checklist, official_listing_flow
+from backend.app.services.schema_rules import (
+    SchemaParseError,
+    manual_schema_fields,
+    merge_schema_required_fields,
+    parse_schema_data,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -48,6 +59,11 @@ async def capabilities() -> dict[str, Any]:
 @router.get("/alibaba/operations")
 async def alibaba_operations() -> list[dict[str, Any]]:
     return [item.model_dump() for item in OPERATIONS.values()]
+
+
+@router.get("/alibaba/listing-flow", response_model=OfficialListingFlowResponse)
+async def get_official_listing_flow() -> OfficialListingFlowResponse:
+    return official_listing_flow()
 
 
 @router.get("/alibaba/categories/{category_id}")
@@ -185,6 +201,14 @@ async def update_product_schema(
     )
 
 
+@router.post("/alibaba/schemas/parse", response_model=SchemaParseResult)
+async def parse_schema(request: SchemaParseRequest) -> SchemaParseResult:
+    try:
+        return parse_schema_data(request.schema_data)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/alibaba/products/drafts")
 async def create_draft(
     request: AlibabaSchemaRequest,
@@ -312,7 +336,39 @@ async def analyze_product_image(
 
 @router.post("/products/validate", response_model=ProductValidationResult)
 async def validate_product(request: ProductValidationRequest) -> ProductValidationResult:
-    return validate_product_fields(request.fields, request.schema_required_fields)
+    try:
+        required_fields = merge_schema_required_fields(
+            request.schema_required_fields,
+            request.schema_data,
+        )
+        manual_fields = manual_schema_fields(request.schema_data)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return validate_product_fields(request.fields, required_fields, manual_fields)
+
+
+@router.post("/products/official-listing/validate", response_model=OfficialListingValidationResult)
+async def validate_official_listing(
+    request: ProductValidationRequest,
+) -> OfficialListingValidationResult:
+    try:
+        required_fields = merge_schema_required_fields(
+            request.schema_required_fields,
+            request.schema_data,
+        )
+        manual_fields = manual_schema_fields(request.schema_data)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = validate_product_fields(request.fields, required_fields, manual_fields)
+    return OfficialListingValidationResult(
+        ready_to_publish=result.ready_to_publish,
+        missing_fields=result.missing_fields,
+        invalid_ai_fields=result.invalid_ai_fields,
+        confirmation_fields=result.confirmation_fields,
+        schema_required_fields=required_fields,
+        manual_confirmation_fields=manual_fields,
+        checklist=build_official_checklist(request.fields, required_fields),
+    )
 
 
 @router.post("/images/generate")
