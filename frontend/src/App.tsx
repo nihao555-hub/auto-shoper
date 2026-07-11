@@ -151,7 +151,9 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>(getViewFromHash);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<StoreSettings>(defaultSettings);
-  const [dataMode, setDataMode] = useState<DataMode>("live");
+  const [dataMode, setDataMode] = useState<DataMode>(() =>
+    window.localStorage.getItem("auto-shoper-data-mode") === "demo" ? "demo" : "live",
+  );
   const [liveProducts, setLiveProducts] = useState<ProductRecord[]>([]);
   const [demoProducts, setDemoProducts] = useState<ProductRecord[]>(cloneDemoProducts);
   const [batchId, setBatchId] = useState(createBatchId);
@@ -223,7 +225,6 @@ export default function App() {
     }
     setSettings(loadSettings(user.workspace_id, activeStoreId));
     setLiveProducts([]);
-    setDataMode("live");
     setBatchId(createBatchId());
   }, [activeStoreId, user]);
 
@@ -385,6 +386,7 @@ export default function App() {
 
   const changeDataMode = (mode: DataMode) => {
     setDataMode(mode);
+    window.localStorage.setItem("auto-shoper-data-mode", mode);
     if (mode === "demo" && demoProducts.length === 0) {
       setDemoProducts(cloneDemoProducts());
     }

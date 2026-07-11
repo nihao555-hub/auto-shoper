@@ -241,6 +241,11 @@ export type BatchRecord = {
   publishedCount: number;
   reviewStatus: "none" | "passed" | "failed" | "pending";
   reviewLabel: string;
-  status: "processing" | "ready" | "complete" | "failed";
+  status: "processing" | "ready" | "complete" | "failed" | "planned";
   images: string[];
+  targetStore?: string;
+  targetDomain?: string;
+  failureReason?: string;
+  failedCount?: number;
+  plannedFor?: string;
 };

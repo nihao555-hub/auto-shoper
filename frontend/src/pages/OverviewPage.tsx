@@ -37,6 +37,7 @@ const batchStatusMeta: Record<BatchRecord["status"], { label: string; className:
   ready: { label: "草稿中", className: "is-draft" },
   complete: { label: "已完成", className: "is-complete" },
   failed: { label: "已取消", className: "is-cancelled" },
+  planned: { label: "已计划", className: "is-planned" },
 };
 
 export function OverviewPage({
