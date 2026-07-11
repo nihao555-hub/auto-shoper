@@ -10,16 +10,17 @@ from backend.app.config import get_settings
 from backend.app.routes import router
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+settings = get_settings()
 
 app = FastAPI(
-    title=get_settings().app_name,
+    title=settings.app_name,
     version="0.1.0",
     description="Alibaba.com listing automation, AI image, and merchant workspace",
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_origin_regex=r"^https://[a-z0-9-]+\.devinapps\.com$",
+    allow_origin_regex=settings.cors_allow_origin_regex,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )

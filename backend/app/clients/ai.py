@@ -49,10 +49,24 @@ class AIClient:
         known_facts: dict[str, Any],
         category_hint: str | None,
     ) -> ProductImageAnalysis:
-        encoded = base64.b64encode(image_bytes).decode()
+        return await self.analyze_product_images(
+            [(image_bytes, content_type)],
+            known_facts,
+            category_hint,
+        )
+
+    async def analyze_product_images(
+        self,
+        images: list[tuple[bytes, str]],
+        known_facts: dict[str, Any],
+        category_hint: str | None,
+    ) -> ProductImageAnalysis:
         facts = json.dumps(known_facts, ensure_ascii=False)
         prompt = (
-            "Analyze one product image for an Alibaba.com listing. Return JSON only. "
+            "Analyze this image set as one product for an Alibaba.com listing. The first image is "
+            "the selected main image; the remaining images may show details, specifications, "
+            "performance, packaging, or supplier information. Return one consolidated JSON "
+            "result only. "
             "Never infer price, material, dimensions, weight, certification, origin, stock, "
             "lead time, MOQ, SKU, production capacity, or logistics. If text or a visual fact "
             "is unclear, omit it. Generated copy must only use visible or supplied facts. "
@@ -64,18 +78,25 @@ class AIClient:
             '"warnings":["..."]}. Return no more than three keywords. '
             f"Known facts: {facts}. Category hint: {category_hint or 'none'}."
         )
+        message_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        message_content.extend(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": (
+                        f"data:{content_type};base64,"
+                        f"{base64.b64encode(image_bytes).decode()}"
+                    )
+                },
+            }
+            for image_bytes, content_type in images
+        )
         payload = {
             "model": self.settings.text_model,
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{content_type};base64,{encoded}"},
-                        },
-                    ],
+                    "content": message_content,
                 }
             ],
             "temperature": 0.2,
@@ -84,8 +105,8 @@ class AIClient:
         if response.is_error:
             raise AIProviderError(self._provider_error(response))
         try:
-            content = response.json()["choices"][0]["message"]["content"]
-            data = _ProviderAnalysis.model_validate(self._parse_json(content))
+            response_content = response.json()["choices"][0]["message"]["content"]
+            data = _ProviderAnalysis.model_validate(self._parse_json(response_content))
         except (
             KeyError,
             IndexError,

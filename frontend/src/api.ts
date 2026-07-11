@@ -56,9 +56,11 @@ export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }
 export const getListingFieldMatrix = async (): Promise<ListingFieldGroup[]> =>
   parseResponse<ListingFieldGroup[]>(await fetch(`${API_ROOT}/alibaba/listing-field-matrix`));
 
-export const analyzeProductImage = async (file: File): Promise<ImageAnalysisResponse> => {
+export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysisResponse> => {
   const body = new FormData();
-  body.append("image", file);
+  for (const file of files) {
+    body.append("images", file);
+  }
   body.append("known_facts", "{}");
   return parseResponse<ImageAnalysisResponse>(
     await fetch(`${API_ROOT}/products/analyze-image`, {
@@ -66,6 +68,40 @@ export const analyzeProductImage = async (file: File): Promise<ImageAnalysisResp
       body,
     }),
   );
+};
+
+export const uploadPhotoBankImage = async (
+  file: File,
+  groupId: string,
+): Promise<Record<string, unknown>> => {
+  const body = new FormData();
+  body.append("image", file);
+  body.append("group_id", groupId);
+  return parseResponse<Record<string, unknown>>(
+    await fetch(`${API_ROOT}/alibaba/photo-bank/images`, {
+      method: "POST",
+      body,
+    }),
+  );
+};
+
+export const findPhotoBankUrl = (payload: Record<string, unknown>): string | null => {
+  const preferredKeys = ["url", "image_url", "imageUrl", "image_uri", "imageUri"];
+  for (const key of preferredKeys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.startsWith("http")) {
+      return value;
+    }
+  }
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = findPhotoBankUrl(value as Record<string, unknown>);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
 };
 
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
@@ -116,6 +152,10 @@ const productFields = (product: ProductRecord): Record<string, DraftField> => ({
   origin: trustedField(product.facts.origin),
   hs_code: trustedField(product.facts.hsCode),
   certifications: trustedField(product.facts.certifications),
+  images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
+  main_image: confirmedField(
+    product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
+  ),
 });
 
 const accountDefaults = (settings: StoreSettings): Record<string, DraftField> => ({

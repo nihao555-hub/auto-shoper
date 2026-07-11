@@ -54,11 +54,19 @@ export type ProductFacts = {
   certifications: string[];
 };
 
+export type ProductImage = {
+  id: string;
+  url: string;
+  name: string;
+  sourceFile?: File;
+  photoBankUrl?: string;
+};
+
 export type ProductRecord = {
   id: string;
   reference: string;
-  imageUrl: string;
-  sourceFile?: File;
+  images: ProductImage[];
+  mainImageId: string;
   title: string;
   keywords: string[];
   sellingPoints: string[];

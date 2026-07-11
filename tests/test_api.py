@@ -5,8 +5,9 @@ from fastapi.testclient import TestClient
 
 from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
 from backend.app.config import Settings
-from backend.app.dependencies import get_alibaba_client
+from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.main import app
+from backend.app.models import ProductImageAnalysis
 
 SCHEMA_XML = "<itemSchema><field id=\"productTitle\" type=\"input\" /></itemSchema>"
 
@@ -30,11 +31,79 @@ async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
     yield FakeAlibabaClient()  # type: ignore[misc]
 
 
+class FakeAIClient:
+    received_image_count = 0
+
+    async def analyze_product_images(
+        self,
+        images: list[tuple[bytes, str]],
+        known_facts: dict[str, object],
+        category_hint: str | None,
+    ) -> ProductImageAnalysis:
+        self.received_image_count = len(images)
+        return ProductImageAnalysis(
+            observed_fields={},
+            generated_fields={},
+            category_suggestions=[],
+            manual_requirements=[],
+            warnings=[],
+        )
+
+
+fake_ai = FakeAIClient()
+
+
+async def fake_ai_client() -> AsyncIterator[FakeAIClient]:
+    yield fake_ai
+
+
 def test_health_and_capabilities() -> None:
     client = TestClient(app)
     assert client.get("/health").json() == {"status": "ok"}
     capabilities = client.get("/api/v1/capabilities").json()
     assert capabilities["modules"]["sales_expert"] is False
+
+
+def test_product_analysis_accepts_multiple_images_for_one_product() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/analyze-image",
+            files=[
+                ("images", ("main.jpg", b"main", "image/jpeg")),
+                ("images", ("detail.png", b"detail", "image/png")),
+                ("images", ("spec.png", b"spec", "image/png")),
+            ],
+            data={"known_facts": "{}"},
+        )
+        assert response.status_code == 200
+        assert fake_ai.received_image_count == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_oauth_callback_redirects_provider_errors_to_frontend() -> None:
+    client = TestClient(app, follow_redirects=False)
+
+    response = client.get(
+        "/api/v1/alibaba/oauth/callback",
+        params={"error": "access_denied", "error_description": "merchant cancelled"},
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"].endswith("?alibaba=error&reason=denied")
+
+
+def test_oauth_callback_redirects_missing_code_or_state_to_frontend() -> None:
+    client = TestClient(app, follow_redirects=False)
+
+    response = client.get("/api/v1/alibaba/oauth/callback", params={"code": "code-only"})
+
+    assert response.status_code == 307
+    assert response.headers["location"].endswith(
+        "?alibaba=error&reason=missing_callback_data"
+    )
 
 
 def test_publish_requires_explicit_confirmation() -> None:

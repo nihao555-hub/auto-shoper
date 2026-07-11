@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
     app_name: str = "auto-shoper"
+    cors_allow_origin_regex: str = (
+        r"^https://[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:devinapps\.com|vercel\.app)$"
+    )
     model_provider: str = "openai"
     openai_api_key: str | None = None
     openai_base_url: str = "https://grsai.dakka.com.cn/v1"
@@ -35,8 +38,10 @@ class Settings(BaseSettings):
     alibaba_oauth_token_url: str = "https://eco.taobao.com/router/rest"
     alibaba_oauth_redirect_uri: str | None = None
     alibaba_oauth_success_url: str = "http://localhost:5173/#/overview?alibaba=connected"
+    alibaba_oauth_error_url: str = "http://localhost:5173/#/overview?alibaba=error"
 
     max_upload_bytes: int = 10 * 1024 * 1024
+    max_product_images: int = 10
 
     @property
     def has_alibaba_credentials(self) -> bool:

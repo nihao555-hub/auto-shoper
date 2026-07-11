@@ -1,4 +1,10 @@
-import type { BatchRecord, ProductFacts, ProductRecord, StoreSettings } from "./types";
+import type {
+  BatchRecord,
+  ProductFacts,
+  ProductImage,
+  ProductRecord,
+  StoreSettings,
+} from "./types";
 
 const facts = (overrides: Partial<ProductFacts> = {}): ProductFacts => ({
   categoryId: "100003852",
@@ -52,11 +58,21 @@ export const defaultSettings: StoreSettings = {
   reuseOrigin: true,
 };
 
+const demoImage = (id: string, url: string): ProductImage => ({
+  id,
+  url,
+  name: url.split("/").at(-1) ?? "product image",
+});
+
+export const getMainProductImage = (product: ProductRecord): ProductImage =>
+  product.images.find((image) => image.id === product.mainImageId) ?? product.images[0];
+
 export const sampleProducts: ProductRecord[] = [
   {
     id: "product-fan-01",
     reference: "PT-FB-001",
-    imageUrl: "/products/fan-brush-set.webp",
+    images: [demoImage("fan-main", "/products/fan-brush-set.webp")],
+    mainImageId: "fan-main",
     title: "Professional Fan Brush Set 9 Pcs for Acrylic and Oil Painting",
     keywords: ["fan brush set", "artist paint brushes", "nylon hair brush"],
     sellingPoints: [
@@ -81,7 +97,8 @@ export const sampleProducts: ProductRecord[] = [
   {
     id: "product-flat-02",
     reference: "PT-FB-002",
-    imageUrl: "/products/flat-brush-set.webp",
+    images: [demoImage("flat-main", "/products/flat-brush-set.webp")],
+    mainImageId: "flat-main",
     title: "Flat Paint Brush Set 6 Pcs with Golden Ferrules for Artists",
     keywords: ["flat paint brushes", "artist brush set", "gold ferrule brush"],
     sellingPoints: [
@@ -105,7 +122,8 @@ export const sampleProducts: ProductRecord[] = [
   {
     id: "product-round-03",
     reference: "PT-RB-001",
-    imageUrl: "/products/round-brush-set.webp",
+    images: [demoImage("round-main", "/products/round-brush-set.webp")],
+    mainImageId: "round-main",
     title: "Round Detail Paint Brush Set 12 Pcs Fine Tip Artist Brushes",
     keywords: ["detail paint brush", "round brush set", "fine tip brushes"],
     sellingPoints: ["Twelve precision sizes", "Fine pointed tips", "Comfortable espresso handles"],
@@ -126,7 +144,8 @@ export const sampleProducts: ProductRecord[] = [
   {
     id: "product-filbert-04",
     reference: "PT-FILB-001",
-    imageUrl: "/products/filbert-brush-set.webp",
+    images: [demoImage("filbert-main", "/products/filbert-brush-set.webp")],
+    mainImageId: "filbert-main",
     title: "Filbert Artist Brush Set 7 Pcs for Acrylic and Oil Painting",
     keywords: ["filbert brush set", "acrylic paint brush", "oil painting brush"],
     sellingPoints: [

@@ -164,7 +164,7 @@ export function OverviewPage({
                 <Package size={28} />
               </div>
               <h3>上传商品图片，建立第一个批次</h3>
-              <p>真实工作区默认不加载任何示例数据。每张图片会创建一条待处理商品。</p>
+              <p>真实工作区默认不加载任何示例数据。每组图片会创建一条待处理商品。</p>
               <button type="button" className="button button-dark" onClick={onNavigateWorkbench}>
                 前往批量上品
               </button>

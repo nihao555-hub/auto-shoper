@@ -3,7 +3,7 @@ import { ApiError, getCapabilities, startAlibabaOAuth } from "./api";
 import { AppShell } from "./components/AppShell";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
-import { defaultSettings, sampleBatches, sampleProducts } from "./data";
+import { defaultSettings, getMainProductImage, sampleBatches, sampleProducts } from "./data";
 import { BatchesPage } from "./pages/BatchesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
@@ -42,6 +42,7 @@ const loadSettings = (): StoreSettings => {
 const cloneDemoProducts = () =>
   sampleProducts.map((product) => ({
     ...product,
+    images: product.images.map((image) => ({ ...image })),
     facts: { ...product.facts, certifications: [...product.facts.certifications] },
     keywords: [...product.keywords],
     sellingPoints: [...product.sellingPoints],
@@ -94,7 +95,7 @@ const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord
     reviewStatus: failed ? "failed" : published ? "passed" : "pending",
     reviewLabel: failed ? "需要处理" : published ? "已通过" : "等待发布",
     status,
-    images: products.slice(0, 3).map((product) => product.imageUrl),
+    images: products.slice(0, 3).map((product) => getMainProductImage(product).url),
   };
 };
 
@@ -122,7 +123,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  useEffect(() => {
+  const refreshCapabilities = useCallback(() => {
     getCapabilities()
       .then((response) => {
         setCapabilities(response);
@@ -133,6 +134,10 @@ export default function App() {
         setBackendConnected(false);
       });
   }, []);
+
+  useEffect(() => {
+    refreshCapabilities();
+  }, [refreshCapabilities]);
 
   const navigate = (view: AppView) => {
     window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;
@@ -146,6 +151,26 @@ export default function App() {
       setToasts((current) => current.filter((message) => message.id !== id));
     }, 5000);
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const oauthResult = params.get("alibaba");
+    if (!oauthResult) {
+      return;
+    }
+    if (oauthResult === "connected") {
+      notify("success", "Alibaba 店铺已连接", "已刷新商家授权状态。");
+      refreshCapabilities();
+    } else {
+      const reason = params.get("reason");
+      notify(
+        "error",
+        "Alibaba 店铺授权未完成",
+        reason === "denied" ? "商家取消或拒绝了授权。" : "请重新发起授权或联系管理员。",
+      );
+    }
+    window.history.replaceState(null, "", `${window.location.pathname}#/overview`);
+  }, [notify, refreshCapabilities]);
 
   const saveSettings = (nextSettings: StoreSettings) => {
     setSettings(nextSettings);

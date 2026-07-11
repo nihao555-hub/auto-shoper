@@ -28,15 +28,17 @@ import {
   useState,
 } from "react";
 import {
-  analyzeProductImage,
+  analyzeProductImages,
   createDraftBatch,
+  findPhotoBankUrl,
   findSchemaData,
   getCategorySchema,
   getListingFieldMatrix,
   publishBatch,
+  uploadPhotoBankImage,
 } from "../api";
 import { ProductInspector } from "../components/ProductInspector";
-import { createEmptyFacts } from "../data";
+import { createEmptyFacts, getMainProductImage } from "../data";
 import type {
   CapabilityResponse,
   DataMode,
@@ -61,7 +63,7 @@ type WorkbenchPageProps = {
 };
 
 const steps = [
-  { label: "上传商品", caption: "一图一商品" },
+  { label: "上传商品", caption: "一组图片一个商品" },
   { label: "生成内容", caption: "确认标题与类目" },
   { label: "补齐资料", caption: "只填真实事实" },
   { label: "创建草稿", caption: "实时 Schema 校验" },
@@ -183,11 +185,17 @@ export function WorkbenchPage({
     }
 
     const now = Date.now();
-    const newProducts = imageFiles.map<ProductRecord>((file, index) => ({
-      id: `uploaded-${now}-${index}`,
-      reference: `AUTO-${String(now).slice(-6)}-${String(index + 1).padStart(2, "0")}`,
-      imageUrl: URL.createObjectURL(file),
+    const images = imageFiles.map((file, index) => ({
+      id: `uploaded-${now}-image-${index}`,
+      url: URL.createObjectURL(file),
+      name: file.name,
       sourceFile: file,
+    }));
+    const newProduct: ProductRecord = {
+      id: `uploaded-${now}`,
+      reference: `AUTO-${String(now).slice(-6)}-01`,
+      images,
+      mainImageId: images[0].id,
       title: "",
       keywords: [],
       sellingPoints: [],
@@ -197,18 +205,22 @@ export function WorkbenchPage({
       stage: "uploaded",
       facts: createEmptyFacts(settings),
       errors: ["等待 AI 分析"],
-    }));
+    };
 
     const shouldReplaceDemo = dataMode === "demo";
-    const nextProducts = shouldReplaceDemo ? newProducts : [...products, ...newProducts];
+    const nextProducts = shouldReplaceDemo ? [newProduct] : [...products, newProduct];
     if (shouldReplaceDemo) {
       onDataModeChange("live");
     }
     onProductsChange(nextProducts);
-    setActiveProductId(newProducts[0].id);
+    setActiveProductId(newProduct.id);
     setStep(0);
     setInspectorOpen(false);
-    notify("success", `已加入 ${newProducts.length} 个商品`, "每张图片已建立一条商品记录。");
+    notify(
+      "success",
+      `已加入 1 个商品 · ${images.length} 张图片`,
+      "第一张默认为主图，可在下一步更换；AI 会综合分析整组图片。",
+    );
   };
 
   const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -239,7 +251,10 @@ export function WorkbenchPage({
       errors: [],
     }));
 
-    if (product.isDemo || !product.sourceFile) {
+    const sourceFiles = product.images.flatMap((image) =>
+      image.sourceFile ? [image.sourceFile] : [],
+    );
+    if (product.isDemo || !sourceFiles.length) {
       await delay(650);
       replaceProduct(product.id, (current) => ({
         ...current,
@@ -250,7 +265,14 @@ export function WorkbenchPage({
     }
 
     try {
-      const response = await analyzeProductImage(product.sourceFile);
+      const mainImage = getMainProductImage(product);
+      const orderedFiles = [
+        ...(mainImage.sourceFile ? [mainImage.sourceFile] : []),
+        ...product.images.flatMap((image) =>
+          image.id !== mainImage.id && image.sourceFile ? [image.sourceFile] : [],
+        ),
+      ];
+      const response = await analyzeProductImages(orderedFiles);
       replaceProduct(product.id, (current) => applyAnalysis(current, response));
     } catch (error) {
       replaceProduct(product.id, (current) => ({
@@ -352,6 +374,17 @@ export function WorkbenchPage({
       notify("warning", "没有可创建草稿的商品", "请先确认 AI 内容并补齐真实资料。");
       return;
     }
+    if (
+      targets.some((product) => !product.isDemo) &&
+      (!backendConnected || !capabilities?.alibaba_credentials_configured)
+    ) {
+      notify(
+        "error",
+        !backendConnected ? "后端服务未连接" : "Alibaba 店铺尚未授权",
+        !backendConnected ? "请稍后重试或联系管理员。" : "请先在设置中连接真实店铺。",
+      );
+      return;
+    }
 
     setBusy(true);
     setStep(3);
@@ -380,15 +413,31 @@ export function WorkbenchPage({
 
       const prepared = await Promise.all(
         targets.map(async (product) => {
+          const images = await Promise.all(
+            product.images.map(async (image) => {
+              if (image.photoBankUrl || !image.sourceFile) {
+                return image;
+              }
+              const upload = await uploadPhotoBankImage(
+                image.sourceFile,
+                settings.photoBankGroupId,
+              );
+              const photoBankUrl = findPhotoBankUrl(upload);
+              if (!photoBankUrl) {
+                throw new Error(`${product.reference} 的 ${image.name} 未返回图片银行地址`);
+              }
+              return { ...image, photoBankUrl };
+            }),
+          );
           if (product.schemaData) {
-            return product;
+            return { ...product, images };
           }
           const payload = await getCategorySchema(product.facts.categoryId);
           const schemaData = findSchemaData(payload);
           if (!schemaData) {
             throw new Error(`${product.reference} 未从 Alibaba 响应中找到 Schema`);
           }
-          return { ...product, schemaData };
+          return { ...product, images, schemaData };
         }),
       );
       const results = await createDraftBatch(prepared, settings);
@@ -520,10 +569,21 @@ export function WorkbenchPage({
 
   const removeProduct = (id: string) => {
     const product = products.find((item) => item.id === id);
-    if (product?.sourceFile) {
-      URL.revokeObjectURL(product.imageUrl);
+    if (product) {
+      for (const image of product.images) {
+        if (image.sourceFile) {
+          URL.revokeObjectURL(image.url);
+        }
+      }
     }
     onProductsChange(products.filter((item) => item.id !== id));
+  };
+
+  const setMainImage = (productId: string, imageId: string) => {
+    replaceProduct(productId, (product) => ({
+      ...product,
+      mainImageId: imageId,
+    }));
   };
 
   const goNext = () => {
@@ -618,6 +678,7 @@ export function WorkbenchPage({
               onDrop={onDrop}
               onPickFiles={() => fileInputRef.current?.click()}
               onRemove={removeProduct}
+              onMainImageChange={setMainImage}
               fieldGroups={fieldGroups}
             />
           ) : null}
@@ -630,6 +691,7 @@ export function WorkbenchPage({
               onConfirm={confirmAi}
               onConfirmAll={confirmAllAi}
               onChange={updateProduct}
+              onMainImageChange={setMainImage}
             />
           ) : null}
 
@@ -774,6 +836,7 @@ function UploadStep({
   onDrop,
   onPickFiles,
   onRemove,
+  onMainImageChange,
   fieldGroups,
 }: {
   products: ProductRecord[];
@@ -782,6 +845,7 @@ function UploadStep({
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onPickFiles: () => void;
   onRemove: (id: string) => void;
+  onMainImageChange: (productId: string, imageId: string) => void;
   fieldGroups: ListingFieldGroup[];
 }) {
   return (
@@ -789,8 +853,8 @@ function UploadStep({
       <div className="step-heading">
         <div>
           <span className="eyebrow">开始一个批次</span>
-          <h2>一张主图，建立一个商品</h2>
-          <p>AI 会处理可见内容。价格、库存和真实规格稍后统一补充。</p>
+          <h2>一组图片，建立一个商品</h2>
+          <p>第一张默认为主图，AI 会综合识别主图、细节、规格和包装信息。</p>
         </div>
         <span className="quiet-stat">最多 100 个商品 / 批次</span>
       </div>
@@ -808,8 +872,8 @@ function UploadStep({
         <div className="upload-icon">
           <CloudArrowUp size={30} />
         </div>
-        <h3>拖入商品主图</h3>
-        <p>每张图片自动建立一行商品，支持 JPG、PNG、WebP，单张不超过 10 MB。</p>
+        <h3>拖入同一个商品的全部图片</h3>
+        <p>多张图片只建立一个商品，支持 JPG、PNG、WebP，单张不超过 10 MB。</p>
         <button type="button" className="button button-dark" onClick={onPickFiles}>
           <Plus size={18} />
           选择商品图片
@@ -831,10 +895,27 @@ function UploadStep({
             {products.map((product, index) => (
               <article key={product.id} className="upload-card">
                 <span className="upload-order">{String(index + 1).padStart(2, "0")}</span>
-                <img src={product.imageUrl} alt="" />
-                <div>
+                <div className="upload-card-gallery">
+                  <img src={getMainProductImage(product).url} alt="" />
+                  <div className="gallery-thumbnail-row">
+                    {product.images.map((image) => (
+                      <button
+                        key={image.id}
+                        type="button"
+                        className={image.id === product.mainImageId ? "is-main" : ""}
+                        onClick={() => onMainImageChange(product.id, image.id)}
+                        aria-label={`设为主图：${image.name}`}
+                      >
+                        <img src={image.url} alt="" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="upload-card-copy">
                   <strong>{product.reference}</strong>
-                  <span>{product.title || product.sourceFile?.name || "等待 AI 分析"}</span>
+                  <span>
+                    {product.title || `${product.images.length} 张商品图片 · 等待 AI 分析`}
+                  </span>
                 </div>
                 <button type="button" className="icon-button" onClick={() => onRemove(product.id)}>
                   <Trash size={17} />
@@ -891,6 +972,7 @@ function AiStep({
   onConfirm,
   onConfirmAll,
   onChange,
+  onMainImageChange,
 }: {
   products: ProductRecord[];
   busy: boolean;
@@ -898,6 +980,7 @@ function AiStep({
   onConfirm: (id: string) => void;
   onConfirmAll: () => void;
   onChange: (product: ProductRecord) => void;
+  onMainImageChange: (productId: string, imageId: string) => void;
 }) {
   const pending = products.filter((product) => !product.aiConfirmed);
   return (
@@ -923,8 +1006,21 @@ function AiStep({
         {products.map((product) => (
           <article key={product.id} className="ai-review-card">
             <div className="ai-image-frame">
-              <img src={product.imageUrl} alt="" />
-              <span className="image-count">原图 1</span>
+              <img src={getMainProductImage(product).url} alt="" />
+              <span className="image-count">图库 {product.images.length}</span>
+              <div className="ai-gallery-thumbnails">
+                {product.images.map((image) => (
+                  <button
+                    key={image.id}
+                    type="button"
+                    className={image.id === product.mainImageId ? "is-main" : ""}
+                    onClick={() => onMainImageChange(product.id, image.id)}
+                    aria-label={`设为主图：${image.name}`}
+                  >
+                    <img src={image.url} alt="" />
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="ai-review-content">
               <div className="review-title-row">
@@ -1117,7 +1213,11 @@ function FactsStep({
                     />
                   </td>
                   <td>
-                    <img className="product-thumbnail" src={product.imageUrl} alt="" />
+                    <img
+                      className="product-thumbnail"
+                      src={getMainProductImage(product).url}
+                      alt=""
+                    />
                   </td>
                   <td>
                     <SourceBadge
@@ -1236,7 +1336,7 @@ function DraftStep({
           const isDrafted = product.stage === "drafted" || product.stage === "published";
           return (
             <article key={product.id} className="draft-product-row">
-              <img src={product.imageUrl} alt="" />
+              <img src={getMainProductImage(product).url} alt="" />
               <div className="draft-product-name">
                 <strong>{product.title || product.reference}</strong>
                 <span>{product.reference}</span>
@@ -1333,7 +1433,7 @@ function PreviewStep({
                 onClick={(event) => event.stopPropagation()}
                 onChange={() => onSelect(product.id)}
               />
-              <img src={product.imageUrl} alt="" />
+              <img src={getMainProductImage(product).url} alt="" />
               <span>
                 <strong>{product.reference}</strong>
                 <small>
@@ -1359,9 +1459,16 @@ function PreviewStep({
           </div>
           <div className="preview-content">
             <div className="preview-gallery">
-              <img src={activeProduct.imageUrl} alt={activeProduct.title} />
+              <img src={getMainProductImage(activeProduct).url} alt={activeProduct.title} />
               <div className="preview-thumbnails">
-                <img src={activeProduct.imageUrl} alt="" />
+                {activeProduct.images.map((image) => (
+                  <img
+                    key={image.id}
+                    src={image.url}
+                    alt=""
+                    className={image.id === activeProduct.mainImageId ? "is-main" : ""}
+                  />
+                ))}
                 <span>
                   <Image size={19} />
                   AI 白底图

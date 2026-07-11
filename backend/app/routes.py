@@ -101,12 +101,26 @@ async def alibaba_oauth_authorize() -> dict[str, str]:
 
 
 @router.get("/alibaba/oauth/callback")
-async def alibaba_oauth_callback(code: str, state: str) -> RedirectResponse:
+async def alibaba_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    settings = get_settings()
+    if error:
+        reason = (
+            "denied"
+            if error in {"access_denied", "authorization_declined"}
+            else "provider_error"
+        )
+        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason={reason}")
+    if not code or not state:
+        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason=missing_callback_data")
     try:
-        await get_alibaba_oauth_store().exchange_code(code, state, get_settings())
-    except AlibabaOAuthError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RedirectResponse(get_settings().alibaba_oauth_success_url)
+        await get_alibaba_oauth_store().exchange_code(code, state, settings)
+    except AlibabaOAuthError:
+        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason=token_exchange_failed")
+    return RedirectResponse(settings.alibaba_oauth_success_url)
 
 
 @router.get("/alibaba/operations")
@@ -413,12 +427,24 @@ async def list_photos(
 @router.post("/products/analyze-image", response_model=ProductImageAnalysis)
 async def analyze_product_image(
     ai_client: Annotated[AIClient, Depends(get_ai_client)],
-    image: Annotated[UploadFile, File(...)],
+    images: Annotated[list[UploadFile] | None, File()] = None,
+    image: Annotated[UploadFile | None, File()] = None,
     known_facts: Annotated[str, Form()] = "{}",
     category_hint: Annotated[str | None, Form()] = None,
 ) -> ProductImageAnalysis:
-    content = await image.read()
-    _validate_upload(image, content)
+    uploads = images or ([image] if image else [])
+    if not uploads:
+        raise HTTPException(status_code=422, detail="at least one product image is required")
+    if len(uploads) > get_settings().max_product_images:
+        raise HTTPException(
+            status_code=422,
+            detail=f"a product can contain at most {get_settings().max_product_images} images",
+        )
+    image_payloads: list[tuple[bytes, str]] = []
+    for upload in uploads:
+        content = await upload.read()
+        _validate_upload(upload, content)
+        image_payloads.append((content, upload.content_type or "image/jpeg"))
     try:
         parsed_facts = json.loads(known_facts)
     except json.JSONDecodeError as exc:
@@ -426,9 +452,8 @@ async def analyze_product_image(
     if not isinstance(parsed_facts, dict):
         raise HTTPException(status_code=422, detail="known_facts must be a JSON object")
     try:
-        return await ai_client.analyze_product_image(
-            content,
-            image.content_type or "image/jpeg",
+        return await ai_client.analyze_product_images(
+            image_payloads,
             parsed_facts,
             category_hint,
         )

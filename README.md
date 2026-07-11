@@ -11,7 +11,7 @@
 - 最多 100 条/批的草稿和正式发布接口，并发数可控、单条失败不影响整批
 - 官方 Schema XML 解析和填值：执行必填、枚举、长度、数值、正则、值属性规则，并生成官方 XML 值结构
 - 官方上品流程接口：返回授权、类目、素材、字段填写、草稿预览、审核和发布后维护步骤
-- 商品图 AI 分析：只提取可观察信息，生成不改变商品事实的文案
+- 同一商品最多 10 张图库图片：第一张默认主图，可切换主图，AI 综合整组图片生成一个商品候选
 - 人工必填字段校验：价格、MOQ、材质、尺寸、认证、库存等禁止 AI 猜测
 - 四象限字段矩阵：区分全店通用/每商品、AI 辅助/可信来源专属字段
 - 店铺默认值继承：只允许币种、单位、仓库、运费模板等白名单字段复用
@@ -49,6 +49,21 @@ npm run dev
 
 Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到后端 `8000` 端口。
 
+### Alibaba 商家授权
+
+1. 在 Alibaba.com ICBU 开放平台创建应用并取得 AppKey/AppSecret。
+2. 将回调白名单设为本服务的稳定 HTTPS 地址：
+   `https://<backend-domain>/api/v1/alibaba/oauth/callback`。
+3. 后端配置 `ALIBABA_APP_KEY`、`ALIBABA_APP_SECRET`、
+   `ALIBABA_OAUTH_REDIRECT_URI`、`ALIBABA_OAUTH_SUCCESS_URL` 和
+   `ALIBABA_OAUTH_ERROR_URL`。
+4. 商家在设置页点击授权；后端生成 10 分钟有效的签名 `state`，跳转 Alibaba，
+   回调验证 `state` 后使用授权码交换 token。
+
+AppSecret、AccessToken 和 RefreshToken 只能保存在后端。当前 OAuth token store 仍是单进程、
+单店内存实现；多商家生产环境必须先接入应用账号体系，以登录用户的租户 ID 绑定加密持久化
+token，并实现 refresh token 轮换、撤权和审计。不能用前端传入的商家 ID 代替身份认证。
+
 ### 生产构建
 
 ```bash
@@ -78,7 +93,7 @@ npm run build
 1. 获取类目树，人工确认叶子类目。
 2. 获取该类目的发布 Schema。
 3. 解析官方 XML Schema，并按标量、多值、复合、多复合和值属性结构填入商品事实。
-4. 上传商品图，AI 仅提取视觉事实并生成安全文案草稿。
+4. 将同一商品的主图、详情图、规格图和包装图放入一个图库，AI 综合整组图片，仅提取视觉事实并生成安全文案草稿。
 5. 人工补充价格、MOQ、材质、尺寸、重量、认证、库存、交期等事实字段。
 6. 按官方 Schema 和字段来源策略校验，AI 不得直接提交商业事实。
 7. 上传图片银行。

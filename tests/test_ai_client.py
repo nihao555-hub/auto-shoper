@@ -55,6 +55,42 @@ async def test_image_analysis_marks_ai_content_for_confirmation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_image_analysis_sends_one_consolidated_multi_image_request() -> None:
+    provider_data = {
+        "observed_fields": {},
+        "generated_fields": {"title": {"value": "Watercolor Paper Pad"}},
+        "category_suggestions": [],
+        "warnings": [],
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(await request.aread())
+        content = payload["messages"][0]["content"]
+        assert "image set as one product" in content[0]["text"]
+        assert len([item for item in content if item["type"] == "image_url"]) == 3
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(provider_data)}}]},
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.analyze_product_images(
+            [
+                (b"main", "image/jpeg"),
+                (b"specification", "image/png"),
+                (b"detail", "image/png"),
+            ],
+            {},
+            None,
+        )
+    finally:
+        await client.close()
+
+    assert result.generated_fields["title"].value == "Watercolor Paper Pad"
+
+
+@pytest.mark.asyncio
 async def test_image_generation_uses_configured_model() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(await request.aread())
