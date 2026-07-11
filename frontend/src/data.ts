@@ -58,6 +58,34 @@ export const defaultSettings: StoreSettings = {
   reuseOrigin: false,
 };
 
+export type StoreTemplateField = {
+  key: keyof StoreSettings;
+  label: string;
+  autoFilledFromStore: boolean;
+};
+
+// 批量上品前必须完成的"全店通用模板"字段。标 autoFilledFromStore 的会在店铺同步时
+// 由 Alibaba API 回填，其余需要用户在设置中手动填写。
+export const requiredStoreTemplateFields: StoreTemplateField[] = [
+  { key: "currency", label: "币种", autoFilledFromStore: false },
+  { key: "priceUnit", label: "计量单位", autoFilledFromStore: false },
+  { key: "productGroupId", label: "商品分组", autoFilledFromStore: false },
+  { key: "photoBankGroupId", label: "图片银行分组", autoFilledFromStore: false },
+  { key: "warehouseId", label: "仓库", autoFilledFromStore: false },
+  { key: "shippingTemplateId", label: "运费模板", autoFilledFromStore: false },
+  { key: "inventoryCode", label: "库存地点编码", autoFilledFromStore: false },
+  { key: "companyProfile", label: "公司介绍", autoFilledFromStore: true },
+];
+
+export const getMissingStoreTemplateFields = (settings: StoreSettings): StoreTemplateField[] =>
+  requiredStoreTemplateFields.filter((field) => {
+    const value = settings[field.key];
+    return typeof value === "string" ? value.trim() === "" : !value;
+  });
+
+export const isStoreTemplateComplete = (settings: StoreSettings): boolean =>
+  getMissingStoreTemplateFields(settings).length === 0;
+
 const demoImage = (id: string, url: string): ProductImage => ({
   id,
   url,

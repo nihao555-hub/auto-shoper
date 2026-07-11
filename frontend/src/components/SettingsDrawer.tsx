@@ -8,6 +8,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import { getMissingStoreTemplateFields } from "../data";
 import type { StoreSettings } from "../types";
 
 type SettingsDrawerProps = {
@@ -15,6 +16,9 @@ type SettingsDrawerProps = {
   settings: StoreSettings;
   onClose: () => void;
   onSave: (settings: StoreSettings) => void;
+  onSyncFromStore?: () => void | Promise<void>;
+  syncing?: boolean;
+  canSyncFromStore?: boolean;
 };
 
 type SettingsSection = "trade" | "logistics" | "content" | "credentials";
@@ -30,9 +34,18 @@ const sections: Array<{
   { key: "credentials", label: "资质库", icon: ShieldCheck },
 ];
 
-export function SettingsDrawer({ open, settings, onClose, onSave }: SettingsDrawerProps) {
+export function SettingsDrawer({
+  open,
+  settings,
+  onClose,
+  onSave,
+  onSyncFromStore,
+  syncing = false,
+  canSyncFromStore = false,
+}: SettingsDrawerProps) {
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<SettingsSection>("trade");
+  const missingRequired = getMissingStoreTemplateFields(draft);
 
   useEffect(() => {
     if (open) {
@@ -91,11 +104,35 @@ export function SettingsDrawer({ open, settings, onClose, onSave }: SettingsDraw
             <h2 id="settings-title">商家资产与批次偏好</h2>
             <p>维护可复用的真实资料；店铺连接与切换请前往“店铺授权”。</p>
           </div>
-          <button type="button" className="icon-button" onClick={onClose}>
-            <X size={22} />
-            <span className="sr-only">关闭设置</span>
-          </button>
+          <div className="drawer-header-actions">
+            {onSyncFromStore ? (
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => void onSyncFromStore()}
+                disabled={syncing || !canSyncFromStore}
+                title={canSyncFromStore ? undefined : "请先连接并选择店铺"}
+              >
+                {syncing ? "同步中…" : "从店铺同步"}
+              </button>
+            ) : null}
+            <button type="button" className="icon-button" onClick={onClose}>
+              <X size={22} />
+              <span className="sr-only">关闭设置</span>
+            </button>
+          </div>
         </header>
+
+        {missingRequired.length ? (
+          <div className="settings-required-banner" role="status">
+            <Warning size={18} weight="fill" />
+            <p>
+              批量上品前需完成通用模板，还差：
+              {missingRequired.map((field) => field.label).join("、")}
+              。可先“从店铺同步”，剩余项手动填写。
+            </p>
+          </div>
+        ) : null}
 
         <div className="settings-layout">
           <nav className="settings-index" aria-label="设置分类">

@@ -150,6 +150,7 @@ export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [activeView, setActiveView] = useState<AppView>(getViewFromHash);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSyncing, setSettingsSyncing] = useState(false);
   const [settings, setSettings] = useState<StoreSettings>(defaultSettings);
   const [dataMode, setDataMode] = useState<DataMode>(() =>
     window.localStorage.getItem("auto-shoper-data-mode") === "demo" ? "demo" : "live",
@@ -366,12 +367,15 @@ export default function App() {
       notify("success", "店铺摘要已同步", "演示模式：未调用真实 Alibaba 接口。");
       return;
     }
+    setSettingsSyncing(true);
     try {
       await syncAlibabaStore(storeId);
       await refreshWorkspace();
-      notify("success", "店铺摘要已同步");
+      notify("success", "店铺摘要已同步", "已回填可从店铺获取的通用模板字段。");
     } catch (error) {
       notify("error", "店铺摘要同步失败", error instanceof ApiError ? error.message : undefined);
+    } finally {
+      setSettingsSyncing(false);
     }
   };
 
@@ -494,6 +498,9 @@ export default function App() {
         settings={settings}
         onClose={() => setSettingsOpen(false)}
         onSave={saveSettings}
+        onSyncFromStore={activeStoreId ? () => syncStore(activeStoreId) : undefined}
+        syncing={settingsSyncing}
+        canSyncFromStore={Boolean(activeStoreId)}
       />
       <ToastStack
         messages={toasts}

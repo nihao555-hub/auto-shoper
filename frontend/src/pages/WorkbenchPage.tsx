@@ -44,7 +44,7 @@ import {
   publishBatch,
   uploadPhotoBankImage,
 } from "../api";
-import { createEmptyFacts, getMainProductImage } from "../data";
+import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
 import type {
   AlibabaConnectedStore,
   CapabilityResponse,
@@ -73,6 +73,28 @@ type WorkbenchPageProps = {
 };
 
 const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
+
+// 把后端/AI 供应商返回的错误信息翻译成用户可读的中文提示，区分"未配置/余额不足/模型未注册/结构非法"等。
+const describeAiFailure = (message: string | undefined): string => {
+  const raw = message ?? "";
+  const lower = raw.toLowerCase();
+  if (lower.includes("insufficient credits") || lower.includes("insufficient_quota")) {
+    return "AI 服务账户余额不足，请在服务后台充值后重试。";
+  }
+  if (lower.includes("not register") || lower.includes("model_not_found")) {
+    return "配置的模型未在该 AI 账户注册，请检查后端模型名或联系管理员。";
+  }
+  if (lower.includes("is not configured") || lower.includes("api_key")) {
+    return "后端未配置 AI 服务凭据（OPENAI_API_KEY），请联系管理员。";
+  }
+  if (lower.includes("invalid structured response") || lower.includes("invalid response")) {
+    return "AI 返回的结构不合法，请重试；若持续失败请联系管理员。";
+  }
+  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("403")) {
+    return "AI 服务凭据无效或无权限，请检查后端 key。";
+  }
+  return raw || "AI 分析失败，请重试。";
+};
 
 const requiredFactKeys: Array<keyof ProductRecord["facts"]> = [
   "categoryId",
@@ -123,6 +145,27 @@ export function WorkbenchPage({
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
+
+  const missingTemplateFields = useMemo(
+    () => (dataMode === "live" ? getMissingStoreTemplateFields(settings) : []),
+    [dataMode, settings],
+  );
+  const templateComplete = missingTemplateFields.length === 0;
+
+  const blockForTemplate = () => {
+    if (templateComplete) {
+      return false;
+    }
+    notify(
+      "error",
+      "请先完成通用模板",
+      `批量上品前需在店铺设置中补齐：${missingTemplateFields
+        .map((field) => field.label)
+        .join("、")}。`,
+    );
+    onOpenSettings();
+    return true;
+  };
 
   useEffect(() => {
     getListingFieldMatrix()
@@ -268,7 +311,7 @@ export function WorkbenchPage({
         !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
         !backendConnected ? "请稍后重试或联系管理员。" : "智能生成服务尚未开通。",
       );
-      return;
+      return { success: false as const, error: "AI 服务尚未配置" };
     }
     replaceProduct(product.id, (current) => ({
       ...current,
@@ -286,7 +329,7 @@ export function WorkbenchPage({
         stage: "ai_ready",
         errors: current.aiConfirmed ? [] : ["AI 内容尚未确认"],
       }));
-      return;
+      return { success: true as const };
     }
 
     try {
@@ -310,12 +353,15 @@ export function WorkbenchPage({
       replaceProduct(product.id, (current) =>
         applyAnalysis(schemaData ? { ...current, schemaData } : current, response),
       );
+      return { success: true as const };
     } catch (error) {
+      const message = error instanceof Error ? error.message : "AI 分析失败";
       replaceProduct(product.id, (current) => ({
         ...current,
         stage: "error",
-        errors: [error instanceof Error ? error.message : "AI 分析失败"],
+        errors: [message],
       }));
+      return { success: false as const, error: message };
     }
   };
 
@@ -328,19 +374,34 @@ export function WorkbenchPage({
       notify(
         "error",
         !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
-        !backendConnected ? "请稍后重试或联系管理员。" : "智能生成服务尚未开通。",
+        !backendConnected
+          ? "请稍后重试或联系管理员。"
+          : "未检测到 AI 服务凭据，请联系管理员在后端配置 OPENAI_API_KEY。",
       );
       return;
     }
     setBusy(true);
-    await Promise.all(
+    const results = await Promise.all(
       products
         .filter((product) => product.stage === "uploaded" || product.stage === "error")
         .map(analyzeOne),
     );
     setBusy(false);
     setStep(1);
-    notify("success", "AI 分析已完成", "请确认标题、类目建议和图片可见属性。");
+    const failures = results.filter((result) => !result.success);
+    if (!results.length) {
+      notify("info", "没有需要分析的商品", "所有商品都已完成 AI 分析。");
+      return;
+    }
+    if (!failures.length) {
+      notify("success", "AI 分析已完成", "请确认标题、类目建议和图片可见属性。");
+      return;
+    }
+    notify(
+      failures.length === results.length ? "error" : "warning",
+      `AI 分析完成：成功 ${results.length - failures.length}/${results.length}`,
+      describeAiFailure(failures[0].error),
+    );
   };
 
   const confirmAi = (id: string) => {
@@ -473,6 +534,9 @@ export function WorkbenchPage({
       );
       return;
     }
+    if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
+      return;
+    }
 
     setBusy(true);
     setStep(3);
@@ -573,6 +637,10 @@ export function WorkbenchPage({
       (product) => product.stage === "drafted",
     );
     if (!publishConfirmed || !targets.length) {
+      return;
+    }
+    if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
+      setPublishDialogOpen(false);
       return;
     }
     setBusy(true);
@@ -778,6 +846,22 @@ export function WorkbenchPage({
               </button>
             ))}
           </nav>
+          {!templateComplete ? (
+            <div className="wb-template-gate" role="alert">
+              <Warning size={20} weight="fill" />
+              <div className="wb-template-gate-copy">
+                <strong>批量上品前请先完成通用模板</strong>
+                <p>
+                  以下全店通用字段尚未填写：
+                  {missingTemplateFields.map((field) => field.label).join("、")}
+                  。可先从店铺同步，剩余项在设置中手动填写。
+                </p>
+              </div>
+              <button type="button" className="button button-dark" onClick={onOpenSettings}>
+                完善通用模板
+              </button>
+            </div>
+          ) : null}
           {step === 0 ? (
             <UploadStep
               products={products}
@@ -1097,7 +1181,7 @@ function AiStep({
 }: {
   products: ProductRecord[];
   busy: boolean;
-  onAnalyze: (product: ProductRecord) => Promise<void>;
+  onAnalyze: (product: ProductRecord) => Promise<{ success: boolean }>;
   onConfirm: (id: string) => void;
   onConfirmAll: () => void;
   onChange: (product: ProductRecord) => void;

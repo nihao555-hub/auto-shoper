@@ -3464,6 +3464,31 @@ table {
   border-bottom: 1px solid var(--line);
 }
 
+.drawer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.settings-required-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  color: #8d5a20;
+  border: 1px solid #eed9bb;
+  border-radius: 9px;
+  background: var(--warning-soft);
+}
+
+.settings-required-banner p {
+  font-size: 10px;
+  line-height: 1.5;
+  color: inherit;
+}
+
 .drawer-header h2 {
   margin-top: 4px;
   font-size: 22px;
