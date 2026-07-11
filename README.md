@@ -63,13 +63,33 @@ Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到�
 （也可改为在 Vercel 设置 `VITE_API_ROOT=https://<backend-domain>/api/v1` 走跨域直连，
 后端 CORS 已放行 `*.vercel.app`。）Vercel 项目的 Root Directory 需指向 `frontend`。
 
-后端必须将 `DATABASE_PATH` 指向持久磁盘，例如 `/var/data/auto-shoper.db`。SQLite 文件保存
-客户、工作区、会话、OAuth state、加密 token 和店铺摘要；没有持久磁盘的临时文件系统会在
-重部署后丢失这些记录。生产环境必须单独设置随机的 `TOKEN_ENCRYPTION_KEY`，不可依赖
+生产后端使用 OceanBase MySQL 模式，Render 需设置：
+
+```text
+DATABASE_BACKEND=oceanbase
+OCEANBASE_HOST=<OceanBase 公网地址>
+OCEANBASE_PORT=3306
+OCEANBASE_USER=<应用专用用户>
+OCEANBASE_PASSWORD=<密码>
+OCEANBASE_DATABASE=<数据库名>
+```
+
+本地开发仍可使用 `DATABASE_BACKEND=sqlite` 和 `DATABASE_PATH=data/auto-shoper.db`。
+客户、工作区、会话、OAuth state、加密 token、店铺摘要和批次均存入同一数据库并按工作区/
+店铺隔离。生产环境必须单独设置随机的 `TOKEN_ENCRYPTION_KEY`，不可依赖
 `ALIBABA_APP_SECRET` 回退值，也不可在已有 token 时随意轮换。
 
-注册仅对持有一次性注册码的客户开放。`REGISTRATION_CODES` 接受逗号分隔的多个注册码，
-数据库会保存哈希并在首次成功注册后立即标记为已使用。
+注册仅对持有一次性注册码的客户开放。`REGISTRATION_CODES` 可用于少量启动码；批量注册码使用：
+
+```bash
+DATABASE_BACKEND=oceanbase \
+OCEANBASE_HOST=... OCEANBASE_USER=... OCEANBASE_PASSWORD=... OCEANBASE_DATABASE=... \
+.venv/bin/python -m backend.app.registration_codes \
+  --count 10000 --min-length 16 --max-length 32 --output /secure/path/codes.csv
+```
+
+明文 CSV 权限为 `0600`，数据库只保存 SHA-256 哈希；成功注册会原子消费注册码，不能重复使用。
+重复导入同一文件可用 `--input /secure/path/codes.csv`，不会创建重复记录。
 
 ### Alibaba 商家授权
 

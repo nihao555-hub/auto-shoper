@@ -1,4 +1,6 @@
+import hashlib
 import sqlite3
+import string
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend.app.config import Settings, get_settings
 from backend.app.database import Database, get_database
 from backend.app.main import app
+from backend.app.registration_codes import generate_registration_codes
 
 
 @pytest.fixture
@@ -52,6 +55,44 @@ def test_registration_requires_configured_code(tmp_path: Path) -> None:
     finally:
         app.dependency_overrides.pop(get_database, None)
         app.dependency_overrides.pop(get_settings, None)
+
+
+def test_database_seeded_code_opens_registration(tmp_path: Path) -> None:
+    settings = Settings(
+        database_path=str(tmp_path / "database-seeded.db"),
+        registration_codes="",
+        token_encryption_key="test-only-token-encryption-key",
+    )
+    database = Database(settings)
+    code = "DatabaseSeededCode"
+    database.add_registration_code_hashes([hashlib.sha256(code.encode()).hexdigest()])
+    app.dependency_overrides[get_database] = lambda: database
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = TestClient(app).post(
+            "/api/v1/auth/register",
+            json={
+                "email": "owner@example.com",
+                "password": "strong-password",
+                "display_name": "Owner",
+                "workspace_name": "Example Trading",
+                "registration_code": code,
+            },
+        )
+        assert response.status_code == 201
+        assert database.registration_code_counts() == (1, 0)
+    finally:
+        app.dependency_overrides.pop(get_database, None)
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_registration_code_generator_is_unique_and_varied() -> None:
+    codes = generate_registration_codes(count=170, min_length=16, max_length=32)
+
+    assert len(codes) == 170
+    assert len(set(codes)) == 170
+    assert {len(code) for code in codes} == set(range(16, 33))
+    assert all(set(code) <= set(string.ascii_letters) for code in codes)
 
 
 def test_registration_session_and_one_time_code(workspace_database: Database) -> None:

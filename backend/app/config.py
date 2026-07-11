@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field
@@ -18,7 +19,13 @@ class Settings(BaseSettings):
     text_model: str = "gemini-3.1-flash-lite"
     image_provider: str = "grsai"
     image_model: str = "gpt-image-2"
+    database_backend: Literal["sqlite", "oceanbase"] = "sqlite"
     database_path: str = "data/auto-shoper.db"
+    oceanbase_host: str | None = None
+    oceanbase_port: int = 3306
+    oceanbase_user: str | None = None
+    oceanbase_password: str | None = None
+    oceanbase_database: str | None = None
     registration_codes: str = ""
     session_cookie_name: str = "auto_shoper_session"
     session_days: int = 30
@@ -62,6 +69,24 @@ class Settings(BaseSettings):
     @property
     def configured_registration_codes(self) -> list[str]:
         return [code.strip() for code in self.registration_codes.split(",") if code.strip()]
+
+    @property
+    def oceanbase_configuration_error(self) -> str | None:
+        if self.database_backend != "oceanbase":
+            return None
+        missing = [
+            name
+            for name, value in (
+                ("OCEANBASE_HOST", self.oceanbase_host),
+                ("OCEANBASE_USER", self.oceanbase_user),
+                ("OCEANBASE_PASSWORD", self.oceanbase_password),
+                ("OCEANBASE_DATABASE", self.oceanbase_database),
+            )
+            if not value
+        ]
+        if missing:
+            return f"OceanBase 配置缺失：{', '.join(missing)}"
+        return None
 
     @property
     def encryption_key_material(self) -> str | None:

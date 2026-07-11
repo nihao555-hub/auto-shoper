@@ -47,7 +47,7 @@ def register(
     response: Response,
     database: Annotated[Database, Depends(get_database)],
 ) -> AuthUserResponse:
-    if not database.settings.configured_registration_codes:
+    if not database.has_available_registration_codes():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="注册暂未开放，请向管理员获取注册码",
