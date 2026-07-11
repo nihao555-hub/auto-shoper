@@ -11,6 +11,8 @@ from backend.app.models import ProductImageAnalysis
 
 SCHEMA_XML = "<itemSchema><field id=\"productTitle\" type=\"input\" /></itemSchema>"
 
+pytestmark = pytest.mark.usefixtures("authenticated_app")
+
 
 class FakeAlibabaClient:
     async def call(
@@ -164,6 +166,7 @@ def test_batch_drafts_return_one_result_per_item() -> None:
         response = client.post(
             "/api/v1/alibaba/products/batch/drafts",
             json={
+                "batch_id": "test-batch-drafts",
                     "items": [
                     {"reference": "A", "category_id": "123", "xml": SCHEMA_XML},
                     {"reference": "B", "category_id": "123", "xml": SCHEMA_XML},
@@ -188,6 +191,7 @@ def test_batch_publish_requires_confirmation() -> None:
         response = client.post(
             "/api/v1/alibaba/products/batch/publish",
             json={
+                "batch_id": "test-batch-publish",
                 "items": [{"reference": "A", "category_id": "123", "xml": SCHEMA_XML}],
                 "confirmed_by_user": False,
             },
@@ -204,6 +208,7 @@ def test_batch_requires_unique_references() -> None:
         response = client.post(
             "/api/v1/alibaba/products/batch/drafts",
             json={
+                "batch_id": "test-batch-duplicate",
                 "items": [
                     {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
                     {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
@@ -596,6 +601,7 @@ def test_official_listing_batch_isolates_source_validation_failures() -> None:
         response = client.post(
             "/api/v1/products/official-listing/batch/drafts",
             json={
+                "batch_id": "test-official-drafts",
                 "items": [
                     item("trusted", "user_confirmed"),
                     item("ai-candidate", "ai_generated"),
@@ -614,7 +620,10 @@ def test_official_listing_batch_isolates_source_validation_failures() -> None:
 
         unconfirmed = client.post(
             "/api/v1/products/official-listing/batch/publish",
-            json={"items": [item("trusted", "user_confirmed")]},
+            json={
+                "batch_id": "test-official-publish",
+                "items": [item("trusted", "user_confirmed")],
+            },
         )
         assert unconfirmed.status_code == 409
     finally:

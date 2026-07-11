@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     text_model: str = "gemini-3.1-flash-lite"
     image_provider: str = "grsai"
     image_model: str = "gpt-image-2"
+    database_path: str = "data/auto-shoper.db"
+    registration_codes: str = ""
+    session_cookie_name: str = "auto_shoper_session"
+    session_days: int = 30
+    token_encryption_key: str | None = None
 
     alibaba_app_key: str | None = None
     alibaba_app_secret: str | None = None
@@ -53,6 +58,14 @@ class Settings(BaseSettings):
     @property
     def has_alibaba_oauth_app(self) -> bool:
         return self.alibaba_oauth_configuration_error is None
+
+    @property
+    def configured_registration_codes(self) -> list[str]:
+        return [code.strip() for code in self.registration_codes.split(",") if code.strip()]
+
+    @property
+    def encryption_key_material(self) -> str | None:
+        return self.token_encryption_key or self.alibaba_app_secret
 
     @property
     def alibaba_oauth_configuration_error(self) -> str | None:

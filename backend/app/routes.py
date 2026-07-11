@@ -3,7 +3,6 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import RedirectResponse
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.ai import AIClient, AIProviderError
@@ -13,6 +12,7 @@ from backend.app.clients.alibaba import (
     AlibabaConfigurationError,
 )
 from backend.app.config import get_settings
+from backend.app.database import AuthenticatedUser, Database, get_database
 from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.models import (
     AlibabaBatchPublishRequest,
@@ -41,11 +41,7 @@ from backend.app.models import (
     SchemaParseRequest,
     SchemaParseResult,
 )
-from backend.app.services.alibaba_oauth import (
-    AlibabaOAuthError,
-    get_alibaba_oauth_status,
-    get_alibaba_oauth_store,
-)
+from backend.app.services.auth import get_current_user
 from backend.app.services.field_policy import (
     effective_listing_fields,
     get_listing_field,
@@ -68,59 +64,54 @@ router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/capabilities")
-async def capabilities() -> dict[str, Any]:
-    oauth_status = get_alibaba_oauth_status()
+async def capabilities(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, Any]:
+    settings = get_settings()
+    active_store = database.get_active_store(user.workspace_id)
+    connected = bool(active_store and not active_store.expired)
+    if active_store and active_store.expired:
+        connection_state = "expired"
+    elif active_store:
+        connection_state = "connected"
+    elif settings.alibaba_oauth_configuration_error:
+        connection_state = "unconfigured"
+    else:
+        connection_state = "not_connected"
     return {
         "modules": {
             "alibaba_listing": True,
             "ai_images": True,
             "sales_expert": False,
         },
-        "alibaba_credentials_configured": oauth_status["connected"],
-        "alibaba_oauth_configured": oauth_status["oauth_configured"],
-        "alibaba_connection_state": oauth_status["connection_state"],
-        "alibaba_connection_source": oauth_status["connection_source"],
-        "alibaba_oauth_configuration_error": oauth_status["configuration_error"],
-        "alibaba_oauth_redirect_uri": oauth_status["redirect_uri"],
-        "model_credentials_configured": bool(get_settings().openai_api_key),
+        "alibaba_credentials_configured": connected,
+        "alibaba_oauth_configured": settings.has_alibaba_oauth_app,
+        "alibaba_connection_state": connection_state,
+        "alibaba_connection_source": "oauth" if active_store else None,
+        "alibaba_oauth_configuration_error": settings.alibaba_oauth_configuration_error,
+        "alibaba_oauth_redirect_uri": settings.alibaba_oauth_redirect_uri,
+        "active_store_id": active_store.id if active_store else None,
+        "model_credentials_configured": bool(settings.openai_api_key),
     }
 
 
-@router.get("/alibaba/oauth/status")
-async def alibaba_oauth_status() -> dict[str, Any]:
-    return get_alibaba_oauth_status()
-
-
-@router.post("/alibaba/oauth/authorize")
-async def alibaba_oauth_authorize() -> dict[str, str]:
-    try:
-        authorization_url = get_alibaba_oauth_store().create_authorization_url(get_settings())
-    except AlibabaOAuthError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"authorization_url": authorization_url}
-
-
-@router.get("/alibaba/oauth/callback")
-async def alibaba_oauth_callback(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-) -> RedirectResponse:
-    settings = get_settings()
-    if error:
-        reason = (
-            "denied"
-            if error in {"access_denied", "authorization_declined"}
-            else "provider_error"
+def _bind_batch_to_active_store(
+    batch_id: str,
+    user: AuthenticatedUser,
+    database: Database,
+) -> None:
+    store = database.get_active_store(user.workspace_id)
+    if store is None or store.expired:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前工作区没有可用的 Alibaba 店铺",
         )
-        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason={reason}")
-    if not code or not state:
-        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason=missing_callback_data")
-    try:
-        await get_alibaba_oauth_store().exchange_code(code, state, settings)
-    except AlibabaOAuthError:
-        return RedirectResponse(f"{settings.alibaba_oauth_error_url}&reason=token_exchange_failed")
-    return RedirectResponse(settings.alibaba_oauth_success_url)
+    if not database.ensure_batch(user.workspace_id, store.id, batch_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该批次已绑定其他 Alibaba 店铺，不能直接切换目标店铺",
+        )
 
 
 @router.get("/alibaba/operations")
@@ -325,7 +316,10 @@ async def create_draft(
 async def create_batch_drafts(
     request: AlibabaBatchRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> list[AlibabaBatchResult]:
+    _bind_batch_to_active_store(request.batch_id, user, database)
     return await _batch_alibaba_call(client, "draft_create", request)
 
 
@@ -360,12 +354,15 @@ async def publish_product(
 async def publish_batch_products(
     request: AlibabaBatchPublishRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> list[AlibabaBatchResult]:
     if not request.confirmed_by_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch publishing requires confirmed_by_user=true",
         )
+    _bind_batch_to_active_store(request.batch_id, user, database)
     return await _batch_alibaba_call(client, "publish", request)
 
 
@@ -547,7 +544,10 @@ async def create_official_listing_draft(
 async def create_official_listing_batch_drafts(
     request: OfficialListingBatchRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> list[AlibabaBatchResult]:
+    _bind_batch_to_active_store(request.batch_id, user, database)
     return await _batch_official_listing_call(client, "draft_create", request)
 
 
@@ -582,12 +582,15 @@ async def publish_official_listing(
 async def publish_official_listing_batch(
     request: OfficialListingBatchPublishRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> list[AlibabaBatchResult]:
     if not request.confirmed_by_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch publishing requires confirmed_by_user=true",
         )
+    _bind_batch_to_active_store(request.batch_id, user, database)
     return await _batch_official_listing_call(client, "publish", request)
 
 

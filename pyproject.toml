@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Backend services for Alibaba.com listing automation and AI image generation"
 requires-python = ">=3.11"
 dependencies = [
+    "cryptography==44.0.3",
     "fastapi==0.115.12",
     "httpx==0.28.1",
     "pydantic-settings==2.8.1",

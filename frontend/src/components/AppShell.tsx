@@ -2,14 +2,16 @@ import {
   Archive,
   CaretDoubleLeft,
   CaretDoubleRight,
+  CaretDown,
   ChartBar,
   GearSix,
   PlayCircle,
+  SignOut,
   UploadSimple,
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { PropsWithChildren } from "react";
-import type { AppView, DataMode } from "../types";
+import type { AlibabaConnectedStore, AppView, AuthUser, DataMode } from "../types";
 import { BrandMark } from "./BrandMark";
 
 type AppShellProps = PropsWithChildren<{
@@ -19,6 +21,11 @@ type AppShellProps = PropsWithChildren<{
   onDataModeChange: (mode: DataMode) => void;
   onNavigate: (view: AppView) => void;
   onOpenSettings: () => void;
+  user: AuthUser;
+  stores: AlibabaConnectedStore[];
+  activeStoreId: string | null;
+  onStoreChange: (storeId: string) => void;
+  onLogout: () => void;
 }>;
 
 const navItems: Array<{
@@ -41,6 +48,11 @@ export function AppShell({
   onDataModeChange,
   onNavigate,
   onOpenSettings,
+  user,
+  stores,
+  activeStoreId,
+  onStoreChange,
+  onLogout,
   children,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(loadCollapsed);
@@ -82,6 +94,32 @@ export function AppShell({
 
         <nav className="rail-nav">
           <span className="rail-section-label">工作区</span>
+          <div className="workspace-switcher">
+            <span className="workspace-avatar">{user.workspace_name.slice(0, 1)}</span>
+            <div className="workspace-switcher-copy">
+              <strong>{user.workspace_name}</strong>
+              {stores.length ? (
+                <label>
+                  <span className="sr-only">当前 Alibaba 店铺</span>
+                  <select
+                    value={activeStoreId ?? ""}
+                    onChange={(event) => onStoreChange(event.target.value)}
+                  >
+                    {stores.map((store) => (
+                      <option key={store.id} value={store.id}>
+                        {store.login_id ?? store.account ?? store.user_id ?? "Alibaba 店铺"}
+                      </option>
+                    ))}
+                  </select>
+                  <CaretDown size={13} />
+                </label>
+              ) : (
+                <button type="button" onClick={onOpenSettings}>
+                  添加 Alibaba 店铺
+                </button>
+              )}
+            </div>
+          </div>
           {navItems.map(({ view, label, description, icon: Icon }) => (
             <button
               type="button"
@@ -126,6 +164,16 @@ export function AppShell({
               <small>默认值与授权</small>
             </span>
           </button>
+          <div className="rail-account">
+            <span>{user.display_name.slice(0, 1)}</span>
+            <div className="rail-item-copy">
+              <strong>{user.display_name}</strong>
+              <small>{user.email}</small>
+            </div>
+            <button type="button" onClick={onLogout} aria-label="退出登录" title="退出登录">
+              <SignOut size={18} />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -135,6 +183,7 @@ export function AppShell({
             <BrandMark size={30} />
             <strong>上品台</strong>
           </button>
+          <strong className="mobile-workspace-name">{user.workspace_name}</strong>
           <div className="mobile-status">
             <i className={`connection-dot ${backendConnected ? "is-online" : "is-offline"}`} />
             {dataMode === "demo" ? "演示空间" : "真实工作区"}

@@ -51,6 +51,7 @@ import type {
 } from "../types";
 
 type WorkbenchPageProps = {
+  batchId: string;
   capabilities: CapabilityResponse | null;
   backendConnected: boolean;
   dataMode: DataMode;
@@ -81,6 +82,7 @@ const requiredFactKeys: Array<keyof ProductRecord["facts"]> = [
 ];
 
 export function WorkbenchPage({
+  batchId,
   capabilities,
   backendConnected,
   dataMode,
@@ -440,7 +442,7 @@ export function WorkbenchPage({
           return { ...product, images, schemaData };
         }),
       );
-      const results = await createDraftBatch(prepared, settings);
+      const results = await createDraftBatch(batchId, prepared, settings);
       const preparedByReference = new Map(prepared.map((product) => [product.reference, product]));
       const resultByReference = new Map(results.map((result) => [result.reference, result]));
       onProductsChange(
@@ -502,7 +504,7 @@ export function WorkbenchPage({
         notify("success", "演示发布流程已完成", "演示商品不会写入真实 Alibaba 账户。");
         return;
       }
-      const results = await publishBatch(targets, settings);
+      const results = await publishBatch(batchId, targets, settings);
       const resultByReference = new Map(results.map((result) => [result.reference, result]));
       onProductsChange(
         products.map((product) => {
@@ -767,7 +769,7 @@ export function WorkbenchPage({
 
       <footer className="workbench-footer">
         <div className="batch-identity">
-          <strong>扇形画笔系列</strong>
+          <strong>{batchId}</strong>
           <span>{products.length} 个商品 · 刚刚自动保存</span>
         </div>
         <div className="footer-metrics">

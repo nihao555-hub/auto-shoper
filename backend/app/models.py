@@ -4,6 +4,45 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+def _normalize_email(value: str) -> str:
+    normalized = value.strip().lower()
+    local, separator, domain = normalized.partition("@")
+    if not separator or not local or "." not in domain:
+        raise ValueError("请输入有效邮箱")
+    return normalized
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=10, max_length=128)
+    display_name: str = Field(min_length=2, max_length=80)
+    workspace_name: str = Field(min_length=2, max_length=100)
+    registration_code: str = Field(min_length=4, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return _normalize_email(value)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return _normalize_email(value)
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    workspace_id: str
+    workspace_name: str
+
+
 class FieldSource(StrEnum):
     IMAGE_EXTRACTED = "image_extracted"
     AI_GENERATED = "ai_generated"
@@ -95,6 +134,7 @@ class AlibabaBatchItem(AlibabaSchemaRequest):
 
 
 class AlibabaBatchRequest(BaseModel):
+    batch_id: str = Field(min_length=8, max_length=100)
     items: list[AlibabaBatchItem] = Field(min_length=1, max_length=100)
     concurrency: int = Field(default=3, ge=1, le=10)
 
@@ -232,6 +272,7 @@ class OfficialListingBatchItem(OfficialListingPrepareRequest):
 
 
 class OfficialListingBatchRequest(BaseModel):
+    batch_id: str = Field(min_length=8, max_length=100)
     items: list[OfficialListingBatchItem] = Field(min_length=1, max_length=100)
     concurrency: int = Field(default=3, ge=1, le=10)
 

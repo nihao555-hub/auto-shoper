@@ -1,11 +1,13 @@
 from collections.abc import AsyncIterator
+from typing import Annotated
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 
 from backend.app.clients.ai import AIClient, AIProviderError
 from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
 from backend.app.config import get_settings
-from backend.app.services.alibaba_oauth import get_alibaba_access_token
+from backend.app.database import AuthenticatedUser, Database, get_database
+from backend.app.services.auth import get_current_user
 
 
 async def get_ai_client() -> AsyncIterator[AIClient]:
@@ -19,11 +21,17 @@ async def get_ai_client() -> AsyncIterator[AIClient]:
         await client.close()
 
 
-async def get_alibaba_client() -> AsyncIterator[AlibabaClient]:
+async def get_alibaba_client(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> AsyncIterator[AlibabaClient]:
     settings = get_settings()
-    oauth_access_token = get_alibaba_access_token()
-    if oauth_access_token:
-        settings = settings.model_copy(update={"alibaba_access_token": oauth_access_token})
+    store = database.get_active_store(user.workspace_id)
+    if store is None:
+        raise HTTPException(status_code=409, detail="请先连接并选择 Alibaba 店铺")
+    if store.expired:
+        raise HTTPException(status_code=409, detail="当前 Alibaba 店铺授权已过期")
+    settings = settings.model_copy(update={"alibaba_access_token": store.access_token})
     try:
         client = AlibabaClient(settings)
     except AlibabaConfigurationError as exc:

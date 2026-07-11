@@ -13,6 +13,7 @@ import httpx
 
 from backend.app.clients.alibaba import AlibabaClient
 from backend.app.config import Settings, get_settings
+from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
@@ -245,6 +246,60 @@ class AlibabaOAuthStore:
     def _decode(value: str) -> bytes:
         padding = "=" * (-len(value) % 4)
         return base64.urlsafe_b64decode(value + padding)
+
+
+def create_workspace_authorization_url(
+    settings: Settings,
+    database: Database,
+    user: AuthenticatedUser,
+) -> str:
+    if not settings.has_alibaba_oauth_app:
+        raise AlibabaOAuthError(
+            settings.alibaba_oauth_configuration_error or "Alibaba OAuth 配置无效"
+        )
+    if not settings.encryption_key_material:
+        raise AlibabaOAuthError("Alibaba token 加密密钥未配置")
+    state = database.create_oauth_state(user)
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": settings.alibaba_app_key,
+            "redirect_uri": settings.alibaba_oauth_redirect_uri,
+            "state": state,
+            "view": "web",
+            "sp": "ICBU",
+            "force_login": "true",
+        }
+    )
+    return f"{settings.alibaba_oauth_authorize_url}?{query}"
+
+
+async def exchange_workspace_code(
+    code: str,
+    state: str,
+    settings: Settings,
+    database: Database,
+) -> StoreConnection:
+    identity = database.consume_oauth_state(state)
+    if identity is None:
+        raise AlibabaOAuthError("Alibaba OAuth state 无效、已使用或已过期")
+    workspace_id, _ = identity
+    store = AlibabaOAuthStore()
+    payload = await store._request_token(settings, TOKEN_CREATE_OPERATION, {"code": code})
+    token = store._store_token(payload)
+    try:
+        return database.upsert_store(
+            workspace_id=workspace_id,
+            provider_user_id=token.user_id,
+            login_id=token.login_id,
+            account=token.account,
+            access_token=token.access_token,
+            refresh_token=token.refresh_token,
+            expires_at=token.expires_at,
+            refresh_expires_at=token.refresh_expires_at,
+        )
+    except RuntimeError as exc:
+        raise AlibabaOAuthError(str(exc)) from exc
 
 
 alibaba_oauth_store = AlibabaOAuthStore()

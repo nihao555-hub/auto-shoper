@@ -1,11 +1,15 @@
 import type {
+  AlibabaConnectedStore,
   AlibabaOAuthStatus,
+  AlibabaStoreDirectory,
+  AuthUser,
   BatchApiResult,
   CapabilityResponse,
   DraftField,
   ImageAnalysisResponse,
   ListingFieldGroup,
   ProductRecord,
+  RegisterPayload,
   StoreSettings,
 } from "./types";
 
@@ -23,6 +27,9 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
+
+const apiFetch = (input: RequestInfo | URL, init?: RequestInit) =>
+  fetch(input, { ...init, credentials: "include" });
 
 const parseResponse = async <T>(response: Response): Promise<T> => {
   if (response.ok) {
@@ -43,18 +50,59 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
 };
 
 export const getCapabilities = async (): Promise<CapabilityResponse> =>
-  parseResponse<CapabilityResponse>(await fetch(`${API_ROOT}/capabilities`));
+  parseResponse<CapabilityResponse>(await apiFetch(`${API_ROOT}/capabilities`));
+
+export const getCurrentUser = async (): Promise<AuthUser> =>
+  parseResponse<AuthUser>(await apiFetch(`${API_ROOT}/auth/me`));
+
+export const login = async (email: string, password: string): Promise<AuthUser> =>
+  parseResponse<AuthUser>(
+    await apiFetch(`${API_ROOT}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  );
+
+export const register = async (payload: RegisterPayload): Promise<AuthUser> =>
+  parseResponse<AuthUser>(
+    await apiFetch(`${API_ROOT}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  );
+
+export const logout = async (): Promise<void> => {
+  const response = await apiFetch(`${API_ROOT}/auth/logout`, { method: "POST" });
+  if (!response.ok && response.status !== 204) {
+    await parseResponse(response);
+  }
+};
 
 export const getAlibabaOAuthStatus = async (): Promise<AlibabaOAuthStatus> =>
-  parseResponse<AlibabaOAuthStatus>(await fetch(`${API_ROOT}/alibaba/oauth/status`));
+  parseResponse<AlibabaOAuthStatus>(await apiFetch(`${API_ROOT}/alibaba/oauth/status`));
+
+export const getAlibabaStores = async (): Promise<AlibabaStoreDirectory> =>
+  parseResponse<AlibabaStoreDirectory>(await apiFetch(`${API_ROOT}/alibaba/stores`));
+
+export const activateAlibabaStore = async (storeId: string): Promise<AlibabaConnectedStore> =>
+  parseResponse<AlibabaConnectedStore>(
+    await apiFetch(`${API_ROOT}/alibaba/stores/${storeId}/activate`, { method: "POST" }),
+  );
+
+export const syncAlibabaStore = async (storeId: string): Promise<AlibabaConnectedStore> =>
+  parseResponse<AlibabaConnectedStore>(
+    await apiFetch(`${API_ROOT}/alibaba/stores/${storeId}/sync`, { method: "POST" }),
+  );
 
 export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }> =>
   parseResponse<{ authorization_url: string }>(
-    await fetch(`${API_ROOT}/alibaba/oauth/authorize`, { method: "POST" }),
+    await apiFetch(`${API_ROOT}/alibaba/oauth/authorize`, { method: "POST" }),
   );
 
 export const getListingFieldMatrix = async (): Promise<ListingFieldGroup[]> =>
-  parseResponse<ListingFieldGroup[]>(await fetch(`${API_ROOT}/alibaba/listing-field-matrix`));
+  parseResponse<ListingFieldGroup[]>(await apiFetch(`${API_ROOT}/alibaba/listing-field-matrix`));
 
 export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysisResponse> => {
   const body = new FormData();
@@ -63,7 +111,7 @@ export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysis
   }
   body.append("known_facts", "{}");
   return parseResponse<ImageAnalysisResponse>(
-    await fetch(`${API_ROOT}/products/analyze-image`, {
+    await apiFetch(`${API_ROOT}/products/analyze-image`, {
       method: "POST",
       body,
     }),
@@ -78,7 +126,7 @@ export const uploadPhotoBankImage = async (
   body.append("image", file);
   body.append("group_id", groupId);
   return parseResponse<Record<string, unknown>>(
-    await fetch(`${API_ROOT}/alibaba/photo-bank/images`, {
+    await apiFetch(`${API_ROOT}/alibaba/photo-bank/images`, {
       method: "POST",
       body,
     }),
@@ -106,7 +154,7 @@ export const findPhotoBankUrl = (payload: Record<string, unknown>): string | nul
 
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
-    await fetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
+    await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
   );
 
 const trustedField = (value: unknown): DraftField => ({
@@ -173,16 +221,18 @@ const accountDefaults = (settings: StoreSettings): Record<string, DraftField> =>
 });
 
 export const createDraftBatch = async (
+  batchId: string,
   products: ProductRecord[],
   settings: StoreSettings,
 ): Promise<BatchApiResult[]> =>
   parseResponse<BatchApiResult[]>(
-    await fetch(`${API_ROOT}/products/official-listing/batch/drafts`, {
+    await apiFetch(`${API_ROOT}/products/official-listing/batch/drafts`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        batch_id: batchId,
         items: products.map((product) => ({
           reference: product.reference,
           category_id: product.facts.categoryId,
@@ -197,16 +247,18 @@ export const createDraftBatch = async (
   );
 
 export const publishBatch = async (
+  batchId: string,
   products: ProductRecord[],
   settings: StoreSettings,
 ): Promise<BatchApiResult[]> =>
   parseResponse<BatchApiResult[]>(
-    await fetch(`${API_ROOT}/products/official-listing/batch/publish`, {
+    await apiFetch(`${API_ROOT}/products/official-listing/batch/publish`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        batch_id: batchId,
         items: products.map((product) => ({
           reference: product.reference,
           category_id: product.facts.categoryId,

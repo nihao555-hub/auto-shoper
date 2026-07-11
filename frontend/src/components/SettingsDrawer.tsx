@@ -1,23 +1,29 @@
 import {
+  ArrowsClockwise,
   Buildings,
   CheckCircle,
   FileText,
   LinkSimple,
+  Plus,
   ShieldCheck,
   Storefront,
+  Swap,
   Truck,
   Warning,
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { getAlibabaOAuthStatus } from "../api";
 import type { AlibabaConnectedStore, CapabilityResponse, StoreSettings } from "../types";
 
 type SettingsDrawerProps = {
   open: boolean;
   capabilities: CapabilityResponse | null;
   settings: StoreSettings;
+  stores: AlibabaConnectedStore[];
+  activeStoreId: string | null;
   onAuthorizeAlibaba: () => void;
+  onSwitchStore: (storeId: string) => void;
+  onSyncStore: (storeId: string) => void;
   onClose: () => void;
   onSave: (settings: StoreSettings) => void;
 };
@@ -29,8 +35,8 @@ const sections: Array<{
   label: string;
   icon: typeof LinkSimple;
 }> = [
-  { key: "connection", label: "店铺连接", icon: LinkSimple },
-  { key: "trade", label: "交易默认", icon: Storefront },
+  { key: "connection", label: "店铺与授权", icon: LinkSimple },
+  { key: "trade", label: "批次选项", icon: Storefront },
   { key: "logistics", label: "仓储物流", icon: Truck },
   { key: "content", label: "内容模板", icon: FileText },
   { key: "credentials", label: "资质库", icon: ShieldCheck },
@@ -40,13 +46,16 @@ export function SettingsDrawer({
   open,
   capabilities,
   settings,
+  stores,
+  activeStoreId,
   onAuthorizeAlibaba,
+  onSwitchStore,
+  onSyncStore,
   onClose,
   onSave,
 }: SettingsDrawerProps) {
   const [draft, setDraft] = useState(settings);
-  const [section, setSection] = useState<SettingsSection>("trade");
-  const [stores, setStores] = useState<AlibabaConnectedStore[]>([]);
+  const [section, setSection] = useState<SettingsSection>("connection");
   const connectionState = capabilities?.alibaba_connection_state ?? "unconfigured";
   const connectionLabel = {
     unconfigured: "平台未配置",
@@ -80,27 +89,6 @@ export function SettingsDrawer({
   }, [onClose, open]);
 
   useEffect(() => {
-    if (!open || section !== "connection") {
-      return;
-    }
-    let active = true;
-    getAlibabaOAuthStatus()
-      .then((status) => {
-        if (active) {
-          setStores(status.stores ?? []);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setStores([]);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, section]);
-
-  useEffect(() => {
     if (!open) {
       return;
     }
@@ -130,9 +118,9 @@ export function SettingsDrawer({
       >
         <header className="drawer-header">
           <div>
-            <span className="eyebrow">店铺配置</span>
-            <h2 id="settings-title">店铺与默认配置</h2>
-            <p>只设置一次，新商品自动复用。</p>
+            <span className="eyebrow">客户工作区</span>
+            <h2 id="settings-title">店铺与商家资产</h2>
+            <p>授权、店铺摘要和可复用的真实商家资料。</p>
           </div>
           <button type="button" className="icon-button" onClick={onClose}>
             <X size={22} />
@@ -177,12 +165,12 @@ export function SettingsDrawer({
             {section === "trade" ? (
               <>
                 <SettingsHeading
-                  title="交易默认设置"
-                  description="这些字段适用于全店，可在单个商品中覆盖。"
+                  title="本批次上次选择"
+                  description="仅帮助下次填写；创建批次时仍需明确确认目标店铺与资源。"
                 />
                 <div className="form-grid">
                   <SelectField
-                    label="默认币种"
+                    label="币种"
                     value={draft.currency}
                     options={["USD", "EUR", "CNY"]}
                     onChange={(value) => update("currency", value)}
@@ -205,8 +193,8 @@ export function SettingsDrawer({
                   />
                 </div>
                 <SettingsHeading
-                  title="允许自动复用"
-                  description="新商品会带出这些已确认内容，仍可逐商品修改。"
+                  title="允许带出商家资产"
+                  description="仅复用已确认的商家资料，商品事实仍需逐商品确认。"
                 />
                 <div className="toggle-list">
                   <ToggleRow
@@ -261,8 +249,8 @@ export function SettingsDrawer({
                 </div>
                 <div className="oauth-connect-card">
                   <div>
-                    <strong>使用 Alibaba.com 官方授权</strong>
-                    <p>将在安全弹窗中登录 Alibaba.com，授权完成后弹窗自动关闭。</p>
+                    <strong>添加 Alibaba.com 店铺</strong>
+                    <p>每次授权都会绑定到当前客户工作区，已有店铺不会被覆盖。</p>
                   </div>
                   <button
                     type="button"
@@ -270,13 +258,8 @@ export function SettingsDrawer({
                     onClick={onAuthorizeAlibaba}
                     disabled={!capabilities?.alibaba_oauth_configured}
                   >
-                    {connectionState === "connected"
-                      ? "重新授权店铺"
-                      : connectionState === "expired"
-                        ? "重新登录授权"
-                        : capabilities?.alibaba_oauth_configured
-                          ? "登录并授权店铺"
-                          : "等待平台配置"}
+                    <Plus size={18} />
+                    {capabilities?.alibaba_oauth_configured ? "添加店铺" : "等待平台配置"}
                   </button>
                   {capabilities?.alibaba_oauth_configuration_error ? (
                     <small>{capabilities.alibaba_oauth_configuration_error}</small>
@@ -286,23 +269,31 @@ export function SettingsDrawer({
                 </div>
                 {stores.length > 0 ? (
                   <div className="connected-stores">
-                    <strong>已授权店铺（{stores.length}）</strong>
-                    <ul>
+                    <div className="connected-stores-heading">
+                      <div>
+                        <strong>已连接店铺</strong>
+                        <span>{stores.length} 个店铺与当前工作区隔离保存</span>
+                      </div>
+                    </div>
+                    <div className="store-summary-list">
                       {stores.map((store) => (
-                        <li key={store.user_id ?? store.login_id ?? "default"}>
-                          <span className="store-name">
-                            {store.login_id ?? store.account ?? store.user_id ?? "未知商家"}
-                          </span>
-                          <span
-                            className={`store-badge ${store.expired ? "is-expired" : "is-active"}`}
-                          >
-                            {store.expired ? "授权过期" : store.active ? "当前使用" : "已连接"}
-                          </span>
-                        </li>
+                        <StoreSummaryCard
+                          key={store.id}
+                          store={store}
+                          active={store.id === activeStoreId}
+                          onActivate={() => onSwitchStore(store.id)}
+                          onSync={() => onSyncStore(store.id)}
+                        />
                       ))}
-                    </ul>
+                    </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="empty-store-state">
+                    <Buildings size={28} />
+                    <strong>还没有连接店铺</strong>
+                    <p>点击“添加店铺”，在 Alibaba 官方弹窗中完成登录和授权。</p>
+                  </div>
+                )}
               </>
             ) : null}
 
@@ -329,7 +320,7 @@ export function SettingsDrawer({
                     onChange={(value) => update("shippingTemplateLabel", value)}
                   />
                   <TextField
-                    label="默认发货港口"
+                    label="常用发货港口"
                     value={draft.port}
                     onChange={(value) => update("port", value)}
                   />
@@ -369,12 +360,12 @@ export function SettingsDrawer({
                 />
                 <div className="form-grid">
                   <TextField
-                    label="默认品牌"
+                    label="常用品牌"
                     value={draft.brand}
                     onChange={(value) => update("brand", value)}
                   />
                   <TextField
-                    label="默认原产国"
+                    label="常用原产国"
                     value={draft.origin}
                     onChange={(value) => update("origin", value)}
                   />
@@ -397,19 +388,112 @@ export function SettingsDrawer({
         <footer className="drawer-footer">
           <div className="settings-progress">
             <CheckCircle size={20} weight="fill" />
-            <span>已配置 12 / 15 项</span>
+            <span>按当前工作区与店铺独立保存</span>
           </div>
           <div className="drawer-actions">
             <button type="button" className="button button-secondary" onClick={onClose}>
               取消
             </button>
             <button type="button" className="button button-dark" onClick={() => onSave(draft)}>
-              保存默认配置
+              保存店铺资料
             </button>
           </div>
         </footer>
       </section>
     </div>
+  );
+}
+
+function StoreSummaryCard({
+  store,
+  active,
+  onActivate,
+  onSync,
+}: {
+  store: AlibabaConnectedStore;
+  active: boolean;
+  onActivate: () => void;
+  onSync: () => void;
+}) {
+  const name = store.login_id ?? store.account ?? store.user_id ?? "未知 Alibaba 店铺";
+  const healthLabel = {
+    pending: "待验证",
+    healthy: "权限正常",
+    attention: "需要处理",
+    expired: "授权过期",
+  }[store.permission_health];
+  const readinessLabel = {
+    ready: "可创建草稿",
+    verification_required: "草稿权限待验证",
+    blocked: "暂不可创建草稿",
+  }[store.draft_readiness];
+  const lastSync = store.last_sync_at
+    ? new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(new Date(store.last_sync_at))
+    : "尚未同步";
+
+  return (
+    <article className={`store-summary-card ${active ? "is-active" : ""}`}>
+      <header>
+        <div className="store-summary-identity">
+          <span className="alibaba-symbol">a</span>
+          <div>
+            <strong>{name}</strong>
+            <small>{store.account ?? `User ID ${store.user_id ?? "待返回"}`}</small>
+          </div>
+        </div>
+        <span className={`store-badge ${store.expired ? "is-expired" : active ? "is-active" : ""}`}>
+          {store.expired ? "已过期" : active ? "当前店铺" : "已连接"}
+        </span>
+      </header>
+      <div className="store-summary-metrics">
+        <div>
+          <span>商品</span>
+          <strong>{store.product_count ?? "—"}</strong>
+          <small>{store.product_sync_state === "synced" ? "已同步" : "待同步"}</small>
+        </div>
+        <div>
+          <span>图片分组</span>
+          <strong>{store.photobank_group_count ?? "—"}</strong>
+          <small>{store.photobank_sync_state === "synced" ? "已同步" : "待同步"}</small>
+        </div>
+        <div>
+          <span>商品分组</span>
+          <strong>{store.product_group_count ?? "—"}</strong>
+          <small>
+            {store.product_group_sync_state === "not_available" ? "接口待开放" : "待同步"}
+          </small>
+        </div>
+      </div>
+      <div className="store-health-row">
+        <span>
+          <i className={`health-dot is-${store.permission_health}`} />
+          {healthLabel} · {store.permission_verified_count}/{store.permission_total_count}
+        </span>
+        <span className={`readiness is-${store.draft_readiness}`}>{readinessLabel}</span>
+      </div>
+      <footer>
+        <span>最近同步：{lastSync}</span>
+        <div>
+          <button type="button" className="text-button" onClick={onSync} disabled={store.expired}>
+            <ArrowsClockwise size={16} />
+            同步摘要
+          </button>
+          {!active ? (
+            <button type="button" className="text-button" onClick={onActivate}>
+              <Swap size={16} />
+              切换到此店
+            </button>
+          ) : null}
+        </div>
+      </footer>
+      {store.sync_error ? <p className="store-sync-error">{store.sync_error}</p> : null}
+    </article>
   );
 }
 
@@ -454,8 +538,11 @@ function SelectField({
     <label className="field">
       <span>{label}</span>
       <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">创建批次时选择</option>
         {options.map((option) => (
-          <option key={option}>{option}</option>
+          <option key={option} value={option}>
+            {option}
+          </option>
         ))}
       </select>
     </label>

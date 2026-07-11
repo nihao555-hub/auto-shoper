@@ -2,6 +2,22 @@ export type AppView = "overview" | "workbench" | "batches";
 
 export type DataMode = "live" | "demo";
 
+export type AuthUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  workspace_id: string;
+  workspace_name: string;
+};
+
+export type RegisterPayload = {
+  email: string;
+  password: string;
+  display_name: string;
+  workspace_name: string;
+  registration_code: string;
+};
+
 export type FieldSource =
   | "image_extracted"
   | "ai_generated"
@@ -124,16 +140,35 @@ export type CapabilityResponse = {
   alibaba_connection_source: "oauth" | "environment" | null;
   alibaba_oauth_configuration_error: string | null;
   alibaba_oauth_redirect_uri: string | null;
+  active_store_id: string | null;
   model_credentials_configured: boolean;
 };
 
 export type AlibabaConnectedStore = {
+  id: string;
   user_id: string | null;
   login_id: string | null;
   account: string | null;
   expires_at: string | null;
   expired: boolean;
   active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_sync_at: string | null;
+  product_count: number | null;
+  product_sync_state: "pending" | "synced" | "failed";
+  photobank_group_count: number | null;
+  photobank_sync_state: "pending" | "synced" | "failed";
+  product_group_count: number | null;
+  product_group_sync_state: "pending" | "synced" | "failed" | "not_available";
+  permissions: Record<string, "pending" | "verified" | "failed">;
+  permission_health: "pending" | "healthy" | "attention" | "expired";
+  permission_verified_count: number;
+  permission_total_count: number;
+  draft_readiness: "ready" | "verification_required" | "blocked";
+  ready_to_create_draft: boolean;
+  readiness_blockers: string[];
+  sync_error: string | null;
 };
 
 export type AlibabaOAuthStatus = {
@@ -145,6 +180,12 @@ export type AlibabaOAuthStatus = {
   expires_at: string | null;
   configuration_error: string | null;
   redirect_uri: string | null;
+  active_store_id: string | null;
+  stores: AlibabaConnectedStore[];
+};
+
+export type AlibabaStoreDirectory = {
+  active_store_id: string | null;
   stores: AlibabaConnectedStore[];
 };
 

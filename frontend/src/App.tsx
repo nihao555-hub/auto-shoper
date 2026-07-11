@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getCapabilities, startAlibabaOAuth } from "./api";
+import {
+  ApiError,
+  activateAlibabaStore,
+  getAlibabaStores,
+  getCapabilities,
+  getCurrentUser,
+  logout,
+  startAlibabaOAuth,
+  syncAlibabaStore,
+} from "./api";
 import { AppShell } from "./components/AppShell";
+import { AuthPage } from "./components/AuthPage";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
 import { defaultSettings, getMainProductImage, sampleBatches, sampleProducts } from "./data";
@@ -8,7 +18,9 @@ import { BatchesPage } from "./pages/BatchesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import type {
+  AlibabaConnectedStore,
   AppView,
+  AuthUser,
   BatchRecord,
   CapabilityResponse,
   DataMode,
@@ -27,8 +39,11 @@ const getViewFromHash = (): AppView => {
   return "overview";
 };
 
-const loadSettings = (): StoreSettings => {
-  const saved = window.localStorage.getItem("auto-shoper-settings");
+const settingsStorageKey = (workspaceId: string, storeId: string | null) =>
+  `auto-shoper-settings:${workspaceId}:${storeId ?? "no-store"}`;
+
+const loadSettings = (workspaceId: string, storeId: string | null): StoreSettings => {
+  const saved = window.localStorage.getItem(settingsStorageKey(workspaceId, storeId));
   if (!saved) {
     return defaultSettings;
   }
@@ -58,6 +73,9 @@ const formatTimestamp = () =>
     minute: "2-digit",
     hour12: false,
   }).format(new Date());
+
+const createBatchId = () =>
+  `B${new Date().toISOString().slice(2, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 
 type AlibabaOAuthMessage = {
   type: "alibaba-oauth-result";
@@ -117,16 +135,18 @@ const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord
 };
 
 export default function App() {
+  const [authState, setAuthState] = useState<"checking" | "signed-out" | "signed-in">("checking");
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [activeView, setActiveView] = useState<AppView>(getViewFromHash);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settings, setSettings] = useState<StoreSettings>(loadSettings);
+  const [settings, setSettings] = useState<StoreSettings>(defaultSettings);
   const [dataMode, setDataMode] = useState<DataMode>("live");
   const [liveProducts, setLiveProducts] = useState<ProductRecord[]>([]);
   const [demoProducts, setDemoProducts] = useState<ProductRecord[]>(cloneDemoProducts);
-  const [batchId] = useState(
-    () => `B${new Date().toISOString().slice(2, 10).replaceAll("-", "")}-001`,
-  );
+  const [batchId, setBatchId] = useState(createBatchId);
   const [capabilities, setCapabilities] = useState<CapabilityResponse | null>(null);
+  const [stores, setStores] = useState<AlibabaConnectedStore[]>([]);
+  const [activeStoreId, setActiveStoreId] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const oauthPopup = useRef<Window | null>(null);
@@ -136,26 +156,61 @@ export default function App() {
   const batches = dataMode === "demo" ? sampleBatches : liveBatch ? [liveBatch] : [];
 
   useEffect(() => {
+    getCurrentUser()
+      .then((currentUser) => {
+        setUser(currentUser);
+        setAuthState("signed-in");
+      })
+      .catch(() => {
+        setUser(null);
+        setAuthState("signed-out");
+      });
+  }, []);
+
+  useEffect(() => {
     const onHashChange = () => setActiveView(getViewFromHash());
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  const refreshCapabilities = useCallback(() => {
-    getCapabilities()
-      .then((response) => {
-        setCapabilities(response);
-        setBackendConnected(true);
-      })
-      .catch(() => {
-        setCapabilities(null);
-        setBackendConnected(false);
-      });
-  }, []);
+  const refreshWorkspace = useCallback(async () => {
+    if (!user) {
+      return;
+    }
+    try {
+      const [capabilityResponse, storeDirectory] = await Promise.all([
+        getCapabilities(),
+        getAlibabaStores(),
+      ]);
+      setCapabilities(capabilityResponse);
+      setStores(storeDirectory.stores);
+      setActiveStoreId(storeDirectory.active_store_id);
+      setBackendConnected(true);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setUser(null);
+        setAuthState("signed-out");
+      }
+      setCapabilities(null);
+      setStores([]);
+      setActiveStoreId(null);
+      setBackendConnected(false);
+    }
+  }, [user]);
 
   useEffect(() => {
-    refreshCapabilities();
-  }, [refreshCapabilities]);
+    void refreshWorkspace();
+  }, [refreshWorkspace]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    setSettings(loadSettings(user.workspace_id, activeStoreId));
+    setLiveProducts([]);
+    setDataMode("live");
+    setBatchId(createBatchId());
+  }, [activeStoreId, user]);
 
   const navigate = (view: AppView) => {
     window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;
@@ -174,7 +229,7 @@ export default function App() {
     (result: AlibabaOAuthMessage["result"], reason: string | null) => {
       if (result === "connected") {
         notify("success", "Alibaba 店铺已连接", "已刷新商家授权状态。");
-        refreshCapabilities();
+        refreshWorkspace();
         return;
       }
       notify(
@@ -183,7 +238,7 @@ export default function App() {
         reason === "denied" ? "商家取消或拒绝了授权。" : "请重新发起授权或联系管理员。",
       );
     },
-    [notify, refreshCapabilities],
+    [notify, refreshWorkspace],
   );
 
   useEffect(() => {
@@ -222,8 +277,14 @@ export default function App() {
   }, [handleAlibabaOAuthResult]);
 
   const saveSettings = (nextSettings: StoreSettings) => {
+    if (!user) {
+      return;
+    }
     setSettings(nextSettings);
-    window.localStorage.setItem("auto-shoper-settings", JSON.stringify(nextSettings));
+    window.localStorage.setItem(
+      settingsStorageKey(user.workspace_id, activeStoreId),
+      JSON.stringify(nextSettings),
+    );
     setSettingsOpen(false);
     notify("success", "默认配置已保存", "新商品会自动带出允许复用的字段。");
   };
@@ -254,6 +315,50 @@ export default function App() {
     }
   };
 
+  const switchStore = async (storeId: string) => {
+    if (!storeId || storeId === activeStoreId) {
+      return;
+    }
+    try {
+      await activateAlibabaStore(storeId);
+      setActiveStoreId(storeId);
+      await refreshWorkspace();
+      notify("success", "已切换 Alibaba 店铺", "新批次与 API 请求将绑定到该店铺。");
+    } catch (error) {
+      notify("error", "无法切换店铺", error instanceof ApiError ? error.message : undefined);
+    }
+  };
+
+  const syncStore = async (storeId: string) => {
+    try {
+      await syncAlibabaStore(storeId);
+      await refreshWorkspace();
+      notify("success", "店铺摘要已同步");
+    } catch (error) {
+      notify("error", "店铺摘要同步失败", error instanceof ApiError ? error.message : undefined);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await logout();
+    } finally {
+      setUser(null);
+      setAuthState("signed-out");
+      setCapabilities(null);
+      setStores([]);
+      setActiveStoreId(null);
+      setLiveProducts([]);
+      setSettingsOpen(false);
+    }
+  };
+
+  const completeAuthentication = (authenticatedUser: AuthUser) => {
+    setUser(authenticatedUser);
+    setAuthState("signed-in");
+    window.location.hash = "#/overview";
+  };
+
   const changeDataMode = (mode: DataMode) => {
     setDataMode(mode);
     if (mode === "demo" && demoProducts.length === 0) {
@@ -277,6 +382,19 @@ export default function App() {
     }
   };
 
+  if (authState === "checking") {
+    return (
+      <div className="auth-loading" role="status">
+        <span />
+        <strong>正在打开安全工作区</strong>
+      </div>
+    );
+  }
+
+  if (authState === "signed-out" || !user) {
+    return <AuthPage onAuthenticated={completeAuthentication} />;
+  }
+
   return (
     <AppShell
       activeView={activeView}
@@ -285,6 +403,11 @@ export default function App() {
       onDataModeChange={changeDataMode}
       onNavigate={navigate}
       onOpenSettings={() => setSettingsOpen(true)}
+      user={user}
+      stores={stores}
+      activeStoreId={activeStoreId}
+      onStoreChange={(storeId) => void switchStore(storeId)}
+      onLogout={() => void signOut()}
     >
       {activeView === "overview" ? (
         <OverviewPage
@@ -298,6 +421,7 @@ export default function App() {
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
+          batchId={batchId}
           capabilities={capabilities}
           backendConnected={backendConnected}
           dataMode={dataMode}
@@ -320,7 +444,11 @@ export default function App() {
         open={settingsOpen}
         capabilities={capabilities}
         settings={settings}
+        stores={stores}
+        activeStoreId={activeStoreId}
         onAuthorizeAlibaba={() => void authorizeAlibaba()}
+        onSwitchStore={(storeId) => void switchStore(storeId)}
+        onSyncStore={(storeId) => void syncStore(storeId)}
         onClose={() => setSettingsOpen(false)}
         onSave={saveSettings}
       />
