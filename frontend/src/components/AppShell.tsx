@@ -7,6 +7,7 @@ import {
   GearSix,
   PlayCircle,
   SignOut,
+  Storefront,
   UploadSimple,
 } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -35,6 +36,7 @@ const navItems: Array<{
   icon: typeof UploadSimple;
 }> = [
   { view: "overview", label: "总览", description: "状态与待办", icon: ChartBar },
+  { view: "stores", label: "店铺授权", description: "连接、同步与切换", icon: Storefront },
   { view: "workbench", label: "批量上品", description: "创建与发布", icon: UploadSimple },
   { view: "batches", label: "批次记录", description: "结果与重试", icon: Archive },
 ];
@@ -114,7 +116,7 @@ export function AppShell({
                   <CaretDown size={13} />
                 </label>
               ) : (
-                <button type="button" onClick={onOpenSettings}>
+                <button type="button" onClick={() => onNavigate("stores")}>
                   添加 Alibaba 店铺
                 </button>
               )}
@@ -156,12 +158,12 @@ export function AppShell({
             type="button"
             className="rail-item settings-item"
             onClick={onOpenSettings}
-            title={collapsed ? "店铺设置" : undefined}
+            title={collapsed ? "商家资产" : undefined}
           >
             <GearSix size={20} />
             <span className="rail-item-copy">
-              <strong>店铺设置</strong>
-              <small>默认值与授权</small>
+              <strong>商家资产</strong>
+              <small>资料与批次偏好</small>
             </span>
           </button>
           <div className="rail-account">

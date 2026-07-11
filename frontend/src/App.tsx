@@ -16,6 +16,7 @@ import { ToastStack } from "./components/ToastStack";
 import { defaultSettings, getMainProductImage, sampleBatches, sampleProducts } from "./data";
 import { BatchesPage } from "./pages/BatchesPage";
 import { OverviewPage } from "./pages/OverviewPage";
+import { StoresPage } from "./pages/StoresPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import type {
   AlibabaConnectedStore,
@@ -35,6 +36,9 @@ const getViewFromHash = (): AppView => {
   }
   if (window.location.hash === "#/batches") {
     return "batches";
+  }
+  if (window.location.hash === "#/stores") {
+    return "stores";
   }
   return "overview";
 };
@@ -286,7 +290,7 @@ export default function App() {
       JSON.stringify(nextSettings),
     );
     setSettingsOpen(false);
-    notify("success", "默认配置已保存", "新商品会自动带出允许复用的字段。");
+    notify("success", "商家资料已保存", "新批次可带出已确认的复用字段。");
   };
 
   const authorizeAlibaba = async () => {
@@ -419,6 +423,15 @@ export default function App() {
           onNavigateWorkbench={() => navigate("workbench")}
           onNavigateBatches={() => navigate("batches")}
         />
+      ) : activeView === "stores" ? (
+        <StoresPage
+          capabilities={capabilities}
+          stores={stores}
+          activeStoreId={activeStoreId}
+          onAuthorize={() => void authorizeAlibaba()}
+          onSwitchStore={(storeId) => void switchStore(storeId)}
+          onSyncStore={(storeId) => void syncStore(storeId)}
+        />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
           batchId={batchId}
@@ -442,13 +455,7 @@ export default function App() {
       )}
       <SettingsDrawer
         open={settingsOpen}
-        capabilities={capabilities}
         settings={settings}
-        stores={stores}
-        activeStoreId={activeStoreId}
-        onAuthorizeAlibaba={() => void authorizeAlibaba()}
-        onSwitchStore={(storeId) => void switchStore(storeId)}
-        onSyncStore={(storeId) => void syncStore(storeId)}
         onClose={() => setSettingsOpen(false)}
         onSave={saveSettings}
       />

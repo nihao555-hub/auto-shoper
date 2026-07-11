@@ -4470,3 +4470,246 @@ table {
   border: 0;
   background: transparent;
 }
+
+.stores-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f7f6f3;
+}
+
+.stores-page-content {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(300px, 0.78fr) minmax(420px, 1.22fr);
+  gap: 18px;
+  padding: 20px 28px 28px;
+  overflow: auto;
+}
+
+.store-access-card,
+.stores-directory {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(34, 43, 56, 0.055);
+}
+
+.store-access-card {
+  align-self: start;
+  padding: 22px;
+}
+
+.store-access-heading {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.store-access-heading .alibaba-symbol {
+  width: 42px;
+  height: 42px;
+  font-size: 23px;
+}
+
+.store-access-heading h2,
+.stores-directory h2 {
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: -0.025em;
+}
+
+.store-access-heading p {
+  max-width: 440px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.store-connection-state {
+  display: inline-flex;
+  grid-column: 2;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  color: var(--warning);
+  border-radius: 999px;
+  background: var(--warning-soft);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.store-connection-state.is-connected {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.store-access-policies {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-subtle);
+}
+
+.store-access-policies span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.store-access-policies svg {
+  color: var(--brand);
+}
+
+.store-access-note,
+.store-access-error {
+  margin-top: 13px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.store-access-error {
+  padding: 9px 10px;
+  color: var(--danger);
+  border-radius: 8px;
+  background: var(--danger-soft);
+}
+
+.stores-directory {
+  min-width: 0;
+  padding: 22px;
+}
+
+.stores-directory .connected-stores-heading {
+  margin-bottom: 14px;
+}
+
+.stores-directory .connected-stores-heading span {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.stores-directory .store-summary-list {
+  gap: 12px;
+}
+
+.stores-directory .store-summary-card {
+  padding: 18px;
+}
+
+.stores-directory .store-summary-identity strong {
+  font-size: 14px;
+}
+
+.stores-directory .store-summary-identity small {
+  font-size: 10px;
+}
+
+.stores-directory .store-summary-metrics span,
+.stores-directory .store-summary-metrics small,
+.stores-directory .store-health-row,
+.stores-directory .store-summary-card > footer {
+  font-size: 10px;
+}
+
+.stores-directory .store-summary-metrics strong {
+  font-size: 21px;
+}
+
+.stores-directory .store-badge {
+  padding: 4px 9px;
+  color: var(--ink-soft);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.stores-directory .store-badge.is-active {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.stores-directory .store-badge.is-expired {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.stores-directory .empty-store-state {
+  min-height: 250px;
+  justify-content: center;
+}
+
+.stores-directory .empty-store-state .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 15px;
+}
+
+@media (min-width: 1440px) {
+  .stores-page-content {
+    grid-template-columns: minmax(330px, 0.62fr) minmax(0, 1.38fr);
+  }
+
+  .stores-directory .store-summary-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .stores-page-content {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .mobile-nav {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .stores-page {
+    height: 100%;
+  }
+
+  .stores-page-content {
+    display: block;
+    height: 100%;
+    padding: 0 14px 18px;
+    overflow: auto;
+  }
+
+  .stores-header {
+    margin: 0 -14px 12px;
+    padding-inline: 14px;
+  }
+
+  .stores-directory {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .store-access-card,
+  .stores-directory {
+    padding: 16px;
+    border-radius: 13px;
+  }
+
+  .store-summary-card > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

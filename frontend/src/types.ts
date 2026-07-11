@@ -1,4 +1,4 @@
-export type AppView = "overview" | "workbench" | "batches";
+export type AppView = "overview" | "stores" | "workbench" | "batches";
 
 export type DataMode = "live" | "demo";
 
