@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette import status
@@ -14,6 +15,13 @@ app = FastAPI(
     title=get_settings().app_name,
     version="0.1.0",
     description="Alibaba.com listing automation, AI image, and merchant workspace",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origin_regex=r"^https://[a-z0-9-]+\.devinapps\.com$",
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 app.include_router(router)
 
