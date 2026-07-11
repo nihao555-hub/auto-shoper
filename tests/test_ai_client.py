@@ -67,3 +67,61 @@ async def test_image_generation_uses_configured_model() -> None:
     finally:
         await client.close()
     assert result["data"][0]["url"].endswith("image.png")
+
+
+@pytest.mark.asyncio
+async def test_image_analysis_removes_ai_sourced_business_facts() -> None:
+    provider_data = {
+        "observed_fields": {
+            "color": {"value": "black", "confidence": 0.9},
+            "material": {"value": "plastic", "confidence": 0.4},
+        },
+        "generated_fields": {
+            "price": {"value": "9.99"},
+            "keywords": {"value": ["one", "two", "three", "four"]},
+        },
+        "category_suggestions": [],
+        "warnings": [],
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(provider_data)}}]},
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.analyze_product_image(b"image", "image/jpeg", {}, None)
+    finally:
+        await client.close()
+    assert "color" in result.observed_fields
+    assert "material" not in result.observed_fields
+    assert "price" not in result.generated_fields
+    assert result.generated_fields["keywords"].value == ["one", "two", "three"]
+    assert any("material" in warning and "price" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_product_image_edit_uses_reference_and_requires_confirmation() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = (await request.aread()).decode(errors="ignore")
+        assert request.url.path == "/v1/images/edits"
+        assert 'name="image"; filename="brush.jpg"' in body
+        assert "Preserve the exact product identity" in body
+        return httpx.Response(200, json={"data": [{"url": "https://example.test/edit.png"}]})
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.edit_product_image(
+            b"image",
+            "brush.jpg",
+            "image/jpeg",
+            "use a white studio background",
+            "1024x1024",
+            1,
+        )
+    finally:
+        await client.close()
+    assert result["requires_confirmation"] is True
+    assert result["source_image_preservation_required"] is True

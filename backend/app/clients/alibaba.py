@@ -69,10 +69,14 @@ class AlibabaClient:
                 self._error_message(data, response.status_code),
                 status_code=502,
             )
-        if isinstance(data, dict) and data.get("success") is False:
-            raise AlibabaAPIError(self._error_message(data, response.status_code))
         if not isinstance(data, dict):
             raise AlibabaAPIError("Alibaba API returned an invalid response")
+        code = data.get("code")
+        if code not in (None, 0, "0") or data.get("success") is False:
+            raise AlibabaAPIError(self._error_message(data, response.status_code))
+        business_error = self._business_error(data)
+        if business_error is not None:
+            raise AlibabaAPIError(business_error)
         return data
 
     def _base_parameters(self, operation: str) -> dict[str, str]:
@@ -96,7 +100,39 @@ class AlibabaClient:
     @staticmethod
     def _error_message(data: Any, status_code: int) -> str:
         if isinstance(data, dict):
+            details: list[str] = []
             for key in ("errorMessage", "message", "error_description", "error"):
                 if data.get(key):
-                    return f"Alibaba API error: {data[key]}"
+                    details.append(str(data[key]))
+                    break
+            code = data.get("code") or data.get("error_code")
+            if code:
+                details.append(f"code={code}")
+            trace_id = data.get("trace_id") or data.get("_trace_id_")
+            if trace_id:
+                details.append(f"trace_id={trace_id}")
+            if details:
+                return f"Alibaba API error: {'; '.join(details)}"
         return f"Alibaba API returned HTTP {status_code}"
+
+    @classmethod
+    def _business_error(cls, data: dict[str, Any]) -> str | None:
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return None
+        success_keys = ("success", "biz_success", "bizSuccess")
+        if not any(result.get(key) is False for key in success_keys):
+            return None
+        details: list[str] = []
+        for key in ("message", "message_info", "error_message", "msg"):
+            if result.get(key):
+                details.append(str(result[key]))
+                break
+        code = result.get("msg_code") or result.get("error_code")
+        if code:
+            details.append(f"code={code}")
+        trace_id = result.get("trace_id") or data.get("_trace_id_")
+        if trace_id:
+            details.append(f"trace_id={trace_id}")
+        message = "; ".join(details) or "business operation failed"
+        return f"Alibaba API error: {message}"

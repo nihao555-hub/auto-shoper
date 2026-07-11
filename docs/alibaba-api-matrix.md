@@ -6,8 +6,8 @@
 
 - Alibaba.com 官方卖家后台支持逐条发布和 Bulk Upload，Intelligent Posting 会给出优化建议。
 - ICBU OpenAPI 能覆盖自动上品的核心闭环，但公开资料没有证明存在“单次提交 100 个商品”的原生发布接口。本项目的批量接口是受控并发地逐条调用发布 API。
-- 当前后端可完成类目、Schema、Schema XML 解析、AI 文案和生图、图片银行、草稿、回读、确认发布、商品查询、质量分、库存和上下架的主链路。
-- 当前实现不能称为“完美满足生产全流程”。真实店铺还必须验证应用权限、类目动态字段、SKU/价格联动、贸易物流模板、审核状态、限流、幂等和 OAuth 刷新。
+- 当前后端已实现类目、Schema 解析/填值/提交前复验、AI 文案和参考图生图、图片银行、草稿、回读、确认发布、商品查询、质量分、库存和上下架的主链路。
+- 当前实现仍不能称为“完美满足生产全流程”。真实店铺还必须验证图片上传和草稿写入权限、完整 SKU/价格/物流样例、审核状态、限流、幂等和 OAuth 刷新。
 
 ## 官方完整流程
 
@@ -58,7 +58,7 @@
 
 1. 本地执行事实来源校验和实时 Schema 校验。
 2. 调用草稿接口，保存单个商品草稿。
-3. 使用草稿 ID 回读渲染结果。
+3. 使用草稿接口返回的商品 ID 和类目 ID 回读渲染结果。
 4. 人工检查图片、标题、属性、SKU、价格、MOQ、库存、包装、物流、认证和详情。
 5. 只有用户显式确认后，才调用正式发布接口。
 6. 记录每条商品的请求引用、草稿 ID、商品 ID、错误码和 `trace_id`。
@@ -79,6 +79,7 @@
 | 类目 | `/icbu/product/category/get` | `GET /api/v1/alibaba/categories/{category_id}` | 已封装；叶子类目仍需人工确认 |
 | 发布 Schema | `/alibaba/icbu/product/schema/get` | `GET /api/v1/alibaba/categories/{category_id}/schema` | 已封装 |
 | Schema 解析 | 本地解析 `schema.get` XML | `POST /api/v1/alibaba/schemas/parse` | 已实现；提取必填、枚举、复杂字段和人工确认字段 |
+| Schema 填值 | 本地写入实时 Schema XML | `POST /api/v1/alibaba/schemas/build` | 已实现；支持标量、多值、复合、多复合和值属性，返回字段级错误 |
 | 官方流程清单 | 后台 Bulk Upload/Posting 流程 | `GET /api/v1/alibaba/listing-flow` | 已实现；用于前端/任务编排对标 |
 | 官方字段校验 | 本地校验 + Schema 规则 | `POST /api/v1/products/official-listing/validate` | 已实现；合并动态必填项和 AI 字段边界 |
 | 图片银行分组 | `/icbu/product/photobank/group/list` | `GET /api/v1/alibaba/photo-bank/groups` | 已封装 |
@@ -86,10 +87,10 @@
 | 图片银行上传 | `/alibaba/icbu/photobank/upload` | `POST /api/v1/alibaba/photo-bank/images` | 已封装 |
 | 草稿 | `/icbu/product/schema/add/draft` | `POST /api/v1/alibaba/products/drafts` | 已封装 |
 | 批量草稿 | 逐条调用草稿接口 | `POST /api/v1/alibaba/products/batch/drafts` | 服务端编排，最多 100 条 |
-| 草稿回读 | `/icbu/product/schema/render/draft` | `POST /api/v1/alibaba/products/drafts/render` | 支持 GOP `draft_id` 和旧式类目/商品 ID |
+| 草稿回读 | `/icbu/product/schema/render/draft` | `POST /api/v1/alibaba/products/drafts/render` | 使用 GOP 草稿商品 `product_id`、`cat_id` 和 `language` |
 | 正式发布 | `/icbu/product/schema/add` | `POST /api/v1/alibaba/products/publish` | 强制显式确认 |
 | 批量发布 | 逐条调用发布接口 | `POST /api/v1/alibaba/products/batch/publish` | 服务端编排，最多 100 条、单条失败隔离 |
-| 商品更新 | `/icbu/product/schema/update` | `PATCH /api/v1/alibaba/schemas/{schema_id}` | 已封装；事实字段需确认 |
+| 商品更新 | `/icbu/product/schema/update` | `PATCH /api/v1/alibaba/products/{product_id}/schema` | 已封装；发送 `xml/product_id/cat_id/language` |
 | 商品详情 | `/icbu/product/get` | `GET /api/v1/alibaba/products/{product_id}` | 已封装 |
 | 商品列表 | `/alibaba/icbu/product/list` | `GET /api/v1/alibaba/products` | 已封装 |
 | 质量分 | `/icbu/product/score/get` | `GET /api/v1/alibaba/products/{product_id}/score` | 已封装 |
@@ -101,12 +102,11 @@
 
 ### 上线前阻塞项
 
-1. 用目标店铺验证每个 GOP 方法是否已授权，以及真实参数和响应结构。
+1. 以专用测试商品验证图片上传、草稿创建和草稿回读，不修改现有商品。
 2. 保存并自动刷新 OAuth token，处理失效和重新授权。
-3. 用真实类目 Schema 验证解析器是否覆盖所有 Alibaba 返回结构和字段联动。
-4. 完成 SKU、阶梯价、RTS/询盘品、包装、运费模板和合规资料的真实类目样例。
-5. 发布后轮询审核状态，并支持失败修正和重新提交。
-6. 增加限流退避、幂等键、断点续传、任务状态、操作审计和失败重试。
+3. 完成 SKU、阶梯价、RTS/询盘品、包装、运费模板和合规资料的真实类目样例。
+4. 发布后轮询审核状态，并支持失败修正和重新提交。
+5. 增加限流退避、持久化幂等键、断点续传、任务状态、操作审计和失败重试。
 
 ### 提升商品质量的非核心项
 

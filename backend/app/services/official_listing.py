@@ -32,6 +32,7 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                     "GET /api/v1/alibaba/categories/{category_id}",
                     "GET /api/v1/alibaba/categories/{category_id}/schema",
                     "POST /api/v1/alibaba/schemas/parse",
+                    "POST /api/v1/alibaba/schemas/build",
                 ],
                 human_confirmation=True,
             ),
@@ -46,6 +47,7 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                 backend_endpoints=[
                     "POST /api/v1/products/analyze-image",
                     "POST /api/v1/images/generate",
+                    "POST /api/v1/images/generate-from-product",
                     "POST /api/v1/alibaba/photo-bank/images",
                 ],
                 human_confirmation=True,
@@ -67,7 +69,7 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                 label="保存草稿并回读预览",
                 actions=[
                     "先保存草稿，不直接正式发布",
-                    "用草稿 ID 回读平台渲染结果，人工检查字段和图片效果",
+                    "用草稿商品 ID 回读平台渲染结果，人工检查字段和图片效果",
                 ],
                 backend_endpoints=[
                     "POST /api/v1/alibaba/products/drafts",
@@ -104,7 +106,7 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                     "GET /api/v1/alibaba/products/{product_id}/inventory",
                     "PUT /api/v1/alibaba/products/{product_id}/inventory",
                     "PATCH /api/v1/alibaba/products/{product_id}/display",
-                    "PATCH /api/v1/alibaba/schemas/{schema_id}",
+                    "PATCH /api/v1/alibaba/products/{product_id}/schema",
                 ],
                 human_confirmation=True,
             ),

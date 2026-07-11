@@ -1,7 +1,7 @@
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class FieldSource(StrEnum):
@@ -54,7 +54,8 @@ class ImageGenerationRequest(BaseModel):
 
 class AlibabaSchemaRequest(BaseModel):
     category_id: str
-    schema_data: dict[str, Any] | str
+    xml: str = Field(min_length=20)
+    language: Literal["en_US", "zh", "zh_TW"] = "en_US"
 
 
 class AlibabaPublishRequest(AlibabaSchemaRequest):
@@ -62,12 +63,23 @@ class AlibabaPublishRequest(AlibabaSchemaRequest):
 
 
 class AlibabaBatchItem(AlibabaSchemaRequest):
-    reference: str | None = None
+    reference: str = Field(min_length=1, max_length=200)
 
 
 class AlibabaBatchRequest(BaseModel):
     items: list[AlibabaBatchItem] = Field(min_length=1, max_length=100)
     concurrency: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("items")
+    @classmethod
+    def references_must_be_unique(
+        cls,
+        items: list[AlibabaBatchItem],
+    ) -> list[AlibabaBatchItem]:
+        references = [item.reference for item in items]
+        if len(references) != len(set(references)):
+            raise ValueError("Batch item references must be unique")
+        return items
 
 
 class AlibabaBatchPublishRequest(AlibabaBatchRequest):
@@ -75,31 +87,44 @@ class AlibabaBatchPublishRequest(AlibabaBatchRequest):
 
 
 class AlibabaBatchResult(BaseModel):
-    reference: str | None
+    reference: str
     success: bool
     response: dict[str, Any] | None = None
     error: str | None = None
 
 
 class AlibabaDraftRenderRequest(BaseModel):
-    draft_id: str | None = None
-    category_id: str | None = None
-    product_id: str | None = None
-    language: str = "en_US"
-
-    @model_validator(mode="after")
-    def validate_identifier(self) -> "AlibabaDraftRenderRequest":
-        if self.draft_id or (self.category_id and self.product_id):
-            return self
-        raise ValueError("Provide draft_id, or both category_id and product_id")
+    category_id: str
+    product_id: str
+    language: Literal["en_US", "zh", "zh_TW"] = "en_US"
 
 
 class AlibabaSchemaUpdateRequest(BaseModel):
-    schema_data: dict[str, Any] | str
+    category_id: str
+    xml: str = Field(min_length=20)
+    language: Literal["en_US", "zh", "zh_TW"] = "en_US"
 
 
 class SchemaParseRequest(BaseModel):
     schema_data: dict[str, Any] | str
+
+
+class SchemaBuildRequest(BaseModel):
+    schema_data: dict[str, Any] | str
+    values: dict[str, object]
+
+
+class SchemaValidationIssue(BaseModel):
+    field: str
+    rule: str
+    message: str
+
+
+class SchemaBuildResult(BaseModel):
+    xml: str
+    ready_to_submit: bool
+    errors: list[SchemaValidationIssue]
+    warnings: list[SchemaValidationIssue]
 
 
 class SchemaRule(BaseModel):
@@ -121,6 +146,7 @@ class ParsedSchemaField(BaseModel):
     path: list[str] = Field(default_factory=list)
     required: bool = False
     disabled: bool = False
+    read_only: bool = False
     value_type: str | None = None
     rules: list[SchemaRule] = Field(default_factory=list)
     options: list[SchemaOption] = Field(default_factory=list)
@@ -164,14 +190,8 @@ class OfficialListingFlowResponse(BaseModel):
 
 class AlibabaInventoryUpdateRequest(BaseModel):
     sku_id: str
-    amount: int | None = Field(default=None, ge=0)
-    amount_diff: int | None = None
-
-    @model_validator(mode="after")
-    def validate_amount(self) -> "AlibabaInventoryUpdateRequest":
-        if (self.amount is None) == (self.amount_diff is None):
-            raise ValueError("Provide exactly one of amount or amount_diff")
-        return self
+    inventory: int = Field(ge=0)
+    inventory_code: str = "CN_LOCAL_01"
 
 
 class AlibabaDisplayUpdateRequest(BaseModel):

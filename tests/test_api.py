@@ -1,10 +1,14 @@
 from collections.abc import AsyncIterator
 
+import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.clients.alibaba import AlibabaClient
+from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
+from backend.app.config import Settings
 from backend.app.dependencies import get_alibaba_client
 from backend.app.main import app
+
+SCHEMA_XML = "<itemSchema><field id=\"productTitle\" type=\"input\" /></itemSchema>"
 
 
 class FakeAlibabaClient:
@@ -14,7 +18,12 @@ class FakeAlibabaClient:
         parameters: dict[str, object] | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> dict[str, object]:
-        return {"success": True, "operation": operation, "parameters": parameters or {}}
+        return {
+            "success": True,
+            "operation": operation,
+            "parameters": parameters or {},
+            "file_fields": sorted(files) if files else [],
+        }
 
 
 async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
@@ -34,15 +43,20 @@ def test_publish_requires_explicit_confirmation() -> None:
         client = TestClient(app)
         response = client.post(
             "/api/v1/alibaba/products/publish",
-            json={"category_id": "123", "schema_data": {}, "confirmed_by_user": False},
+            json={"category_id": "123", "xml": SCHEMA_XML, "confirmed_by_user": False},
         )
         assert response.status_code == 409
         confirmed = client.post(
             "/api/v1/alibaba/products/publish",
-            json={"category_id": "123", "schema_data": {}, "confirmed_by_user": True},
+            json={"category_id": "123", "xml": SCHEMA_XML, "confirmed_by_user": True},
         )
         assert confirmed.status_code == 200
         assert confirmed.json()["operation"] == "/icbu/product/schema/add"
+        assert confirmed.json()["parameters"]["publish_request"] == {
+            "language": "en_US",
+            "cat_id": "123",
+            "xml": SCHEMA_XML,
+        }
     finally:
         app.dependency_overrides.clear()
 
@@ -63,10 +77,15 @@ def test_operations_catalog_contains_core_publish_flow() -> None:
     } <= operations
 
 
-def test_unconfigured_alibaba_endpoint_returns_service_unavailable() -> None:
-    client = TestClient(app)
-    response = client.get("/api/v1/alibaba/categories/123")
-    assert response.status_code == 503
+def test_unconfigured_alibaba_client_is_rejected() -> None:
+    settings = Settings(
+        _env_file=None,
+        alibaba_app_key=None,
+        alibaba_app_secret=None,
+        alibaba_access_token=None,
+    )
+    with pytest.raises(AlibabaConfigurationError):
+        AlibabaClient(settings)
 
 
 def test_batch_drafts_return_one_result_per_item() -> None:
@@ -76,9 +95,9 @@ def test_batch_drafts_return_one_result_per_item() -> None:
         response = client.post(
             "/api/v1/alibaba/products/batch/drafts",
             json={
-                "items": [
-                    {"reference": "A", "category_id": "123", "schema_data": {"title": "A"}},
-                    {"reference": "B", "category_id": "123", "schema_data": {"title": "B"}},
+                    "items": [
+                    {"reference": "A", "category_id": "123", "xml": SCHEMA_XML},
+                    {"reference": "B", "category_id": "123", "xml": SCHEMA_XML},
                 ],
                 "concurrency": 2,
             },
@@ -86,6 +105,9 @@ def test_batch_drafts_return_one_result_per_item() -> None:
         assert response.status_code == 200
         assert [item["reference"] for item in response.json()] == ["A", "B"]
         assert all(item["success"] for item in response.json())
+        assert response.json()[0]["response"]["parameters"][
+            "param_product_top_publish_request"
+        ]["xml"] == SCHEMA_XML
     finally:
         app.dependency_overrides.clear()
 
@@ -97,7 +119,7 @@ def test_batch_publish_requires_confirmation() -> None:
         response = client.post(
             "/api/v1/alibaba/products/batch/publish",
             json={
-                "items": [{"category_id": "123", "schema_data": {}}],
+                "items": [{"reference": "A", "category_id": "123", "xml": SCHEMA_XML}],
                 "confirmed_by_user": False,
             },
         )
@@ -106,17 +128,32 @@ def test_batch_publish_requires_confirmation() -> None:
         app.dependency_overrides.clear()
 
 
-def test_render_draft_supports_gop_draft_id() -> None:
+def test_batch_requires_unique_references() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/alibaba/products/batch/drafts",
+        json={
+            "items": [
+                {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
+                {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
+            ]
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_render_draft_uses_product_and_category_ids() -> None:
     app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
     try:
         client = TestClient(app)
         response = client.post(
             "/api/v1/alibaba/products/drafts/render",
-            json={"draft_id": "draft-1", "language": "en_US"},
+            json={"category_id": "123", "product_id": "456", "language": "en_US"},
         )
         assert response.status_code == 200
         assert response.json()["parameters"] == {
-            "draft_id": "draft-1",
+            "cat_id": "123",
+            "product_id": "456",
             "language": "en_US",
         }
     finally:
@@ -129,17 +166,18 @@ def test_inventory_and_display_requests_use_gop_request_shapes() -> None:
         client = TestClient(app)
         inventory = client.put(
             "/api/v1/alibaba/products/product-1/inventory",
-            json={"sku_id": "sku-1", "amount": 20},
+            json={"sku_id": "sku-1", "inventory": 20},
         )
         assert inventory.status_code == 200
-        assert inventory.json()["parameters"]["inventory_update_request"] == {
-            "inventoryItems": [
+        assert inventory.json()["parameters"] == {
+            "product_id": "product-1",
+            "inventory_list": [
                 {
-                    "productId": "product-1",
-                    "skuId": "sku-1",
-                    "inventory": {"amount": 20},
+                    "sku_id": "sku-1",
+                    "inventory": 20,
+                    "inventory_code": "CN_LOCAL_01",
                 }
-            ]
+            ],
         }
 
         display = client.patch(
@@ -147,15 +185,15 @@ def test_inventory_and_display_requests_use_gop_request_shapes() -> None:
             json={"display": False},
         )
         assert display.status_code == 200
-        assert display.json()["parameters"]["request"] == {
-            "productId": "product-1",
-            "display": False,
+        assert display.json()["parameters"] == {
+            "new_display": "N",
+            "product_id_list": ["product-1"],
         }
     finally:
         app.dependency_overrides.clear()
 
 
-def test_inventory_update_requires_exactly_one_amount_mode() -> None:
+def test_inventory_update_requires_non_negative_inventory() -> None:
     app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
     try:
         client = TestClient(app)
@@ -163,12 +201,12 @@ def test_inventory_update_requires_exactly_one_amount_mode() -> None:
             "/api/v1/alibaba/products/product-1/inventory",
             json={"sku_id": "sku-1"},
         )
-        both = client.put(
+        negative = client.put(
             "/api/v1/alibaba/products/product-1/inventory",
-            json={"sku_id": "sku-1", "amount": 10, "amount_diff": 2},
+            json={"sku_id": "sku-1", "inventory": -1},
         )
         assert missing.status_code == 422
-        assert both.status_code == 422
+        assert negative.status_code == 422
     finally:
         app.dependency_overrides.clear()
 
@@ -178,11 +216,17 @@ def test_schema_update_and_photo_bank_queries() -> None:
     try:
         client = TestClient(app)
         updated = client.patch(
-            "/api/v1/alibaba/schemas/schema-1",
-            json={"schema_data": {"productTitle": "Updated"}},
+            "/api/v1/alibaba/products/product-1/schema",
+            json={"category_id": "123", "xml": SCHEMA_XML},
         )
         assert updated.status_code == 200
         assert updated.json()["operation"] == "/icbu/product/schema/update"
+        assert updated.json()["parameters"] == {
+            "xml": SCHEMA_XML,
+            "product_id": "product-1",
+            "cat_id": "123",
+            "language": "en_US",
+        }
 
         groups = client.get("/api/v1/alibaba/photo-bank/groups?page_size=10")
         assert groups.status_code == 200
@@ -191,6 +235,19 @@ def test_schema_update_and_photo_bank_queries() -> None:
         images = client.get("/api/v1/alibaba/photo-bank/images?group_id=group-1")
         assert images.status_code == 200
         assert images.json()["parameters"]["request"]["groupId"] == "group-1"
+
+        uploaded = client.post(
+            "/api/v1/alibaba/photo-bank/images",
+            data={"group_id": "group-1"},
+            files={"image": ("brush.jpg", b"image", "image/jpeg")},
+        )
+        assert uploaded.status_code == 200
+        assert uploaded.json()["operation"] == "/alibaba/icbu/photobank/upload"
+        assert uploaded.json()["parameters"] == {
+            "file_name": "brush.jpg",
+            "group_id": "group-1",
+        }
+        assert uploaded.json()["file_fields"] == ["image_bytes"]
     finally:
         app.dependency_overrides.clear()
 
@@ -227,7 +284,7 @@ def test_parse_schema_extracts_official_rules_and_manual_fields() -> None:
     response = client.post("/api/v1/alibaba/schemas/parse", json={"schema_data": schema_xml})
     assert response.status_code == 200
     body = response.json()
-    assert body["required_field_ids"] == ["priceUnit", "productTitle", "sku.skuStock"]
+    assert body["required_field_ids"] == ["priceUnit", "productTitle"]
     assert "priceUnit" in body["manual_confirmation_field_ids"]
     assert "sku.skuStock" in body["manual_confirmation_field_ids"]
     assert body["fields"][1]["options"][0] == {

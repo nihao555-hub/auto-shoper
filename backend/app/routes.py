@@ -29,6 +29,8 @@ from backend.app.models import (
     ProductImageAnalysis,
     ProductValidationRequest,
     ProductValidationResult,
+    SchemaBuildRequest,
+    SchemaBuildResult,
     SchemaParseRequest,
     SchemaParseResult,
 )
@@ -40,6 +42,7 @@ from backend.app.services.schema_rules import (
     merge_schema_required_fields,
     parse_schema_data,
 )
+from backend.app.services.schema_values import build_schema_xml, validate_filled_schema_xml
 
 router = APIRouter(prefix="/api/v1")
 
@@ -85,6 +88,7 @@ async def list_products(
     parameters: dict[str, Any] = {
         "current_page": current_page,
         "page_size": page_size,
+        "language": "ENGLISH",
     }
     if subject:
         parameters["subject"] = subject
@@ -97,8 +101,13 @@ async def list_products(
 async def get_schema(
     category_id: str,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    language: str = "en_US",
 ) -> dict[str, Any]:
-    return await _alibaba_call(client, "schema_get", {"cat_id": category_id})
+    return await _alibaba_call(
+        client,
+        "schema_get",
+        {"cat_id": category_id, "language": language},
+    )
 
 
 @router.post("/alibaba/products/drafts/render")
@@ -106,16 +115,14 @@ async def render_draft(
     request: AlibabaDraftRenderRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
-    parameters: dict[str, Any] = {"language": request.language}
-    if request.draft_id:
-        parameters["draft_id"] = request.draft_id
-    else:
-        parameters["cat_id"] = request.category_id
-        parameters["product_id"] = request.product_id
     return await _alibaba_call(
         client,
         "draft_render",
-        parameters,
+        {
+            "language": request.language,
+            "cat_id": request.category_id,
+            "product_id": request.product_id,
+        },
     )
 
 
@@ -124,7 +131,11 @@ async def get_product(
     product_id: str,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(client, "product_get", {"product_id": product_id})
+    return await _alibaba_call(
+        client,
+        "product_get",
+        {"product_get_request": {"productId": product_id}},
+    )
 
 
 @router.get("/alibaba/products/{product_id}/score")
@@ -143,7 +154,7 @@ async def get_product_inventory(
     return await _alibaba_call(
         client,
         "inventory_get",
-        {"inventory_get_request": {"productId": product_id}},
+        {"product_id": product_id, "language": "ENGLISH"},
     )
 
 
@@ -153,24 +164,18 @@ async def update_product_inventory(
     request: AlibabaInventoryUpdateRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
-    inventory: dict[str, int] = {}
-    if request.amount is not None:
-        inventory["amount"] = request.amount
-    if request.amount_diff is not None:
-        inventory["amountDiff"] = request.amount_diff
     return await _alibaba_call(
         client,
         "inventory_update",
         {
-            "inventory_update_request": {
-                "inventoryItems": [
-                    {
-                        "productId": product_id,
-                        "skuId": request.sku_id,
-                        "inventory": inventory,
-                    }
-                ]
-            }
+            "product_id": product_id,
+            "inventory_list": [
+                {
+                    "sku_id": request.sku_id,
+                    "inventory": request.inventory,
+                    "inventory_code": request.inventory_code,
+                }
+            ],
         },
     )
 
@@ -184,20 +189,28 @@ async def update_product_display(
     return await _alibaba_call(
         client,
         "display_update",
-        {"request": {"productId": product_id, "display": request.display}},
+        {
+            "new_display": "Y" if request.display else "N",
+            "product_id_list": [product_id],
+        },
     )
 
 
-@router.patch("/alibaba/schemas/{schema_id}")
+@router.patch("/alibaba/products/{product_id}/schema")
 async def update_product_schema(
-    schema_id: str,
+    product_id: str,
     request: AlibabaSchemaUpdateRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
     return await _alibaba_call(
         client,
         "schema_update",
-        {"schema_id": schema_id, "schema_data": request.schema_data},
+        {
+            "xml": request.xml,
+            "product_id": product_id,
+            "cat_id": request.category_id,
+            "language": request.language,
+        },
     )
 
 
@@ -209,15 +222,33 @@ async def parse_schema(request: SchemaParseRequest) -> SchemaParseResult:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/alibaba/schemas/build", response_model=SchemaBuildResult)
+async def build_schema(request: SchemaBuildRequest) -> SchemaBuildResult:
+    try:
+        return build_schema_xml(request.schema_data, request.values)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/alibaba/products/drafts")
 async def create_draft(
     request: AlibabaSchemaRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
+    try:
+        xml = _validated_submission_xml(request.xml)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _alibaba_call(
         client,
         "draft_create",
-        {"cat_id": request.category_id, "schema_data": request.schema_data},
+        {
+            "param_product_top_publish_request": {
+                "language": request.language,
+                "cat_id": request.category_id,
+                "xml": xml,
+            }
+        },
     )
 
 
@@ -239,10 +270,20 @@ async def publish_product(
             status_code=status.HTTP_409_CONFLICT,
             detail="Formal publishing requires confirmed_by_user=true",
         )
+    try:
+        xml = _validated_submission_xml(request.xml)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _alibaba_call(
         client,
         "publish",
-        {"cat_id": request.category_id, "schema_data": request.schema_data},
+        {
+            "publish_request": {
+                "language": request.language,
+                "cat_id": request.category_id,
+                "xml": xml,
+            }
+        },
     )
 
 
@@ -270,8 +311,14 @@ async def upload_photo(
     return await _alibaba_call(
         client,
         "photo_upload",
-        {"request": {"groupId": group_id, "imageName": image.filename}},
-        files={"file": (image.filename or "image", content, image.content_type or "image/jpeg")},
+        {"file_name": image.filename or "image", "group_id": group_id},
+        files={
+            "image_bytes": (
+                image.filename or "image",
+                content,
+                image.content_type or "image/jpeg",
+            )
+        },
     )
 
 
@@ -382,6 +429,29 @@ async def generate_image(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.post("/images/generate-from-product")
+async def generate_image_from_product(
+    ai_client: Annotated[AIClient, Depends(get_ai_client)],
+    image: Annotated[UploadFile, File(...)],
+    prompt: Annotated[str, Form(min_length=3, max_length=4000)],
+    size: Annotated[str, Form()] = "1024x1024",
+    count: Annotated[int, Form(ge=1, le=4)] = 1,
+) -> dict[str, Any]:
+    content = await image.read()
+    _validate_upload(image, content)
+    try:
+        return await ai_client.edit_product_image(
+            content,
+            image.filename or "product-image",
+            image.content_type or "image/jpeg",
+            prompt,
+            size,
+            count,
+        )
+    except AIProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 async def _alibaba_call(
     client: AlibabaClient,
     operation_key: str,
@@ -407,16 +477,27 @@ async def _batch_alibaba_call(
         item = request.items[index]
         async with semaphore:
             try:
+                xml = _validated_submission_xml(item.xml)
                 response = await client.call(
                     OPERATIONS[operation_key].operation,
-                    {"cat_id": item.category_id, "schema_data": item.schema_data},
+                    {
+                        (
+                            "param_product_top_publish_request"
+                            if operation_key == "draft_create"
+                            else "publish_request"
+                        ): {
+                            "language": item.language,
+                            "cat_id": item.category_id,
+                            "xml": xml,
+                        }
+                    },
                 )
                 result = AlibabaBatchResult(
                     reference=item.reference,
                     success=True,
                     response=response,
                 )
-            except AlibabaAPIError as exc:
+            except (AlibabaAPIError, SchemaParseError) as exc:
                 result = AlibabaBatchResult(
                     reference=item.reference,
                     success=False,
@@ -428,6 +509,17 @@ async def _batch_alibaba_call(
         *(process_item(index) for index in range(len(request.items)))
     )
     return [result for _, result in sorted(indexed_results)]
+
+
+def _validated_submission_xml(xml: str) -> str:
+    result = validate_filled_schema_xml(xml)
+    if result.ready_to_submit:
+        return result.xml
+    details = "; ".join(
+        f"{issue.field}: {issue.message}"
+        for issue in result.errors
+    )
+    raise SchemaParseError(f"Alibaba Schema validation failed: {details}")
 
 
 def _validate_upload(image: UploadFile, content: bytes) -> None:

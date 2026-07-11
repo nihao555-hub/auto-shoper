@@ -14,7 +14,7 @@ class SchemaParseError(ValueError):
 
 
 def parse_schema_data(schema_data: dict[str, object] | str) -> SchemaParseResult:
-    schema_xml = _extract_schema_xml(schema_data)
+    schema_xml = extract_schema_xml(schema_data)
     try:
         root = ElementTree.fromstring(schema_xml)
     except ElementTree.ParseError as exc:
@@ -24,7 +24,7 @@ def parse_schema_data(schema_data: dict[str, object] | str) -> SchemaParseResult
         _parse_field(field, [])
         for field in _field_children(root)
     ]
-    required = sorted(_flatten_field_ids(fields, only_required=True))
+    required = sorted(_required_field_ids(fields))
     manual = sorted(
         field_id
         for field_id in _flatten_field_ids(fields, only_required=False)
@@ -52,7 +52,7 @@ def manual_schema_fields(schema_data: dict[str, object] | str | None) -> list[st
     return parse_schema_data(schema_data).manual_confirmation_field_ids
 
 
-def _extract_schema_xml(schema_data: dict[str, object] | str) -> str:
+def extract_schema_xml(schema_data: dict[str, object] | str) -> str:
     if isinstance(schema_data, str):
         stripped = schema_data.strip()
         if stripped.startswith("<"):
@@ -88,6 +88,7 @@ def _parse_field(element: ElementTree.Element, parent_path: list[str]) -> Parsed
     path = [*parent_path, field_id] if field_id else parent_path
     rules = _rules(element)
     disabled = _rule_value(rules, "disableRule") == "true"
+    read_only = _rule_value(rules, "readOnlyRule") == "true"
     value_type = _rule_value(rules, "valueTypeRule")
     return ParsedSchemaField(
         id=field_id,
@@ -96,6 +97,7 @@ def _parse_field(element: ElementTree.Element, parent_path: list[str]) -> Parsed
         path=path,
         required=_rule_value(rules, "requiredRule") == "true",
         disabled=disabled,
+        read_only=read_only,
         value_type=value_type,
         rules=rules,
         options=_options(element),
@@ -178,6 +180,27 @@ def _flatten_field_ids(
         if not field.disabled and (field.required or not only_required):
             result.add(_field_key(field))
         result.update(_flatten_field_ids(field.children, only_required=only_required))
+    return result
+
+
+def _required_field_ids(
+    fields: list[ParsedSchemaField],
+    *,
+    inspect_children: bool = True,
+) -> set[str]:
+    result: set[str] = set()
+    for field in fields:
+        if field.disabled or field.read_only:
+            continue
+        if field.required:
+            result.add(_field_key(field))
+        if inspect_children and field.type == "complex":
+            for child in field.children:
+                if child.disabled or child.read_only or not child.required:
+                    continue
+                result.add(_field_key(child))
+                if child.type == "complex":
+                    result.update(_required_field_ids(child.children))
     return result
 
 
