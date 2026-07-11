@@ -1,11 +1,16 @@
 import {
   ArrowsClockwise,
-  Buildings,
-  LockKey,
+  CheckCircle,
+  Copy,
+  Info,
+  MagnifyingGlass,
   Plus,
-  ShieldCheck,
-  Swap,
+  SealWarning,
+  ShieldWarning,
+  Warning,
+  XCircle,
 } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
 import type { AlibabaConnectedStore, CapabilityResponse } from "../types";
 
 type StoresPageProps = {
@@ -17,6 +22,43 @@ type StoresPageProps = {
   onSyncStore: (storeId: string) => void;
 };
 
+type StatusFilter = "all" | "current" | "idle" | "expired";
+
+function storeName(store: AlibabaConnectedStore) {
+  return store.login_id ?? store.account ?? store.user_id ?? "未知 Alibaba 店铺";
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "平台未返回";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(new Date(value))
+    .replaceAll("/", "-");
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "尚未同步";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+    .format(new Date(value))
+    .replaceAll("/", "-");
+}
+
+function remainingDays(value: string | null) {
+  if (!value) return null;
+  const diff = new Date(value).getTime() - Date.now();
+  return Math.floor(diff / (24 * 60 * 60 * 1000));
+}
+
 export function StoresPage({
   capabilities,
   stores,
@@ -25,229 +67,390 @@ export function StoresPage({
   onSwitchStore,
   onSyncStore,
 }: StoresPageProps) {
-  const connectionState = capabilities?.alibaba_connection_state ?? "unconfigured";
-  const connectionLabel = {
-    unconfigured: "平台未配置",
-    configuration_error: "平台配置有误",
-    not_connected: "等待商家授权",
-    connected: "已连接",
-    expired: "授权已过期",
-  }[connectionState];
   const authorizationEnabled = capabilities?.alibaba_oauth_configured === true;
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [keyword, setKeyword] = useState("");
+
+  const activeStore = stores.find((store) => store.id === activeStoreId) ?? null;
+
+  const filteredStores = useMemo(() => {
+    return stores.filter((store) => {
+      if (statusFilter === "current" && store.id !== activeStoreId) return false;
+      if (statusFilter === "idle" && (store.id === activeStoreId || store.expired)) return false;
+      if (statusFilter === "expired" && !store.expired) return false;
+      if (keyword.trim()) {
+        const haystack = `${store.login_id ?? ""} ${store.account ?? ""} ${store.user_id ?? ""}`;
+        if (!haystack.toLowerCase().includes(keyword.trim().toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [stores, statusFilter, keyword, activeStoreId]);
 
   return (
-    <div className="page stores-page">
-      <header className="page-header stores-header refined-page-header">
+    <div className="ds-page st-page">
+      <header className="ds-page-header">
         <div>
-          <div className="page-context">
-            <span>Alibaba.com 国际站</span>
-            <i />
-            <span>{connectionLabel}</span>
-          </div>
           <h1>店铺授权</h1>
-          <p>连接、同步和切换 Alibaba 店铺；每个店铺的数据与批次独立保存。</p>
+          <p className="ds-page-subtitle">
+            每个客户工作区可连接并切换多个 Alibaba 店铺，批量任务保持不变。
+          </p>
         </div>
         <button
           type="button"
-          className="button button-primary button-large"
+          className="ds-button-primary"
           onClick={onAuthorize}
           disabled={!authorizationEnabled}
         >
-          <Plus size={18} weight="bold" />
+          <Plus size={16} weight="bold" />
           {authorizationEnabled ? "添加 Alibaba 店铺" : "等待平台配置"}
         </button>
       </header>
 
-      <div className="stores-page-content">
-        <section className="store-access-card" aria-label="Alibaba 店铺连接">
-          <div className="store-access-heading">
-            <span className="alibaba-symbol">a</span>
-            <div>
-              <span className="eyebrow">官方 OAuth 授权</span>
-              <h2>连接 Alibaba.com 店铺</h2>
-              <p>平台不会读取店铺登录密码；授权完成后仅保存业务接口所需凭证。</p>
-            </div>
-            <span
-              className={`store-connection-state ${
-                connectionState === "connected" ? "is-connected" : ""
-              }`}
-            >
-              <i
-                className={`connection-dot ${
-                  connectionState === "connected" ? "is-online" : "is-offline"
-                }`}
-              />
-              {connectionLabel}
-            </span>
-          </div>
-          <div className="store-access-policies">
-            <span>
-              <ShieldCheck size={18} /> 当前客户工作区隔离
-            </span>
-            <span>
-              <LockKey size={18} /> Token 加密持久化
-            </span>
-            <span>
-              <Buildings size={18} /> 支持连接多个店铺
-            </span>
-          </div>
-          {capabilities?.alibaba_oauth_configuration_error ? (
-            <p className="store-access-error">{capabilities.alibaba_oauth_configuration_error}</p>
-          ) : (
-            <p className="store-access-note">
-              新授权不会覆盖已有店铺；创建批次时仍需明确确认目标店铺。
-            </p>
-          )}
+      <section className="st-security" aria-label="安全说明">
+        <SealWarning size={18} weight="fill" />
+        <p>
+          安全说明：采用 OAuth 官方授权，Token 仅在后端加密存储，
+          <strong>按工作区隔离</strong>，响应中不返回任何 Token。
+        </p>
+      </section>
+
+      {capabilities?.alibaba_oauth_configuration_error ? (
+        <section className="st-config-error" aria-label="配置错误">
+          <ShieldWarning size={18} />
+          {capabilities.alibaba_oauth_configuration_error}
         </section>
+      ) : null}
 
-        <section className="stores-directory" aria-labelledby="connected-stores-title">
-          <div className="connected-stores-heading">
-            <div>
-              <h2 id="connected-stores-title">已连接店铺</h2>
-              <span>{stores.length} 个店铺与当前工作区隔离保存</span>
-            </div>
-          </div>
-
-          {stores.length > 0 ? (
-            <div className="store-summary-list">
-              {stores.map((store) => (
-                <StoreSummaryCard
-                  key={store.id}
-                  store={store}
-                  active={store.id === activeStoreId}
-                  onActivate={() => onSwitchStore(store.id)}
-                  onSync={() => onSyncStore(store.id)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="empty-store-state">
-              <Buildings size={30} />
-              <strong>还没有连接店铺</strong>
-              <p>在 Alibaba 官方弹窗中完成登录和授权后，店铺摘要会显示在这里。</p>
+      <section className="st-current" aria-label="当前使用店铺">
+        <header className="st-current-heading">
+          <h2>当前使用店铺（将用于新建任务）</h2>
+          <span className="st-tag is-current">当前店铺</span>
+        </header>
+        {activeStore ? (
+          <>
+            <div className="st-current-body">
+              <div className="st-current-identity">
+                <span className="st-avatar">阿</span>
+                <div>
+                  <strong>{storeName(activeStore)}</strong>
+                  <small>账号：{activeStore.account ?? activeStore.login_id ?? "待返回"}</small>
+                  <small>店铺 ID：{activeStore.user_id ?? "待返回"}</small>
+                </div>
+              </div>
+              <dl className="st-current-facts">
+                <div>
+                  <dt>授权到期</dt>
+                  <dd className={activeStore.expired ? "is-danger" : "is-success"}>
+                    {formatDate(activeStore.expires_at)}
+                  </dd>
+                  <span>
+                    {(() => {
+                      const days = remainingDays(activeStore.expires_at);
+                      if (days === null) return "有效期待返回";
+                      return days >= 0 ? `（还有 ${days} 天）` : `（已过期 ${-days} 天）`;
+                    })()}
+                  </span>
+                </div>
+                <div>
+                  <dt>最后同步</dt>
+                  <dd>{formatDateTime(activeStore.last_sync_at)}</dd>
+                  <span
+                    className={activeStore.sync_error ? "st-dot is-warning" : "st-dot is-success"}
+                  >
+                    {activeStore.sync_error ? "同步异常" : "同步正常"}
+                  </span>
+                </div>
+                <div>
+                  <dt>草稿就绪</dt>
+                  <dd>
+                    {activeStore.ready_to_create_draft ? (
+                      <span className="st-check is-success">
+                        <CheckCircle size={15} weight="fill" /> 可创建草稿
+                      </span>
+                    ) : (
+                      <span className="st-check is-warning">
+                        <Warning size={15} weight="fill" /> 待验证
+                      </span>
+                    )}
+                  </dd>
+                  <span className="st-check is-success">
+                    <CheckCircle size={15} weight="fill" /> 已验证权限{" "}
+                    {activeStore.permission_verified_count} 项
+                  </span>
+                </div>
+              </dl>
               <button
                 type="button"
-                className="button button-dark"
-                onClick={onAuthorize}
-                disabled={!authorizationEnabled}
+                className="ds-button-secondary"
+                onClick={() => onSyncStore(activeStore.id)}
               >
-                <Plus size={18} />
-                {authorizationEnabled ? "添加 Alibaba 店铺" : "等待平台配置"}
+                店铺设置
               </button>
             </div>
-          )}
-        </section>
-      </div>
+            <p className="st-current-note">
+              <Info size={15} weight="fill" />
+              切换店铺仅影响新建任务的目标店铺，不会重新绑定或影响已有批次。
+            </p>
+          </>
+        ) : (
+          <div className="st-current-empty">
+            <span className="st-avatar">阿</span>
+            <div>
+              <strong>尚未选择店铺</strong>
+              <small>连接并授权 Alibaba 店铺后，新建任务将默认使用该店铺。</small>
+            </div>
+            <button
+              type="button"
+              className="ds-button-primary"
+              onClick={onAuthorize}
+              disabled={!authorizationEnabled}
+            >
+              <Plus size={16} weight="bold" />
+              添加 Alibaba 店铺
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="st-directory" aria-label="已连接店铺">
+        <header className="st-directory-heading">
+          <h2>已连接店铺（{stores.length}）</h2>
+          <div className="st-directory-tools">
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+              aria-label="按状态筛选"
+            >
+              <option value="all">全部状态</option>
+              <option value="current">当前使用</option>
+              <option value="idle">未使用</option>
+              <option value="expired">已过期</option>
+            </select>
+            <label className="st-search">
+              <MagnifyingGlass size={15} />
+              <input
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                placeholder="按店铺名称 / 账号 / ID 搜索"
+              />
+            </label>
+            <button
+              type="button"
+              className="st-refresh"
+              aria-label="刷新店铺摘要"
+              onClick={() => {
+                for (const store of stores) {
+                  if (!store.expired) onSyncStore(store.id);
+                }
+              }}
+            >
+              <ArrowsClockwise size={16} />
+            </button>
+          </div>
+        </header>
+
+        {filteredStores.length > 0 ? (
+          <div className="st-grid">
+            {filteredStores.map((store, index) => (
+              <StoreCard
+                key={store.id}
+                index={index + 1}
+                store={store}
+                active={store.id === activeStoreId}
+                onActivate={() => onSwitchStore(store.id)}
+                onSync={() => onSyncStore(store.id)}
+                onReauthorize={onAuthorize}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="st-empty">
+            {stores.length === 0
+              ? "还没有连接店铺，点击右上角「添加 Alibaba 店铺」开始授权。"
+              : "没有符合筛选条件的店铺。"}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
 
-function StoreSummaryCard({
+function StoreCard({
+  index,
   store,
   active,
   onActivate,
   onSync,
+  onReauthorize,
 }: {
+  index: number;
   store: AlibabaConnectedStore;
   active: boolean;
   onActivate: () => void;
   onSync: () => void;
+  onReauthorize: () => void;
 }) {
-  const name = store.login_id ?? store.account ?? store.user_id ?? "未知 Alibaba 店铺";
+  const days = remainingDays(store.expires_at);
   const healthLabel = {
     pending: "待验证",
-    healthy: "权限正常",
+    healthy: "健康",
     attention: "需要处理",
     expired: "授权过期",
   }[store.permission_health];
-  const readinessLabel = {
-    ready: "可创建草稿",
-    verification_required: "草稿权限待验证",
-    blocked: "暂不可创建草稿",
-  }[store.draft_readiness];
-  const lastSync = store.last_sync_at
-    ? new Intl.DateTimeFormat("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }).format(new Date(store.last_sync_at))
-    : "尚未同步";
-  const expiresAt = store.expires_at
-    ? new Intl.DateTimeFormat("zh-CN", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(new Date(store.expires_at))
-    : "平台未返回";
+  const healthy = store.permission_health === "healthy";
+  const productSynced = store.product_sync_state === "synced";
+  const photobankSynced = store.photobank_sync_state === "synced";
+  const groupTotal = store.product_group_count;
+
+  const copyAccount = () => {
+    const value = store.account ?? store.login_id ?? "";
+    if (value) void navigator.clipboard?.writeText(value);
+  };
 
   return (
-    <article className={`store-summary-card ${active ? "is-active" : ""}`}>
-      <header>
-        <div className="store-summary-identity">
-          <span className="alibaba-symbol">a</span>
-          <div>
-            <strong>{name}</strong>
-            <small>{store.account ?? `User ID ${store.user_id ?? "待返回"}`}</small>
-          </div>
-        </div>
-        <span className={`store-badge ${store.expired ? "is-expired" : active ? "is-active" : ""}`}>
-          {store.expired ? "已过期" : active ? "当前店铺" : "已连接"}
+    <article className={`st-card ${store.expired ? "is-expired" : ""}`}>
+      <header className="st-card-heading">
+        <strong>
+          {index}. {storeName(store)}
+          <em>{store.expired ? "（已过期）" : active ? "（当前使用）" : ""}</em>
+        </strong>
+        <span
+          className={`st-tag ${store.expired ? "is-danger" : active ? "is-current" : "is-idle"}`}
+        >
+          {store.expired ? "已过期" : active ? "当前店铺" : "未使用"}
+        </span>
+        <span className={`st-state-icon ${store.expired ? "is-danger" : "is-success"}`}>
+          {store.expired ? (
+            <XCircle size={17} weight="fill" />
+          ) : (
+            <CheckCircle size={17} weight="fill" />
+          )}
         </span>
       </header>
-      <div className="store-authorization-meta">
-        <span>
-          授权有效期
-          <strong>{expiresAt}</strong>
-        </span>
-        <span>
-          草稿权限
-          <strong>{readinessLabel}</strong>
-        </span>
-      </div>
-      <div className="store-summary-metrics">
+
+      <dl className="st-card-rows">
         <div>
-          <span>商品</span>
-          <strong>{store.product_count ?? "—"}</strong>
-          <small>{store.product_sync_state === "synced" ? "已同步" : "待同步"}</small>
-        </div>
-        <div>
-          <span>图片分组</span>
-          <strong>{store.photobank_group_count ?? "—"}</strong>
-          <small>{store.photobank_sync_state === "synced" ? "已同步" : "待同步"}</small>
-        </div>
-        <div>
-          <span>商品分组</span>
-          <strong>{store.product_group_count ?? "—"}</strong>
-          <small>
-            {store.product_group_sync_state === "not_available" ? "接口待开放" : "待同步"}
-          </small>
-        </div>
-      </div>
-      <div className="store-health-row">
-        <span>
-          <i className={`health-dot is-${store.permission_health}`} />
-          {healthLabel} · {store.permission_verified_count}/{store.permission_total_count}
-        </span>
-        <span className={`readiness is-${store.draft_readiness}`}>{readinessLabel}</span>
-      </div>
-      <footer>
-        <span>最近同步：{lastSync}</span>
-        <div>
-          <button type="button" className="text-button" onClick={onSync} disabled={store.expired}>
-            <ArrowsClockwise size={16} />
-            同步摘要
-          </button>
-          {!active ? (
-            <button type="button" className="text-button" onClick={onActivate}>
-              <Swap size={16} />
-              切换到此店
+          <dt>登录账号</dt>
+          <dd>
+            {store.account ?? store.login_id ?? "待返回"}
+            <button type="button" className="st-copy" aria-label="复制账号" onClick={copyAccount}>
+              <Copy size={13} />
             </button>
-          ) : null}
+          </dd>
         </div>
+        <div>
+          <dt>授权到期</dt>
+          <dd className={store.expired ? "is-danger" : "is-warning"}>
+            {formatDate(store.expires_at)}{" "}
+            {days === null ? "" : days >= 0 ? `（还有 ${days} 天）` : `（已过期 ${-days} 天）`}
+          </dd>
+        </div>
+        <div>
+          <dt>权限健康</dt>
+          <dd>
+            <span className={`st-check ${healthy ? "is-success" : "is-warning"}`}>
+              {healthy ? (
+                <CheckCircle size={15} weight="fill" />
+              ) : (
+                <Warning size={15} weight="fill" />
+              )}
+              {healthLabel}
+            </span>
+            <span className="st-muted">
+              已验证 {store.permission_verified_count} / {store.permission_total_count} 项
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt>商品数量</dt>
+          <dd>
+            {store.product_count === null
+              ? "待同步"
+              : `${store.product_count.toLocaleString()} 个商品`}
+            <span className={`st-dot ${productSynced ? "is-success" : "is-warning"}`}>
+              {productSynced ? "同步正常" : "同步异常"}
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt>图册分组</dt>
+          <dd>
+            {store.photobank_group_count === null
+              ? "待同步"
+              : `${store.photobank_group_count} 个分组`}
+            <span className={`st-dot ${photobankSynced ? "is-success" : "is-warning"}`}>
+              {photobankSynced ? "同步正常" : "同步异常"}
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt>分组商品</dt>
+          <dd>
+            {groupTotal === null ? (
+              <span className="st-muted">接口待开放</span>
+            ) : (
+              <span className={`st-check ${store.expired ? "is-warning" : "is-success"}`}>
+                {store.expired ? (
+                  <Warning size={15} weight="fill" />
+                ) : (
+                  <CheckCircle size={15} weight="fill" />
+                )}
+                可用 {groupTotal} / {groupTotal} 组
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>最后同步</dt>
+          <dd>{formatDateTime(store.last_sync_at)}</dd>
+        </div>
+        <div>
+          <dt>草稿就绪</dt>
+          <dd>
+            {store.ready_to_create_draft ? (
+              <span className="st-check is-success">
+                <CheckCircle size={15} weight="fill" /> 可创建草稿
+              </span>
+            ) : (
+              <span className="st-check is-danger">
+                <XCircle size={15} weight="fill" /> 已阻塞
+              </span>
+            )}
+            <span className="st-muted">
+              {store.ready_to_create_draft
+                ? `已验证权限 ${store.permission_verified_count} 项`
+                : (store.readiness_blockers[0] ?? store.sync_error ?? "待验证权限")}
+            </span>
+          </dd>
+        </div>
+      </dl>
+
+      <footer className="st-card-actions">
+        <button
+          type="button"
+          className="ds-button-secondary"
+          onClick={onSync}
+          disabled={store.expired}
+        >
+          同步摘要
+        </button>
+        {store.expired ? (
+          <button type="button" className="ds-button-outline-brand" onClick={onReauthorize}>
+            重新授权
+          </button>
+        ) : (
+          <>
+            {!active ? (
+              <button type="button" className="ds-button-outline-brand" onClick={onActivate}>
+                切换到此店
+              </button>
+            ) : null}
+            <button type="button" className="ds-button-secondary" onClick={onReauthorize}>
+              重新授权
+            </button>
+          </>
+        )}
       </footer>
-      {store.sync_error ? <p className="store-sync-error">{store.sync_error}</p> : null}
     </article>
   );
 }

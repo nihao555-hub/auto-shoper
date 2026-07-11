@@ -13,7 +13,14 @@ import { AppShell } from "./components/AppShell";
 import { AuthPage } from "./components/AuthPage";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
-import { defaultSettings, getMainProductImage, sampleBatches, sampleProducts } from "./data";
+import {
+  defaultSettings,
+  demoActiveStoreId,
+  demoStores,
+  getMainProductImage,
+  sampleBatches,
+  sampleProducts,
+} from "./data";
 import { BatchesPage } from "./pages/BatchesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { StoresPage } from "./pages/StoresPage";
@@ -155,7 +162,11 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const oauthPopup = useRef<Window | null>(null);
 
+  const [demoStoreId, setDemoStoreId] = useState<string>(demoActiveStoreId);
+
   const products = dataMode === "demo" ? demoProducts : liveProducts;
+  const visibleStores = dataMode === "demo" ? demoStores : stores;
+  const visibleActiveStoreId = dataMode === "demo" ? demoStoreId : activeStoreId;
   const liveBatch = useMemo(() => buildLiveBatch(liveProducts, batchId), [liveProducts, batchId]);
   const batches = dataMode === "demo" ? sampleBatches : liveBatch ? [liveBatch] : [];
 
@@ -320,7 +331,12 @@ export default function App() {
   };
 
   const switchStore = async (storeId: string) => {
-    if (!storeId || storeId === activeStoreId) {
+    if (!storeId || storeId === visibleActiveStoreId) {
+      return;
+    }
+    if (dataMode === "demo") {
+      setDemoStoreId(storeId);
+      notify("success", "已切换 Alibaba 店铺", "演示模式：新批次将绑定到该示例店铺。");
       return;
     }
     try {
@@ -334,6 +350,10 @@ export default function App() {
   };
 
   const syncStore = async (storeId: string) => {
+    if (dataMode === "demo") {
+      notify("success", "店铺摘要已同步", "演示模式：未调用真实 Alibaba 接口。");
+      return;
+    }
     try {
       await syncAlibabaStore(storeId);
       await refreshWorkspace();
@@ -408,8 +428,8 @@ export default function App() {
       onNavigate={navigate}
       onOpenSettings={() => setSettingsOpen(true)}
       user={user}
-      stores={stores}
-      activeStoreId={activeStoreId}
+      stores={visibleStores}
+      activeStoreId={visibleActiveStoreId}
       onStoreChange={(storeId) => void switchStore(storeId)}
       onLogout={() => void signOut()}
     >
@@ -420,7 +440,7 @@ export default function App() {
           capabilities={capabilities}
           backendConnected={backendConnected}
           dataMode={dataMode}
-          activeStore={stores.find((store) => store.id === activeStoreId) ?? null}
+          activeStore={visibleStores.find((store) => store.id === visibleActiveStoreId) ?? null}
           onNavigateWorkbench={() => navigate("workbench")}
           onNavigateBatches={() => navigate("batches")}
           onNavigateStores={() => navigate("stores")}
@@ -428,8 +448,8 @@ export default function App() {
       ) : activeView === "stores" ? (
         <StoresPage
           capabilities={capabilities}
-          stores={stores}
-          activeStoreId={activeStoreId}
+          stores={visibleStores}
+          activeStoreId={visibleActiveStoreId}
           onAuthorize={() => void authorizeAlibaba()}
           onSwitchStore={(storeId) => void switchStore(storeId)}
           onSyncStore={(storeId) => void syncStore(storeId)}
