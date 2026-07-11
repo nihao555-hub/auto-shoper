@@ -107,16 +107,27 @@ export type CapabilityResponse = {
   };
   alibaba_credentials_configured: boolean;
   alibaba_oauth_configured: boolean;
+  alibaba_connection_state:
+    | "unconfigured"
+    | "configuration_error"
+    | "not_connected"
+    | "connected"
+    | "expired";
   alibaba_connection_source: "oauth" | "environment" | null;
+  alibaba_oauth_configuration_error: string | null;
+  alibaba_oauth_redirect_uri: string | null;
   model_credentials_configured: boolean;
 };
 
 export type AlibabaOAuthStatus = {
   oauth_configured: boolean;
   connected: boolean;
+  connection_state: CapabilityResponse["alibaba_connection_state"];
   connection_source: "oauth" | "environment" | null;
   user_id: string | null;
   expires_at: string | null;
+  configuration_error: string | null;
+  redirect_uri: string | null;
 };
 
 export type ListingFieldGroup = {

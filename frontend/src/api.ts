@@ -14,7 +14,7 @@ const API_ROOT = configuredApiRoot.startsWith("http")
   ? configuredApiRoot
   : new URL(configuredApiRoot, window.location.origin).toString().replace(/\/$/, "");
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number;
 
   constructor(message: string, status: number) {
@@ -207,5 +207,3 @@ export const findSchemaData = (
   }
   return null;
 };
-
-export { ApiError };

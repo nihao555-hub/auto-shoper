@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getCapabilities, startAlibabaOAuth } from "./api";
+import { ApiError, getCapabilities, startAlibabaOAuth } from "./api";
 import { AppShell } from "./components/AppShell";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
@@ -158,8 +158,12 @@ export default function App() {
     try {
       const response = await startAlibabaOAuth();
       window.location.assign(response.authorization_url);
-    } catch {
-      notify("error", "店铺授权服务尚未开通", "请联系管理员完成平台接入后再授权店铺。");
+    } catch (error) {
+      notify(
+        "error",
+        "无法开始店铺授权",
+        error instanceof ApiError ? error.message : "请检查后端服务和 OAuth 配置。",
+      );
     }
   };
 

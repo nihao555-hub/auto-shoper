@@ -78,7 +78,10 @@ async def capabilities() -> dict[str, Any]:
         },
         "alibaba_credentials_configured": oauth_status["connected"],
         "alibaba_oauth_configured": oauth_status["oauth_configured"],
+        "alibaba_connection_state": oauth_status["connection_state"],
         "alibaba_connection_source": oauth_status["connection_source"],
+        "alibaba_oauth_configuration_error": oauth_status["configuration_error"],
+        "alibaba_oauth_redirect_uri": oauth_status["redirect_uri"],
         "model_credentials_configured": bool(get_settings().openai_api_key),
     }
 

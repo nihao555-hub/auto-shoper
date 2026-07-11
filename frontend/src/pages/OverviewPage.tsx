@@ -195,7 +195,15 @@ export function OverviewPage({
           <ReadinessLine
             label="Alibaba.com"
             detail={
-              capabilities?.alibaba_credentials_configured ? "真实账户已授权" : "正式发布前需要授权"
+              capabilities?.alibaba_connection_state === "connected"
+                ? "真实账户已授权"
+                : capabilities?.alibaba_connection_state === "not_connected"
+                  ? "平台已就绪，等待商家授权"
+                  : capabilities?.alibaba_connection_state === "expired"
+                    ? "授权已过期，需要重新连接"
+                    : capabilities?.alibaba_connection_state === "configuration_error"
+                      ? "OAuth 回调配置有误"
+                      : "后端尚未配置 OAuth 应用"
             }
             ready={capabilities?.alibaba_credentials_configured === true}
           />

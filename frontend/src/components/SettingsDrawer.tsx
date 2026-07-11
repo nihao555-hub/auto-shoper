@@ -45,6 +45,14 @@ export function SettingsDrawer({
 }: SettingsDrawerProps) {
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<SettingsSection>("trade");
+  const connectionState = capabilities?.alibaba_connection_state ?? "unconfigured";
+  const connectionLabel = {
+    unconfigured: "平台未配置",
+    configuration_error: "平台配置有误",
+    not_connected: "等待商家授权",
+    connected: "已连接",
+    expired: "授权已过期",
+  }[connectionState];
 
   useEffect(() => {
     if (open) {
@@ -116,10 +124,10 @@ export function SettingsDrawer({
             <span>
               <i
                 className={`connection-dot ${
-                  capabilities?.alibaba_credentials_configured ? "is-online" : "is-offline"
+                  connectionState === "connected" ? "is-online" : "is-offline"
                 }`}
               />
-              {capabilities?.alibaba_credentials_configured ? "已连接" : "尚未连接"}
+              {connectionLabel}
             </span>
           </div>
           <button type="button" className="text-button" onClick={() => setSection("connection")}>
@@ -218,9 +226,13 @@ export function SettingsDrawer({
                   <div>
                     <strong>Alibaba.com 国际站</strong>
                     <p>
-                      {capabilities?.alibaba_credentials_configured
+                      {connectionState === "connected"
                         ? "商品、类目、图片银行和发布能力已可用。"
-                        : "尚未连接真实店铺，完成授权后即可创建草稿和批量发布。"}
+                        : connectionState === "not_connected"
+                          ? "平台已配置，等待商家登录 Alibaba.com 完成授权。"
+                          : connectionState === "expired"
+                            ? "店铺授权已过期，需要商家重新登录授权。"
+                            : "平台 OAuth 尚未正确配置，暂时无法连接真实店铺。"}
                     </p>
                   </div>
                 </div>
@@ -229,15 +241,24 @@ export function SettingsDrawer({
                     <strong>使用 Alibaba.com 官方授权</strong>
                     <p>商家将前往 Alibaba.com 登录并确认授权，完成后自动返回工作台。</p>
                   </div>
-                  <button type="button" className="button button-dark" onClick={onAuthorizeAlibaba}>
-                    {capabilities?.alibaba_credentials_configured
+                  <button
+                    type="button"
+                    className="button button-dark"
+                    onClick={onAuthorizeAlibaba}
+                    disabled={!capabilities?.alibaba_oauth_configured}
+                  >
+                    {connectionState === "connected"
                       ? "重新授权店铺"
-                      : capabilities?.alibaba_oauth_configured
-                        ? "登录并授权店铺"
-                        : "联系管理员开通"}
+                      : connectionState === "expired"
+                        ? "重新登录授权"
+                        : capabilities?.alibaba_oauth_configured
+                          ? "登录并授权店铺"
+                          : "等待平台配置"}
                   </button>
-                  {!capabilities?.alibaba_oauth_configured ? (
-                    <small>店铺授权服务尚未开通，请联系管理员完成平台接入。</small>
+                  {capabilities?.alibaba_oauth_configuration_error ? (
+                    <small>{capabilities.alibaba_oauth_configuration_error}</small>
+                  ) : capabilities?.alibaba_oauth_redirect_uri ? (
+                    <small>授权完成后返回：{capabilities.alibaba_oauth_redirect_uri}</small>
                   ) : null}
                 </div>
               </>
