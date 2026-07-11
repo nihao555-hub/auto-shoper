@@ -1,9 +1,123 @@
 from backend.app.models import (
     DraftField,
+    FieldInputMode,
+    FieldScope,
+    FieldSource,
     ListingChecklistItem,
+    ListingFieldDefinition,
+    ListingFieldGroup,
     OfficialListingFlowResponse,
     OfficialListingStep,
 )
+
+
+def listing_field_groups() -> list[ListingFieldGroup]:
+    return [
+        ListingFieldGroup(
+            key="store_ai_assisted",
+            label="全店通用：AI 可起草、一次确认后复用",
+            scope=FieldScope.STORE,
+            input_mode=FieldInputMode.AI_ASSISTED,
+            fields=[
+                _field("company_profile", "公司介绍文案", "AI 可润色真实公司资料"),
+                _field("detail_page_template", "详情页版式", "AI 可生成通用排版和模块结构"),
+                _field("after_sales_policy", "售后说明文案", "只能改写商家已确认的真实政策"),
+                _field("customization_policy", "定制说明文案", "只能改写真实定制能力"),
+                _field("image_style_prompt", "店铺图片风格", "统一白底、场景和视觉风格"),
+            ],
+            allowed_sources=[
+                FieldSource.AI_GENERATED,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.ACCOUNT_DEFAULT,
+            ],
+            confirmation_rule="AI 初稿必须由用户确认一次，之后才能保存为店铺默认值",
+        ),
+        ListingFieldGroup(
+            key="store_trusted_defaults",
+            label="全店通用：只能由用户、店铺配置或业务系统提供",
+            scope=FieldScope.STORE,
+            input_mode=FieldInputMode.TRUSTED_ONLY,
+            fields=[
+                _field("product_group_id", "商品分组", "必须使用店铺真实分组 ID"),
+                _field("photo_bank_group_id", "图片银行分组", "必须使用店铺真实图片分组"),
+                _field("currency", "默认币种", "必须与店铺报价规则一致"),
+                _field("price_unit", "默认计量单位", "必须使用 Schema 枚举值"),
+                _field("warehouse_id", "仓库", "必须来自店铺或 ERP 仓库配置"),
+                _field("inventory_code", "库存地点", "必须来自库存系统"),
+                _field("shipping_template_id", "运费模板", "必须使用店铺真实模板 ID"),
+                _field("company_qualifications", "公司资质", "必须有真实证明文件"),
+                _field("brand_authorizations", "品牌授权", "必须有真实授权链路"),
+                _field("service_policy", "统一服务政策", "必须由商家确认实际可履约范围"),
+            ],
+            allowed_sources=[
+                FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
+                FieldSource.ACCOUNT_DEFAULT,
+            ],
+            confirmation_rule="只可保存真实店铺配置；不得由图片或模型推测",
+        ),
+        ListingFieldGroup(
+            key="product_ai_assisted",
+            label="每个商品：上传一张图后 AI 可生成候选",
+            scope=FieldScope.PRODUCT,
+            input_mode=FieldInputMode.AI_ASSISTED,
+            fields=[
+                _field("category_suggestion", "叶子类目建议", "最终类目仍需用户确认"),
+                _field("product_title", "英文标题", "只使用图片可见或用户提供的事实"),
+                _field("keywords", "关键词", "最多三个，并按实时 Schema 校验"),
+                _field("selling_points", "卖点文案", "不能加入未证实性能或合规声明"),
+                _field("description", "详情文案", "只能组织已知事实"),
+                _field("visible_color", "可见颜色候选", "受光线影响，必须确认"),
+                _field("visible_pattern", "可见花纹候选", "不清晰时必须留空"),
+                _field("visible_shape", "外形和结构候选", "不能推断内部结构"),
+                _field("visible_components", "可见配件和数量", "遮挡时必须留空"),
+                _field("scene_images", "白底图和场景图", "必须保持商品身份和数量不变"),
+                _field("detail_images", "详情图版式", "不得增加不存在的部件或标识"),
+                _field("image_quality_review", "图片质量检查", "检查清晰度、遮挡和一致性"),
+            ],
+            allowed_sources=[
+                FieldSource.IMAGE_EXTRACTED,
+                FieldSource.AI_GENERATED,
+                FieldSource.USER_CONFIRMED,
+            ],
+            confirmation_rule="AI 和图片提取结果永远是候选；确认后来源必须改为 user_confirmed",
+        ),
+        ListingFieldGroup(
+            key="product_trusted_facts",
+            label="每个商品：AI 绝不能自行填写",
+            scope=FieldScope.PRODUCT,
+            input_mode=FieldInputMode.TRUSTED_ONLY,
+            fields=[
+                _field("category_id", "最终叶子类目", "决定实时 Schema 和发布规则"),
+                _field("brand", "品牌", "必须来自商品资料或真实授权"),
+                _field("model", "型号", "必须来自企业商品系统"),
+                _field("material", "材质和成分", "图片外观不能证明真实材质"),
+                _field("specifications", "精确规格", "必须来自测量或产品资料"),
+                _field("dimensions", "商品尺寸", "图片无法进行精确测量"),
+                _field("weight", "商品和包装重量", "图片无法确定重量"),
+                _field("sku", "SKU 组合和编码", "必须与 ERP 和真实销售属性一致"),
+                _field("price", "价格和阶梯价", "必须来自报价系统或人工"),
+                _field("moq", "最小起订量", "属于真实交易条件"),
+                _field("inventory", "库存", "必须来自库存系统或人工盘点"),
+                _field("sample_policy", "样品规则", "必须符合真实报价和履约能力"),
+                _field("packaging", "包装方式和箱规", "必须来自实际包装方案"),
+                _field("lead_time", "交期", "必须来自生产和供应链计划"),
+                _field("logistics", "物流属性和运费", "必须来自真实物流配置"),
+                _field("origin", "原产地和港口", "属于贸易和合规事实"),
+                _field("hs_code", "HS Code", "必须由业务或报关资料确认"),
+                _field("certifications", "认证", "禁止生成不存在的认证声明"),
+                _field("patent_trademark", "专利和商标", "必须有真实权利证明"),
+                _field("image_rights", "图片版权", "必须确认素材使用权"),
+            ],
+            allowed_sources=[
+                FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
+            ],
+            confirmation_rule="必须逐商品读取可信数据；同款继承后仍需逐 SKU 校验",
+        ),
+    ]
 
 
 def official_listing_flow() -> OfficialListingFlowResponse:
@@ -60,7 +174,10 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                     "按实时 Schema 填写基础信息、类目属性、SKU、交易和履约资料",
                     "价格、SKU、库存、重量尺寸、认证等事实必须来自人工或业务系统",
                 ],
-                backend_endpoints=["POST /api/v1/products/official-listing/validate"],
+                backend_endpoints=[
+                    "POST /api/v1/products/official-listing/validate",
+                    "POST /api/v1/products/official-listing/prepare",
+                ],
                 human_confirmation=True,
             ),
             OfficialListingStep(
@@ -72,6 +189,8 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                     "用草稿商品 ID 回读平台渲染结果，人工检查字段和图片效果",
                 ],
                 backend_endpoints=[
+                    "POST /api/v1/products/official-listing/drafts",
+                    "POST /api/v1/products/official-listing/batch/drafts",
                     "POST /api/v1/alibaba/products/drafts",
                     "POST /api/v1/alibaba/products/batch/drafts",
                     "POST /api/v1/alibaba/products/drafts/render",
@@ -87,6 +206,8 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                     "发布后查询商品详情、列表和质量分，保存审核或失败原因",
                 ],
                 backend_endpoints=[
+                    "POST /api/v1/products/official-listing/publish",
+                    "POST /api/v1/products/official-listing/batch/publish",
                     "POST /api/v1/alibaba/products/publish",
                     "POST /api/v1/alibaba/products/batch/publish",
                     "GET /api/v1/alibaba/products/{product_id}",
@@ -111,6 +232,7 @@ def official_listing_flow() -> OfficialListingFlowResponse:
                 human_confirmation=True,
             ),
         ],
+        field_groups=listing_field_groups(),
         ai_can_generate=[
             "英文标题表达、关键词建议、卖点文案、详情结构和场景图提示词",
             "基于已知事实的多语言改写和详情页排版",
@@ -125,6 +247,10 @@ def official_listing_flow() -> OfficialListingFlowResponse:
             "认证、专利、商标、原产地、港口和合规声明",
         ],
     )
+
+
+def _field(name: str, label: str, reason: str) -> ListingFieldDefinition:
+    return ListingFieldDefinition(name=name, label=label, reason=reason)
 
 
 def build_official_checklist(

@@ -343,3 +343,210 @@ def test_official_listing_flow_documents_backend_sequence() -> None:
         "post_publish",
     ]
     assert "POST /api/v1/alibaba/schemas/parse" in body["steps"][1]["backend_endpoints"]
+    assert {group["key"] for group in body["field_groups"]} == {
+        "store_ai_assisted",
+        "store_trusted_defaults",
+        "product_ai_assisted",
+        "product_trusted_facts",
+    }
+
+
+def test_listing_field_matrix_separates_store_and_product_inputs() -> None:
+    client = TestClient(app)
+    response = client.get("/api/v1/alibaba/listing-field-matrix")
+    assert response.status_code == 200
+    groups = {group["key"]: group for group in response.json()}
+    assert groups["store_ai_assisted"]["scope"] == "store"
+    assert groups["product_ai_assisted"]["scope"] == "product"
+    assert groups["product_trusted_facts"]["input_mode"] == "trusted_only"
+    assert any(
+        field["name"] == "price"
+        for field in groups["product_trusted_facts"]["fields"]
+    )
+
+
+def test_prepare_official_listing_merges_trusted_store_defaults() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <field id="productTitle" type="input">
+        <rules><rule name="requiredRule" value="true"/></rules>
+      </field>
+      <field id="priceUnit" type="singleCheck">
+        <rules><rule name="requiredRule" value="true"/></rules>
+        <options><option value="100000015"/></options>
+      </field>
+    </schema>
+    """
+    response = client.post(
+        "/api/v1/products/official-listing/prepare",
+        json={
+            "category_id": "123",
+            "schema_data": schema_xml,
+            "fields": {
+                "category_id": {"value": "123", "source": "user_confirmed"},
+                "productTitle": {
+                    "value": "Professional Paint Brush",
+                    "source": "user_confirmed",
+                },
+            },
+            "account_defaults": {
+                "price_unit": {
+                    "value": "100000015",
+                    "source": "account_default",
+                }
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready_to_draft"] is True
+    assert body["invalid_default_fields"] == []
+    assert "<value>Professional Paint Brush</value>" in body["xml"]
+    assert "<value>100000015</value>" in body["xml"]
+
+
+def test_prepare_official_listing_rejects_ai_business_fact_and_category_mismatch() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <field id="price" type="input">
+        <rules><rule name="requiredRule" value="true"/></rules>
+      </field>
+    </schema>
+    """
+    response = client.post(
+        "/api/v1/products/official-listing/prepare",
+        json={
+            "category_id": "123",
+            "schema_data": schema_xml,
+            "fields": {
+                "category_id": {"value": "456", "source": "user_confirmed"},
+                "price": {
+                    "value": "9.99",
+                    "source": "ai_generated",
+                    "requires_confirmation": False,
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready_to_draft"] is False
+    assert body["invalid_ai_fields"] == ["price"]
+    assert body["confirmation_fields"] == ["price"]
+    assert body["invalid_default_fields"] == ["category_id"]
+
+
+def test_official_listing_write_path_builds_schema_from_trusted_sources() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        schema_xml = """
+        <schema>
+          <field id="productTitle" type="input">
+            <rules><rule name="requiredRule" value="true"/></rules>
+          </field>
+        </schema>
+        """
+        payload = {
+            "category_id": "123",
+            "schema_data": schema_xml,
+            "fields": {
+                "category_id": {"value": "123", "source": "user_confirmed"},
+                "productTitle": {
+                    "value": "Professional Paint Brush",
+                    "source": "user_confirmed",
+                },
+            },
+        }
+        draft = client.post("/api/v1/products/official-listing/drafts", json=payload)
+        assert draft.status_code == 200
+        draft_request = draft.json()["parameters"]["param_product_top_publish_request"]
+        assert draft_request["cat_id"] == "123"
+        assert "<value>Professional Paint Brush</value>" in draft_request["xml"]
+
+        unconfirmed = client.post(
+            "/api/v1/products/official-listing/publish",
+            json=payload,
+        )
+        assert unconfirmed.status_code == 409
+
+        confirmed = client.post(
+            "/api/v1/products/official-listing/publish",
+            json={**payload, "confirmed_by_user": True},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["parameters"]["publish_request"]["cat_id"] == "123"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_official_listing_write_path_blocks_unconfirmed_ai_content() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/official-listing/drafts",
+            json={
+                "category_id": "123",
+                "schema_data": SCHEMA_XML,
+                "fields": {
+                    "category_id": {"value": "123", "source": "user_confirmed"},
+                    "productTitle": {
+                        "value": "AI title",
+                        "source": "ai_generated",
+                        "requires_confirmation": False,
+                    },
+                },
+            },
+        )
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["confirmation_fields"] == ["productTitle"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_official_listing_batch_isolates_source_validation_failures() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+
+        def item(reference: str, source: str) -> dict[str, object]:
+            return {
+                "reference": reference,
+                "category_id": "123",
+                "schema_data": SCHEMA_XML,
+                "fields": {
+                    "category_id": {"value": "123", "source": "user_confirmed"},
+                    "productTitle": {"value": reference, "source": source},
+                },
+            }
+
+        response = client.post(
+            "/api/v1/products/official-listing/batch/drafts",
+            json={
+                "items": [
+                    item("trusted", "user_confirmed"),
+                    item("ai-candidate", "ai_generated"),
+                ],
+                "concurrency": 2,
+            },
+        )
+        assert response.status_code == 200
+        assert [entry["reference"] for entry in response.json()] == [
+            "trusted",
+            "ai-candidate",
+        ]
+        assert response.json()[0]["success"] is True
+        assert response.json()[1]["success"] is False
+        assert '"confirmation_fields":["productTitle"]' in response.json()[1]["error"]
+
+        unconfirmed = client.post(
+            "/api/v1/products/official-listing/batch/publish",
+            json={"items": [item("trusted", "user_confirmed")]},
+        )
+        assert unconfirmed.status_code == 409
+    finally:
+        app.dependency_overrides.clear()

@@ -82,6 +82,12 @@
 | Schema 填值 | 本地写入实时 Schema XML | `POST /api/v1/alibaba/schemas/build` | 已实现；支持标量、多值、复合、多复合和值属性，返回字段级错误 |
 | 官方流程清单 | 后台 Bulk Upload/Posting 流程 | `GET /api/v1/alibaba/listing-flow` | 已实现；用于前端/任务编排对标 |
 | 官方字段校验 | 本地校验 + Schema 规则 | `POST /api/v1/products/official-listing/validate` | 已实现；合并动态必填项和 AI 字段边界 |
+| 字段来源矩阵 | 店铺默认值 + 单品资料 | `GET /api/v1/alibaba/listing-field-matrix` | 已实现；按全店/单品和 AI 辅助/可信来源分为四组 |
+| 安全 XML 准备 | 本地来源门禁 + Schema 填值 | `POST /api/v1/products/official-listing/prepare` | 已实现；只继承白名单店铺默认值，AI 候选必须转为用户确认 |
+| 安全草稿 | 逐商品来源校验后调用草稿接口 | `POST /api/v1/products/official-listing/drafts` | 已实现；服务端从带来源字段构建 XML |
+| 安全批量草稿 | 逐商品来源校验后调用草稿接口 | `POST /api/v1/products/official-listing/batch/drafts` | 已实现；最多 100 条、顺序保持、失败隔离 |
+| 安全正式发布 | 来源门禁 + 显式确认 | `POST /api/v1/products/official-listing/publish` | 已实现；AI/图片提取值不能绕过确认 |
+| 安全批量发布 | 逐商品来源门禁 + 显式确认 | `POST /api/v1/products/official-listing/batch/publish` | 已实现；最多 100 条、失败隔离 |
 | 图片银行分组 | `/icbu/product/photobank/group/list` | `GET /api/v1/alibaba/photo-bank/groups` | 已封装 |
 | 图片银行查询 | `/icbu/product/photobank/list` | `GET /api/v1/alibaba/photo-bank/images` | 已封装 |
 | 图片银行上传 | `/alibaba/icbu/photobank/upload` | `POST /api/v1/alibaba/photo-bank/images` | 已封装 |
@@ -126,6 +132,9 @@
 - 场景图、背景和排版提示词。
 - 已知参数的多语言改写。
 
+这些字段在 API 中仍标记为 `ai_generated`，只有用户确认后改为
+`user_confirmed` 才能进入官方安全草稿或发布接口。
+
 ### 可从图片提取，但必须带置信度
 
 - 可见颜色、花纹、形状、件数。
@@ -144,6 +153,10 @@
 - 认证、专利、商标和合规声明。
 - 原产地、港口、HS Code、产能、交期和物流。
 - 定制能力、售后条款和服务限制。
+
+全店通用的币种、计量单位、仓库、库存地点、图片银行分组、商品分组和运费模板
+可以保存为 `account_default`。白名单以外的字段不能使用店铺默认来源；价格、SKU、
+库存、材质、尺寸、重量、包装、交期和合规资料始终按单品校验。
 
 ## 公开依据
 

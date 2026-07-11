@@ -13,6 +13,10 @@
 - 官方上品流程接口：返回授权、类目、素材、字段填写、草稿预览、审核和发布后维护步骤
 - 商品图 AI 分析：只提取可观察信息，生成不改变商品事实的文案
 - 人工必填字段校验：价格、MOQ、材质、尺寸、认证、库存等禁止 AI 猜测
+- 四象限字段矩阵：区分全店通用/每商品、AI 辅助/可信来源专属字段
+- 店铺默认值继承：只允许币种、单位、仓库、运费模板等白名单字段复用
+- 来源强制门禁：AI/图片提取值即使漏标 `requires_confirmation` 也不能进入草稿
+- 官方安全写入接口：从带来源的字段构建实时 Schema XML，再创建草稿或确认发布
 - OpenAI 兼容的文生图和参考商品图编辑接口；参考图编辑强制人工确认
 
 详细 API 调研见 [docs/alibaba-api-matrix.md](docs/alibaba-api-matrix.md)。
@@ -57,6 +61,20 @@ Copy-Item .env.example .env
 - `POST /api/v1/alibaba/schemas/parse`：解析 `schema.get` 返回的 XML，输出字段、规则、枚举、必填项和人工确认字段。
 - `POST /api/v1/alibaba/schemas/build`：把字段值写入实时 Schema XML，执行动态规则并返回字段级错误。
 - `POST /api/v1/products/official-listing/validate`：把官方 Schema 必填项与字段来源策略合并校验，并返回按官方流程分组的缺失清单。
+- `GET /api/v1/alibaba/listing-field-matrix`：返回全店通用/每商品和 AI 辅助/可信来源专属的四组字段。
+- `POST /api/v1/products/official-listing/prepare`：合并合法店铺默认值、校验来源并生成可提交 XML。
+- `POST /api/v1/products/official-listing/drafts`：只为通过来源和 Schema 校验的单品创建草稿。
+- `POST /api/v1/products/official-listing/batch/drafts`：逐商品校验并创建最多 100 个草稿，失败隔离。
+- `POST /api/v1/products/official-listing/publish`：通过同一门禁并显式确认后正式发布。
+- `POST /api/v1/products/official-listing/batch/publish`：显式确认后逐商品发布，保持顺序并隔离失败。
+
+## 字段来源规则
+
+- `image_extracted`、`ai_generated` 永远只是候选，不能直接创建草稿或正式发布。
+- 用户确认 AI 候选后，来源必须改为 `user_confirmed`。
+- `account_default` 只允许用于全店白名单字段，不能提供单品价格、SKU、库存、材质、尺寸、重量、认证等事实。
+- `user_provided`、`user_confirmed`、`business_system` 可作为可信单品来源。
+- 同款商品可以继承已确认的公共事实，但每个 SKU 的价格、库存、尺寸、重量和包装仍须逐项校验。
 
 ## 安全边界
 

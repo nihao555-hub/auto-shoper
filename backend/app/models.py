@@ -8,7 +8,19 @@ class FieldSource(StrEnum):
     IMAGE_EXTRACTED = "image_extracted"
     AI_GENERATED = "ai_generated"
     USER_PROVIDED = "user_provided"
+    USER_CONFIRMED = "user_confirmed"
     BUSINESS_SYSTEM = "business_system"
+    ACCOUNT_DEFAULT = "account_default"
+
+
+class FieldScope(StrEnum):
+    STORE = "store"
+    PRODUCT = "product"
+
+
+class FieldInputMode(StrEnum):
+    AI_ASSISTED = "ai_assisted"
+    TRUSTED_ONLY = "trusted_only"
 
 
 class DraftField(BaseModel):
@@ -25,6 +37,20 @@ class ManualRequirement(BaseModel):
     reason: str
 
 
+class ListingFieldDefinition(ManualRequirement):
+    aliases: list[str] = Field(default_factory=list)
+
+
+class ListingFieldGroup(BaseModel):
+    key: str
+    label: str
+    scope: FieldScope
+    input_mode: FieldInputMode
+    fields: list[ListingFieldDefinition]
+    allowed_sources: list[FieldSource]
+    confirmation_rule: str
+
+
 class ProductImageAnalysis(BaseModel):
     observed_fields: dict[str, DraftField]
     generated_fields: dict[str, DraftField]
@@ -35,6 +61,7 @@ class ProductImageAnalysis(BaseModel):
 
 class ProductValidationRequest(BaseModel):
     fields: dict[str, DraftField]
+    account_defaults: dict[str, DraftField] = Field(default_factory=dict)
     schema_required_fields: list[str] = Field(default_factory=list)
     schema_data: dict[str, Any] | str | None = None
 
@@ -43,6 +70,7 @@ class ProductValidationResult(BaseModel):
     ready_to_publish: bool
     missing_fields: list[str]
     invalid_ai_fields: list[str]
+    invalid_default_fields: list[str]
     confirmation_fields: list[str]
 
 
@@ -183,9 +211,51 @@ class OfficialListingStep(BaseModel):
 
 class OfficialListingFlowResponse(BaseModel):
     steps: list[OfficialListingStep]
+    field_groups: list[ListingFieldGroup]
     ai_can_generate: list[str]
     ai_requires_confirmation: list[str]
     must_be_user_or_business_system: list[str]
+
+
+class OfficialListingPrepareRequest(ProductValidationRequest):
+    category_id: str
+    schema_data: dict[str, Any] | str
+    language: Literal["en_US", "zh", "zh_TW"] = "en_US"
+
+
+class OfficialListingPublishRequest(OfficialListingPrepareRequest):
+    confirmed_by_user: bool = False
+
+
+class OfficialListingBatchItem(OfficialListingPrepareRequest):
+    reference: str = Field(min_length=1, max_length=200)
+
+
+class OfficialListingBatchRequest(BaseModel):
+    items: list[OfficialListingBatchItem] = Field(min_length=1, max_length=100)
+    concurrency: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("items")
+    @classmethod
+    def official_references_must_be_unique(
+        cls,
+        items: list[OfficialListingBatchItem],
+    ) -> list[OfficialListingBatchItem]:
+        references = [item.reference for item in items]
+        if len(references) != len(set(references)):
+            raise ValueError("Batch item references must be unique")
+        return items
+
+
+class OfficialListingBatchPublishRequest(OfficialListingBatchRequest):
+    confirmed_by_user: bool = False
+
+
+class OfficialListingPreparationResult(OfficialListingValidationResult):
+    ready_to_draft: bool
+    xml: str | None = None
+    schema_errors: list[SchemaValidationIssue]
+    schema_warnings: list[SchemaValidationIssue]
 
 
 class AlibabaInventoryUpdateRequest(BaseModel):

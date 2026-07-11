@@ -24,7 +24,13 @@ from backend.app.models import (
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
     ImageGenerationRequest,
+    ListingFieldGroup,
+    OfficialListingBatchPublishRequest,
+    OfficialListingBatchRequest,
     OfficialListingFlowResponse,
+    OfficialListingPreparationResult,
+    OfficialListingPrepareRequest,
+    OfficialListingPublishRequest,
     OfficialListingValidationResult,
     ProductImageAnalysis,
     ProductValidationRequest,
@@ -34,8 +40,16 @@ from backend.app.models import (
     SchemaParseRequest,
     SchemaParseResult,
 )
-from backend.app.services.field_policy import validate_product_fields
-from backend.app.services.official_listing import build_official_checklist, official_listing_flow
+from backend.app.services.field_policy import (
+    effective_listing_fields,
+    get_listing_field,
+    validate_product_fields,
+)
+from backend.app.services.official_listing import (
+    build_official_checklist,
+    listing_field_groups,
+    official_listing_flow,
+)
 from backend.app.services.schema_rules import (
     SchemaParseError,
     manual_schema_fields,
@@ -67,6 +81,11 @@ async def alibaba_operations() -> list[dict[str, Any]]:
 @router.get("/alibaba/listing-flow", response_model=OfficialListingFlowResponse)
 async def get_official_listing_flow() -> OfficialListingFlowResponse:
     return official_listing_flow()
+
+
+@router.get("/alibaba/listing-field-matrix", response_model=list[ListingFieldGroup])
+async def get_listing_field_matrix() -> list[ListingFieldGroup]:
+    return listing_field_groups()
 
 
 @router.get("/alibaba/categories/{category_id}")
@@ -391,7 +410,12 @@ async def validate_product(request: ProductValidationRequest) -> ProductValidati
         manual_fields = manual_schema_fields(request.schema_data)
     except SchemaParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return validate_product_fields(request.fields, required_fields, manual_fields)
+    return validate_product_fields(
+        request.fields,
+        required_fields,
+        manual_fields,
+        request.account_defaults,
+    )
 
 
 @router.post("/products/official-listing/validate", response_model=OfficialListingValidationResult)
@@ -406,16 +430,106 @@ async def validate_official_listing(
         manual_fields = manual_schema_fields(request.schema_data)
     except SchemaParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    result = validate_product_fields(request.fields, required_fields, manual_fields)
+    result = validate_product_fields(
+        request.fields,
+        required_fields,
+        manual_fields,
+        request.account_defaults,
+    )
+    effective = effective_listing_fields(request.fields, request.account_defaults)
     return OfficialListingValidationResult(
         ready_to_publish=result.ready_to_publish,
         missing_fields=result.missing_fields,
         invalid_ai_fields=result.invalid_ai_fields,
+        invalid_default_fields=result.invalid_default_fields,
         confirmation_fields=result.confirmation_fields,
         schema_required_fields=required_fields,
         manual_confirmation_fields=manual_fields,
-        checklist=build_official_checklist(request.fields, required_fields),
+        checklist=build_official_checklist(effective, required_fields),
     )
+
+
+@router.post(
+    "/products/official-listing/prepare",
+    response_model=OfficialListingPreparationResult,
+)
+async def prepare_official_listing(
+    request: OfficialListingPrepareRequest,
+) -> OfficialListingPreparationResult:
+    try:
+        return _prepare_official_listing(request)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/products/official-listing/drafts")
+async def create_official_listing_draft(
+    request: OfficialListingPrepareRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    prepared = _require_prepared_listing(request)
+    return await _alibaba_call(
+        client,
+        "draft_create",
+        {
+            "param_product_top_publish_request": {
+                "language": request.language,
+                "cat_id": request.category_id,
+                "xml": prepared.xml,
+            }
+        },
+    )
+
+
+@router.post(
+    "/products/official-listing/batch/drafts",
+    response_model=list[AlibabaBatchResult],
+)
+async def create_official_listing_batch_drafts(
+    request: OfficialListingBatchRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> list[AlibabaBatchResult]:
+    return await _batch_official_listing_call(client, "draft_create", request)
+
+
+@router.post("/products/official-listing/publish")
+async def publish_official_listing(
+    request: OfficialListingPublishRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    if not request.confirmed_by_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Formal publishing requires confirmed_by_user=true",
+        )
+    prepared = _require_prepared_listing(request)
+    return await _alibaba_call(
+        client,
+        "publish",
+        {
+            "publish_request": {
+                "language": request.language,
+                "cat_id": request.category_id,
+                "xml": prepared.xml,
+            }
+        },
+    )
+
+
+@router.post(
+    "/products/official-listing/batch/publish",
+    response_model=list[AlibabaBatchResult],
+)
+async def publish_official_listing_batch(
+    request: OfficialListingBatchPublishRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> list[AlibabaBatchResult]:
+    if not request.confirmed_by_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Batch publishing requires confirmed_by_user=true",
+        )
+    return await _batch_official_listing_call(client, "publish", request)
 
 
 @router.post("/images/generate")
@@ -520,6 +634,148 @@ def _validated_submission_xml(xml: str) -> str:
         for issue in result.errors
     )
     raise SchemaParseError(f"Alibaba Schema validation failed: {details}")
+
+
+def _prepare_official_listing(
+    request: OfficialListingPrepareRequest,
+) -> OfficialListingPreparationResult:
+    parsed = parse_schema_data(request.schema_data)
+    required_fields = merge_schema_required_fields(
+        request.schema_required_fields,
+        request.schema_data,
+    )
+    manual_fields = manual_schema_fields(request.schema_data)
+    validation = validate_product_fields(
+        request.fields,
+        required_fields,
+        manual_fields,
+        request.account_defaults,
+    )
+    effective = effective_listing_fields(request.fields, request.account_defaults)
+    category = get_listing_field(effective, "category_id") or get_listing_field(
+        effective,
+        "cat_id",
+    )
+    category_mismatch = (
+        category is not None
+        and category.value not in (None, "")
+        and str(category.value) != request.category_id
+    )
+    invalid_defaults = list(validation.invalid_default_fields)
+    if category_mismatch:
+        invalid_defaults.append("category_id")
+    top_level_ids = {field.id for field in parsed.fields}
+    values: dict[str, object] = {}
+    for field_id in top_level_ids:
+        field = get_listing_field(effective, field_id)
+        if field is not None and field.value not in (None, "", [], {}):
+            values[field_id] = field.value
+    schema = build_schema_xml(request.schema_data, values)
+    ready = (
+        validation.ready_to_publish
+        and not category_mismatch
+        and schema.ready_to_submit
+    )
+    return OfficialListingPreparationResult(
+        ready_to_publish=ready,
+        ready_to_draft=ready,
+        missing_fields=validation.missing_fields,
+        invalid_ai_fields=validation.invalid_ai_fields,
+        invalid_default_fields=sorted(set(invalid_defaults)),
+        confirmation_fields=validation.confirmation_fields,
+        schema_required_fields=required_fields,
+        manual_confirmation_fields=manual_fields,
+        checklist=build_official_checklist(effective, required_fields),
+        xml=schema.xml if schema.ready_to_submit else None,
+        schema_errors=schema.errors,
+        schema_warnings=schema.warnings,
+    )
+
+
+def _require_prepared_listing(
+    request: OfficialListingPrepareRequest,
+) -> OfficialListingPreparationResult:
+    try:
+        prepared = _prepare_official_listing(request)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if prepared.ready_to_draft and prepared.xml is not None:
+        return prepared
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "message": "Official listing is not ready for an Alibaba write operation",
+            "missing_fields": prepared.missing_fields,
+            "invalid_ai_fields": prepared.invalid_ai_fields,
+            "invalid_default_fields": prepared.invalid_default_fields,
+            "confirmation_fields": prepared.confirmation_fields,
+            "schema_errors": [item.model_dump() for item in prepared.schema_errors],
+        },
+    )
+
+
+async def _batch_official_listing_call(
+    client: AlibabaClient,
+    operation_key: str,
+    request: OfficialListingBatchRequest,
+) -> list[AlibabaBatchResult]:
+    semaphore = asyncio.Semaphore(request.concurrency)
+
+    async def process_item(index: int) -> tuple[int, AlibabaBatchResult]:
+        item = request.items[index]
+        async with semaphore:
+            try:
+                prepared = _prepare_official_listing(item)
+                if not prepared.ready_to_draft or prepared.xml is None:
+                    return index, AlibabaBatchResult(
+                        reference=item.reference,
+                        success=False,
+                        error=_preparation_error(prepared),
+                    )
+                response = await client.call(
+                    OPERATIONS[operation_key].operation,
+                    {
+                        (
+                            "param_product_top_publish_request"
+                            if operation_key == "draft_create"
+                            else "publish_request"
+                        ): {
+                            "language": item.language,
+                            "cat_id": item.category_id,
+                            "xml": prepared.xml,
+                        }
+                    },
+                )
+                return index, AlibabaBatchResult(
+                    reference=item.reference,
+                    success=True,
+                    response=response,
+                )
+            except (AlibabaAPIError, SchemaParseError) as exc:
+                return index, AlibabaBatchResult(
+                    reference=item.reference,
+                    success=False,
+                    error=str(exc),
+                )
+
+    indexed_results = await asyncio.gather(
+        *(process_item(index) for index in range(len(request.items)))
+    )
+    return [result for _, result in sorted(indexed_results)]
+
+
+def _preparation_error(prepared: OfficialListingPreparationResult) -> str:
+    return json.dumps(
+        {
+            "missing_fields": prepared.missing_fields,
+            "invalid_ai_fields": prepared.invalid_ai_fields,
+            "invalid_default_fields": prepared.invalid_default_fields,
+            "confirmation_fields": prepared.confirmation_fields,
+            "schema_errors": [item.model_dump() for item in prepared.schema_errors],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _validate_upload(image: UploadFile, content: bytes) -> None:
