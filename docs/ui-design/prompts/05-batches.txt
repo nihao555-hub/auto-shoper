@@ -1,0 +1,20 @@
+Using the supplied “上品台” design-system board as the strict visual reference, create the authenticated desktop “批次记录” page at 1536 × 1024.
+
+Layout:
+- Same left navigation with “批次记录” active.
+- Header with one primary “新建批次”.
+- Four summary numbers in a single border strip with dividers: 商品总数, 草稿成功, 已发布, 需要处理.
+- Toolbar has compact status tabs and search.
+- Main content is one flat operational table with columns: 批次, 商品, 完成度, 草稿, 已发布, 状态, 目标店铺, 更新时间, 操作.
+- Include five realistic rows: processing, ready, failed, complete, and scheduled. Failed row uses only a pale red background and inline reason.
+- Each batch explicitly shows its locked target Alibaba store.
+- A continuation action should read “继续处理”; a failed row should offer “查看 3 个失败项”.
+
+Add an annotation lane with Chinese callouts:
+1. “前端：列表按 workspace_id 查询，并返回锁定店铺摘要”
+2. “设计：异常使用淡红整行，不增加警告卡片”
+3. “前端：筛选、搜索、分页状态写入 URL”
+4. “设计：进度只用数字与细进度条”
+5. “前端：重试只处理失败商品，保持原顺序”
+
+All Chinese must be legible and correctly spelled.

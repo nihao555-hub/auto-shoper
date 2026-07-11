@@ -420,8 +420,10 @@ export default function App() {
           capabilities={capabilities}
           backendConnected={backendConnected}
           dataMode={dataMode}
+          activeStore={stores.find((store) => store.id === activeStoreId) ?? null}
           onNavigateWorkbench={() => navigate("workbench")}
           onNavigateBatches={() => navigate("batches")}
+          onNavigateStores={() => navigate("stores")}
         />
       ) : activeView === "stores" ? (
         <StoresPage

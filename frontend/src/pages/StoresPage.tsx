@@ -54,7 +54,7 @@ export function StoresPage({
           disabled={!authorizationEnabled}
         >
           <Plus size={18} weight="bold" />
-          {authorizationEnabled ? "添加店铺" : "等待平台配置"}
+          {authorizationEnabled ? "添加 Alibaba 店铺" : "等待平台配置"}
         </button>
       </header>
 
@@ -174,6 +174,13 @@ function StoreSummaryCard({
         hour12: false,
       }).format(new Date(store.last_sync_at))
     : "尚未同步";
+  const expiresAt = store.expires_at
+    ? new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(store.expires_at))
+    : "平台未返回";
 
   return (
     <article className={`store-summary-card ${active ? "is-active" : ""}`}>
@@ -189,6 +196,16 @@ function StoreSummaryCard({
           {store.expired ? "已过期" : active ? "当前店铺" : "已连接"}
         </span>
       </header>
+      <div className="store-authorization-meta">
+        <span>
+          授权有效期
+          <strong>{expiresAt}</strong>
+        </span>
+        <span>
+          草稿权限
+          <strong>{readinessLabel}</strong>
+        </span>
+      </div>
       <div className="store-summary-metrics">
         <div>
           <span>商品</span>

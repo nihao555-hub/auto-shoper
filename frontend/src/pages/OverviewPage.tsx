@@ -5,9 +5,17 @@ import {
   FileText,
   Package,
   PlugsConnected,
+  Storefront,
+  Swap,
   WarningCircle,
 } from "@phosphor-icons/react";
-import type { BatchRecord, CapabilityResponse, DataMode, ProductRecord } from "../types";
+import type {
+  AlibabaConnectedStore,
+  BatchRecord,
+  CapabilityResponse,
+  DataMode,
+  ProductRecord,
+} from "../types";
 
 type OverviewPageProps = {
   batches: BatchRecord[];
@@ -15,8 +23,10 @@ type OverviewPageProps = {
   capabilities: CapabilityResponse | null;
   backendConnected: boolean;
   dataMode: DataMode;
+  activeStore: AlibabaConnectedStore | null;
   onNavigateWorkbench: () => void;
   onNavigateBatches: () => void;
+  onNavigateStores: () => void;
 };
 
 const stageWeight: Record<ProductRecord["stage"], number> = {
@@ -38,8 +48,10 @@ export function OverviewPage({
   capabilities,
   backendConnected,
   dataMode,
+  activeStore,
   onNavigateWorkbench,
   onNavigateBatches,
+  onNavigateStores,
 }: OverviewPageProps) {
   const drafted = products.filter(
     (product) => product.stage === "drafted" || product.stage === "published",
@@ -91,6 +103,31 @@ export function OverviewPage({
           <span>后端服务未连接，上传与发布操作暂不可用。</span>
         </div>
       ) : null}
+
+      <section className="overview-store-context" aria-label="当前发布店铺">
+        <span className="overview-store-icon">
+          <Storefront size={19} />
+        </span>
+        <div>
+          <span>当前发布店铺</span>
+          <strong>
+            {activeStore
+              ? (activeStore.login_id ?? activeStore.account ?? activeStore.user_id)
+              : "尚未连接 Alibaba 店铺"}
+          </strong>
+        </div>
+        <span
+          className={`overview-store-readiness ${
+            activeStore?.draft_readiness === "ready" ? "is-ready" : ""
+          }`}
+        >
+          {activeStore?.draft_readiness === "ready" ? "可创建草稿" : "需要完成授权"}
+        </span>
+        <button type="button" className="text-button" onClick={onNavigateStores}>
+          <Swap size={15} />
+          {activeStore ? "切换店铺" : "前往授权"}
+        </button>
+      </section>
 
       <section className="overview-metrics" aria-label="工作区指标">
         <OverviewMetric

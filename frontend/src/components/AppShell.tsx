@@ -4,6 +4,7 @@ import {
   CaretDoubleRight,
   CaretDown,
   ChartBar,
+  DotsThree,
   GearSix,
   PlayCircle,
   SignOut,
@@ -32,13 +33,12 @@ type AppShellProps = PropsWithChildren<{
 const navItems: Array<{
   view: AppView;
   label: string;
-  description: string;
   icon: typeof UploadSimple;
 }> = [
-  { view: "overview", label: "总览", description: "状态与待办", icon: ChartBar },
-  { view: "stores", label: "店铺授权", description: "连接、同步与切换", icon: Storefront },
-  { view: "workbench", label: "批量上品", description: "创建与发布", icon: UploadSimple },
-  { view: "batches", label: "批次记录", description: "结果与重试", icon: Archive },
+  { view: "overview", label: "总览", icon: ChartBar },
+  { view: "stores", label: "店铺授权", icon: Storefront },
+  { view: "workbench", label: "批量上品", icon: UploadSimple },
+  { view: "batches", label: "批次记录", icon: Archive },
 ];
 
 const loadCollapsed = () => window.localStorage.getItem("auto-shoper-sidebar") === "collapsed";
@@ -58,6 +58,7 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   const toggleCollapsed = () => {
     const next = !collapsed;
@@ -75,7 +76,10 @@ export function AppShell({
           <button
             type="button"
             className="brand-mark"
-            onClick={() => onNavigate("overview")}
+            onClick={() => {
+              setAccountMenuOpen(false);
+              onNavigate("overview");
+            }}
             aria-label="返回总览"
           >
             <BrandMark />
@@ -122,58 +126,72 @@ export function AppShell({
               )}
             </div>
           </div>
-          {navItems.map(({ view, label, description, icon: Icon }) => (
+          {navItems.map(({ view, label, icon: Icon }) => (
             <button
               type="button"
               key={view}
               className={`rail-item ${activeView === view ? "is-active" : ""}`}
-              onClick={() => onNavigate(view)}
+              onClick={() => {
+                setAccountMenuOpen(false);
+                onNavigate(view);
+              }}
               aria-current={activeView === view ? "page" : undefined}
               title={collapsed ? label : undefined}
             >
               <Icon size={20} weight={activeView === view ? "fill" : "regular"} />
-              <span className="rail-item-copy">
-                <strong>{label}</strong>
-                <small>{description}</small>
-              </span>
+              <span className="rail-label">{label}</span>
             </button>
           ))}
         </nav>
 
         <div className="rail-bottom">
-          <button
-            type="button"
-            className={`demo-mode-control ${dataMode === "demo" ? "is-active" : ""}`}
-            onClick={() => onDataModeChange(dataMode === "demo" ? "live" : "demo")}
-            title={collapsed ? (dataMode === "demo" ? "退出演示" : "查看演示") : undefined}
-          >
-            <PlayCircle size={20} weight={dataMode === "demo" ? "fill" : "regular"} />
-            <span className="rail-item-copy">
-              <strong>{dataMode === "demo" ? "退出演示" : "查看演示"}</strong>
-              <small>{dataMode === "demo" ? "切回真实工作区" : "使用隔离示例数据"}</small>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className="rail-item settings-item"
-            onClick={onOpenSettings}
-            title={collapsed ? "商家资产" : undefined}
-          >
-            <GearSix size={20} />
-            <span className="rail-item-copy">
-              <strong>商家资产</strong>
-              <small>资料与批次偏好</small>
-            </span>
-          </button>
-          <div className="rail-account">
-            <span>{user.display_name.slice(0, 1)}</span>
-            <div className="rail-item-copy">
-              <strong>{user.display_name}</strong>
-              <small>{user.email}</small>
-            </div>
-            <button type="button" onClick={onLogout} aria-label="退出登录" title="退出登录">
-              <SignOut size={18} />
+          <div className={`rail-account-menu ${accountMenuOpen ? "is-open" : ""}`}>
+            {accountMenuOpen ? (
+              <div className="account-popover">
+                <div className="account-popover-heading">
+                  <strong>{user.display_name}</strong>
+                  <span>{user.email}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    onOpenSettings();
+                  }}
+                >
+                  <GearSix size={17} />
+                  商家资产
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    onDataModeChange(dataMode === "demo" ? "live" : "demo");
+                  }}
+                >
+                  <PlayCircle size={17} />
+                  {dataMode === "demo" ? "切回真实工作区" : "查看隔离演示"}
+                </button>
+                <button type="button" className="is-danger" onClick={onLogout}>
+                  <SignOut size={17} />
+                  退出登录
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              className="rail-account-trigger"
+              onClick={() => setAccountMenuOpen((open) => !open)}
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              title={collapsed ? user.display_name : undefined}
+            >
+              <span className="account-avatar">{user.display_name.slice(0, 1)}</span>
+              <span className="rail-account-copy">
+                <strong>{user.display_name}</strong>
+                <small>{dataMode === "demo" ? "隔离演示" : "真实工作区"}</small>
+              </span>
+              <DotsThree size={20} weight="bold" />
             </button>
           </div>
         </div>

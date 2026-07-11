@@ -1,0 +1,22 @@
+Using the supplied “上品台” design-system board as the strict visual reference, create the desktop login and invite-only registration page at 1536 × 1024.
+
+Layout:
+- Left 58%: one quiet, premium operational still-life showing product photography, packaging sheets, a laptop with a restrained listing workflow, and subtle cross-border commerce cues. Warm natural light, desaturated, realistic, no futuristic AI imagery.
+- Right 42%: clean authentication panel on warm bone.
+- Show the registration state because it contains the full requirement: 姓名, 工作区名称, 工作邮箱, 密码, 注册码, primary button “创建独立工作区”.
+- A small two-tab control for “登录 / 注册”, with 注册 active.
+- Plain-language security proof: “密码安全哈希 · Token 加密存储 · 店铺数据隔离”.
+- Brand name “上品台” and subtitle “Alibaba 国际站商品发布工作区”.
+
+Restraint:
+- No gradient overlay, no floating glass card, no glowing illustration, no oversized slogan, no excessive trust badges.
+- Form width around 420px, 48px controls, 8px radius, clear labels, strong focus state.
+
+Add a narrow annotation lane on the far right with numbered Chinese callouts:
+1. “设计：业务图只传达真实上品流程，不使用 AI 科幻隐喻”
+2. “前端：注册与登录共用字段组件和错误态”
+3. “前端：注册码一次性消费，错误就地显示”
+4. “设计：主按钮只保留一个”
+5. “前端：移动端隐藏左图，保留品牌摘要”
+
+All Chinese must be legible and correctly spelled.
