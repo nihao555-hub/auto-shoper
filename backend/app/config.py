@@ -35,7 +35,6 @@ class Settings(BaseSettings):
             "ALIBABA_AUTHORIZE_URL",
         ),
     )
-    alibaba_oauth_token_url: str = "https://eco.taobao.com/router/rest"
     alibaba_oauth_redirect_uri: str | None = None
     alibaba_oauth_success_url: str = "http://localhost:5173/#/overview?alibaba=connected"
     alibaba_oauth_error_url: str = "http://localhost:5173/#/overview?alibaba=error"

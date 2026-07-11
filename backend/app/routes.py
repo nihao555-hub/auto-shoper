@@ -415,11 +415,9 @@ async def list_photos(
         client,
         "photo_list",
         {
-            "request": {
-                "groupId": group_id,
-                "currentPage": current_page,
-                "pageSize": page_size,
-            }
+            "groupId": group_id,
+            "currentPage": current_page,
+            "pageSize": page_size,
         },
     )
 

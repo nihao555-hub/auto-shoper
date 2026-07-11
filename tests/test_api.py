@@ -307,7 +307,7 @@ def test_schema_update_and_photo_bank_queries() -> None:
 
         images = client.get("/api/v1/alibaba/photo-bank/images?group_id=group-1")
         assert images.status_code == 200
-        assert images.json()["parameters"]["request"]["groupId"] == "group-1"
+        assert images.json()["parameters"]["groupId"] == "group-1"
 
         uploaded = client.post(
             "/api/v1/alibaba/photo-bank/images",

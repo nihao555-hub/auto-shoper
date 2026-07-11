@@ -1,17 +1,21 @@
 import base64
 import hashlib
 import hmac
-import json
 import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 
+from backend.app.clients.alibaba import AlibabaClient
 from backend.app.config import Settings, get_settings
+
+TOKEN_CREATE_OPERATION = "/auth/token/create"
+TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
 
 
 class AlibabaOAuthError(RuntimeError):
@@ -24,16 +28,22 @@ class AlibabaOAuthToken:
     refresh_token: str | None
     user_id: str | None
     expires_at: datetime | None
+    login_id: str | None = None
+    account: str | None = None
+    refresh_expires_at: datetime | None = None
 
 
 class AlibabaOAuthStore:
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._token: AlibabaOAuthToken | None = None
+        self._tokens: dict[str, AlibabaOAuthToken] = {}
+        self._active_key: str | None = None
 
     @property
     def token(self) -> AlibabaOAuthToken | None:
-        return self._token
+        if self._active_key is None:
+            return None
+        return self._tokens.get(self._active_key)
 
     def create_authorization_url(self, settings: Settings) -> str:
         if not settings.has_alibaba_oauth_app:
@@ -54,64 +64,107 @@ class AlibabaOAuthStore:
         )
         return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
-    async def exchange_code(self, code: str, state: str, settings: Settings) -> None:
+    async def exchange_code(self, code: str, state: str, settings: Settings) -> AlibabaOAuthToken:
         if not settings.has_alibaba_oauth_app:
             raise AlibabaOAuthError(
                 settings.alibaba_oauth_configuration_error or "Alibaba OAuth 配置无效"
             )
         self._validate_state(state, settings)
+        payload = await self._request_token(
+            settings, TOKEN_CREATE_OPERATION, {"code": code}
+        )
+        return self._store_token(payload)
 
-        params = {
+    async def refresh(self, user_id: str, settings: Settings) -> AlibabaOAuthToken:
+        token = self._tokens.get(user_id)
+        if token is None or not token.refresh_token:
+            raise AlibabaOAuthError("该商家没有可用的 refresh token")
+        payload = await self._request_token(
+            settings, TOKEN_REFRESH_OPERATION, {"refresh_token": token.refresh_token}
+        )
+        return self._store_token(payload)
+
+    async def _request_token(
+        self, settings: Settings, operation: str, extra: dict[str, str]
+    ) -> dict[str, Any]:
+        params: dict[str, str] = {
             "app_key": settings.alibaba_app_key or "",
-            "code": code,
             "format": "json",
-            "method": "taobao.top.auth.token.create",
-            "sign_method": "md5",
-            "timestamp": datetime.now(timezone(timedelta(hours=8))).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            "v": "2.0",
+            "method": operation,
+            "sign_method": "sha256",
+            "simplify": "true",
+            "partner_id": "auto-shoper",
+            "timestamp": str(int(time.time() * 1000)),
         }
-        canonical = "".join(f"{key}{value}" for key, value in sorted(params.items()))
-        secret = settings.alibaba_app_secret or ""
-        params["sign"] = hashlib.md5(
-            f"{secret}{canonical}{secret}".encode(),
-            usedforsecurity=False,
-        ).hexdigest().upper()
-
+        params.update({key: str(value) for key, value in extra.items()})
+        params["sign"] = AlibabaClient.generate_signature(
+            params, settings.alibaba_app_secret or "", operation
+        )
+        url = settings.alibaba_api_base_url.rstrip("/")
         async with httpx.AsyncClient(timeout=settings.alibaba_timeout_seconds) as client:
-            response = await client.post(settings.alibaba_oauth_token_url, data=params)
+            response = await client.post(url, data=params)
         try:
             payload = response.json()
         except ValueError as exc:
             raise AlibabaOAuthError("Alibaba token endpoint returned non-JSON") from exc
-        if response.is_error or "error_response" in payload:
-            error = payload.get("error_response", payload)
-            message = error.get("sub_msg") or error.get("msg") or "token exchange failed"
+        if not isinstance(payload, dict):
+            raise AlibabaOAuthError("Alibaba token response was not an object")
+        code = payload.get("code")
+        if (code not in (None, "0", 0)) or not payload.get("access_token"):
+            message = (
+                payload.get("message")
+                or payload.get("error_description")
+                or "token exchange failed"
+            )
             raise AlibabaOAuthError(f"Alibaba OAuth error: {message}")
+        return payload
 
-        token_result = payload.get("top_auth_token_create_response", {}).get("token_result")
-        if isinstance(token_result, str):
-            token_result = json.loads(token_result)
-        if not isinstance(token_result, dict) or not token_result.get("access_token"):
-            raise AlibabaOAuthError("Alibaba token response did not include an access token")
-
-        expires_in = token_result.get("expires_in")
-        self._token = AlibabaOAuthToken(
-            access_token=str(token_result["access_token"]),
-            refresh_token=(
-                str(token_result["refresh_token"]) if token_result.get("refresh_token") else None
-            ),
-            user_id=str(token_result["user_id"]) if token_result.get("user_id") else None,
-            expires_at=(
-                self._clock() + timedelta(seconds=int(expires_in))
-                if expires_in
-                else None
-            ),
+    def _store_token(self, payload: dict[str, Any]) -> AlibabaOAuthToken:
+        user_info = payload.get("user_info")
+        if not isinstance(user_info, dict):
+            user_info = {}
+        user_id = self._optional_str(user_info.get("user_id") or payload.get("user_id"))
+        token = AlibabaOAuthToken(
+            access_token=str(payload["access_token"]),
+            refresh_token=self._optional_str(payload.get("refresh_token")),
+            user_id=user_id,
+            expires_at=self._expiry(payload.get("expires_in")),
+            login_id=self._optional_str(user_info.get("loginId")),
+            account=self._optional_str(payload.get("account")),
+            refresh_expires_at=self._expiry(payload.get("refresh_expires_in")),
         )
+        key = user_id or "default"
+        self._tokens[key] = token
+        self._active_key = key
+        return token
+
+    def _expiry(self, seconds: Any) -> datetime | None:
+        if not seconds:
+            return None
+        return self._clock() + timedelta(seconds=int(seconds))
+
+    @staticmethod
+    def _optional_str(value: Any) -> str | None:
+        return str(value) if value else None
+
+    def connected_stores(self) -> list[dict[str, Any]]:
+        stores: list[dict[str, Any]] = []
+        for key, token in self._tokens.items():
+            expired = bool(token.expires_at and token.expires_at <= self._clock())
+            stores.append(
+                {
+                    "user_id": token.user_id,
+                    "login_id": token.login_id,
+                    "account": token.account,
+                    "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+                    "expired": expired,
+                    "active": key == self._active_key,
+                }
+            )
+        return stores
 
     def status(self, settings: Settings) -> dict[str, Any]:
-        token = self._token
+        token = self.token
         token_expired = bool(token and token.expires_at and token.expires_at <= self._clock())
         environment_connected = settings.has_alibaba_credentials
         oauth_connected = bool(
@@ -151,6 +204,7 @@ class AlibabaOAuthStore:
             "expires_at": token.expires_at.isoformat() if token and token.expires_at else None,
             "configuration_error": configuration_error,
             "redirect_uri": settings.alibaba_oauth_redirect_uri,
+            "stores": self.connected_stores(),
         }
 
     def _create_state(self, settings: Settings) -> str:

@@ -57,12 +57,17 @@ Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到�
 3. 后端配置 `ALIBABA_APP_KEY`、`ALIBABA_APP_SECRET`、
    `ALIBABA_OAUTH_REDIRECT_URI`、`ALIBABA_OAUTH_SUCCESS_URL` 和
    `ALIBABA_OAUTH_ERROR_URL`。
-4. 商家在设置页点击授权；后端生成 10 分钟有效的签名 `state`，跳转 Alibaba，
-   回调验证 `state` 后使用授权码交换 token。
+4. 任意商家在设置页「店铺连接」点击「登录并授权店铺」，后端生成 10 分钟有效的签名 `state`，
+   跳转 Alibaba 登录授权；回调验证 `state` 后向新版 GOP 网关
+   （`ALIBABA_API_BASE_URL` 的 `/auth/token/create`）用授权码交换 token。
+5. token 按商家 `user_id` 分别保存，可同时连接多个店铺；设置页会列出已授权店铺。
 
-AppSecret、AccessToken 和 RefreshToken 只能保存在后端。当前 OAuth token store 仍是单进程、
-单店内存实现；多商家生产环境必须先接入应用账号体系，以登录用户的租户 ID 绑定加密持久化
-token，并实现 refresh token 轮换、撤权和审计。不能用前端传入的商家 ID 代替身份认证。
+Token 交换使用新版开放平台 GOP 网关（`/auth/token/create`、`/auth/token/refresh`，
+HMAC-SHA256 签名），不再走旧版 TOP `eco.taobao.com` 网关。
+
+AppSecret、AccessToken 和 RefreshToken 只能保存在后端。当前多商家 token store 仍是单进程
+内存实现（按 `user_id` 分租户）；生产环境还需把 token 加密持久化、接入应用账号体系绑定登录
+用户身份，并实现 refresh token 自动轮换、撤权和审计。不能用前端传入的商家 ID 代替身份认证。
 
 ### 生产构建
 

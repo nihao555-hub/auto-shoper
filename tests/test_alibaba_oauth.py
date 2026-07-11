@@ -1,10 +1,103 @@
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from backend.app.config import Settings
+from backend.app.services import alibaba_oauth as oauth_module
 from backend.app.services.alibaba_oauth import AlibabaOAuthError, AlibabaOAuthStore
+
+
+def _oauth_settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        alibaba_app_key="app-key",
+        alibaba_app_secret="app-secret",
+        alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
+        alibaba_api_base_url="https://gateway.example.com/rest",
+    )
+
+
+def _mock_token_client(
+    monkeypatch: pytest.MonkeyPatch, payloads: list[dict[str, object]]
+) -> list[httpx.Request]:
+    captured: list[httpx.Request] = []
+    queue = list(payloads)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=queue.pop(0))
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        oauth_module.httpx,
+        "AsyncClient",
+        lambda **_: real_async_client(transport=transport),
+    )
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_exchange_code_uses_gop_gateway_and_stores_multiple_merchants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _oauth_settings()
+    store = AlibabaOAuthStore()
+    captured = _mock_token_client(
+        monkeypatch,
+        [
+            {
+                "access_token": "AT-A",
+                "refresh_token": "RT-A",
+                "expires_in": 3600,
+                "user_info": {"user_id": "111", "loginId": "merchant-a"},
+                "account": "a@example.com",
+                "code": "0",
+            },
+            {
+                "access_token": "AT-B",
+                "refresh_token": "RT-B",
+                "expires_in": 3600,
+                "user_info": {"user_id": "222", "loginId": "merchant-b"},
+                "code": "0",
+            },
+        ],
+    )
+
+    state_a = store._create_state(settings)
+    token_a = await store.exchange_code("code-a", state_a, settings)
+    state_b = store._create_state(settings)
+    token_b = await store.exchange_code("code-b", state_b, settings)
+
+    assert token_a.access_token == "AT-A"
+    assert token_b.user_id == "222"
+    assert str(captured[0].url) == "https://gateway.example.com/rest"
+    body = captured[0].content.decode()
+    assert "method=%2Fauth%2Ftoken%2Fcreate" in body
+    assert "code=code-a" in body
+
+    status = store.status(settings)
+    assert status["user_id"] == "222"
+    assert {entry["login_id"] for entry in status["stores"]} == {"merchant-a", "merchant-b"}
+    assert sum(1 for entry in status["stores"] if entry["active"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_exchange_code_raises_on_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _oauth_settings()
+    store = AlibabaOAuthStore()
+    _mock_token_client(
+        monkeypatch,
+        [{"code": "InvalidCode", "type": "ISP", "message": "Invalid authorization code"}],
+    )
+
+    state = store._create_state(settings)
+    with pytest.raises(AlibabaOAuthError, match="Invalid authorization code"):
+        await store.exchange_code("bad-code", state, settings)
 
 
 def test_authorization_url_uses_icbu_server_flow() -> None:

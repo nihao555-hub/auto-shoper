@@ -127,6 +127,15 @@ export type CapabilityResponse = {
   model_credentials_configured: boolean;
 };
 
+export type AlibabaConnectedStore = {
+  user_id: string | null;
+  login_id: string | null;
+  account: string | null;
+  expires_at: string | null;
+  expired: boolean;
+  active: boolean;
+};
+
 export type AlibabaOAuthStatus = {
   oauth_configured: boolean;
   connected: boolean;
@@ -136,6 +145,7 @@ export type AlibabaOAuthStatus = {
   expires_at: string | null;
   configuration_error: string | null;
   redirect_uri: string | null;
+  stores: AlibabaConnectedStore[];
 };
 
 export type ListingFieldGroup = {

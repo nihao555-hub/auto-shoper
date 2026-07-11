@@ -10,7 +10,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import type { CapabilityResponse, StoreSettings } from "../types";
+import { getAlibabaOAuthStatus } from "../api";
+import type { AlibabaConnectedStore, CapabilityResponse, StoreSettings } from "../types";
 
 type SettingsDrawerProps = {
   open: boolean;
@@ -45,6 +46,7 @@ export function SettingsDrawer({
 }: SettingsDrawerProps) {
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<SettingsSection>("trade");
+  const [stores, setStores] = useState<AlibabaConnectedStore[]>([]);
   const connectionState = capabilities?.alibaba_connection_state ?? "unconfigured";
   const connectionLabel = {
     unconfigured: "平台未配置",
@@ -76,6 +78,27 @@ export function SettingsDrawer({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open || section !== "connection") {
+      return;
+    }
+    let active = true;
+    getAlibabaOAuthStatus()
+      .then((status) => {
+        if (active) {
+          setStores(status.stores ?? []);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setStores([]);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, section]);
 
   useEffect(() => {
     if (!open) {
@@ -261,6 +284,25 @@ export function SettingsDrawer({
                     <small>授权完成后返回：{capabilities.alibaba_oauth_redirect_uri}</small>
                   ) : null}
                 </div>
+                {stores.length > 0 ? (
+                  <div className="connected-stores">
+                    <strong>已授权店铺（{stores.length}）</strong>
+                    <ul>
+                      {stores.map((store) => (
+                        <li key={store.user_id ?? store.login_id ?? "default"}>
+                          <span className="store-name">
+                            {store.login_id ?? store.account ?? store.user_id ?? "未知商家"}
+                          </span>
+                          <span
+                            className={`store-badge ${store.expired ? "is-expired" : "is-active"}`}
+                          >
+                            {store.expired ? "授权过期" : store.active ? "当前使用" : "已连接"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </>
             ) : null}
 
