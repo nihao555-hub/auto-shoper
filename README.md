@@ -1,6 +1,6 @@
-# auto-shoper 后端
+# auto-shoper
 
-阿里巴巴国际站自动上品与 AI 生图后端。本阶段不包含前端，也不包含需求文档中的“销售专家”模块。
+阿里巴巴国际站自动上品、AI 商品内容与商家上品工作台。当前不包含需求文档中的“销售专家”模块。
 
 ## 已实现范围
 
@@ -18,27 +18,60 @@
 - 来源强制门禁：AI/图片提取值即使漏标 `requires_confirmation` 也不能进入草稿
 - 官方安全写入接口：从带来源的字段构建实时 Schema XML，再创建草稿或确认发布
 - OpenAI 兼容的文生图和参考商品图编辑接口；参考图编辑强制人工确认
+- 两个主页面的商家前端：批量上品工作台、批次记录
+- 店铺默认配置抽屉、商品动态资料检查器和五步安全发布流程
+- 演示数据与真实 API 明确隔离，正式发布必须二次确认
 
 详细 API 调研见 [docs/alibaba-api-matrix.md](docs/alibaba-api-matrix.md)。
 
-## 本地启动
+## 本地开发
 
-```powershell
+### 后端
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
+.venv/bin/python -m pip install -e ".[dev]"
+cp .env.example .env
+.venv/bin/python -m uvicorn backend.app.main:app --reload
 ```
 
 访问 `http://127.0.0.1:8000/docs` 查看 OpenAPI 文档。
 
-## 测试
+Windows PowerShell 将 `.venv/bin/python` 替换为 `.venv\Scripts\python.exe`，将 `cp` 替换为 `Copy-Item`。
 
-```powershell
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m mypy backend
-.\.venv\Scripts\python.exe -m pytest
+### 前端
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
+
+Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到后端 `8000` 端口。
+
+### 生产构建
+
+```bash
+cd frontend
+npm run build
+cd ..
+.venv/bin/python -m uvicorn backend.app.main:app
+```
+
+存在 `frontend/dist` 时，FastAPI 会在根路径提供前端，并继续保留 `/api/v1` 和 `/docs`。
+
+## 质量检查
+
+```bash
+.venv/bin/python -m ruff check .
+.venv/bin/python -m mypy backend
+.venv/bin/python -m pytest
+cd frontend
+npm run check
+npm run build
+```
+
+前端视觉和交互规范见 [DESIGN.md](DESIGN.md)。
 
 ## 关键流程
 

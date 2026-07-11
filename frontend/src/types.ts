@@ -1,0 +1,163 @@
+export type AppView = "workbench" | "batches";
+
+export type FieldSource =
+  | "image_extracted"
+  | "ai_generated"
+  | "user_provided"
+  | "user_confirmed"
+  | "business_system"
+  | "account_default";
+
+export type ProductStage =
+  | "uploaded"
+  | "analyzing"
+  | "ai_ready"
+  | "facts_needed"
+  | "ready"
+  | "drafting"
+  | "drafted"
+  | "publishing"
+  | "published"
+  | "error";
+
+export type DraftField = {
+  value: unknown;
+  source: FieldSource;
+  confidence?: number;
+  requires_confirmation?: boolean;
+  evidence?: string;
+};
+
+export type ProductFacts = {
+  categoryId: string;
+  categoryLabel: string;
+  brand: string;
+  model: string;
+  material: string;
+  price: string;
+  moq: string;
+  stock: string;
+  productLength: string;
+  productWidth: string;
+  productHeight: string;
+  netWeight: string;
+  packageLength: string;
+  packageWidth: string;
+  packageHeight: string;
+  grossWeight: string;
+  unitsPerCarton: string;
+  leadTime: string;
+  origin: string;
+  hsCode: string;
+  certifications: string[];
+};
+
+export type ProductRecord = {
+  id: string;
+  reference: string;
+  imageUrl: string;
+  sourceFile?: File;
+  title: string;
+  keywords: string[];
+  sellingPoints: string[];
+  description: string;
+  visibleTraits: string[];
+  aiConfirmed: boolean;
+  stage: ProductStage;
+  facts: ProductFacts;
+  errors: string[];
+  draftProductId?: string;
+  schemaData?: Record<string, unknown> | string;
+  isDemo?: boolean;
+};
+
+export type StoreSettings = {
+  currency: string;
+  priceUnit: string;
+  productGroupId: string;
+  productGroupLabel: string;
+  photoBankGroupId: string;
+  photoBankGroupLabel: string;
+  warehouseId: string;
+  warehouseLabel: string;
+  shippingTemplateId: string;
+  shippingTemplateLabel: string;
+  inventoryCode: string;
+  companyProfile: string;
+  afterSalesPolicy: string;
+  customizationPolicy: string;
+  detailTemplate: string;
+  brand: string;
+  origin: string;
+  port: string;
+  reuseCompanyProfile: boolean;
+  reuseAfterSales: boolean;
+  reuseCustomization: boolean;
+  reuseDetailTemplate: boolean;
+  reuseOrigin: boolean;
+};
+
+export type CapabilityResponse = {
+  modules: {
+    alibaba_listing: boolean;
+    ai_images: boolean;
+    sales_expert: boolean;
+  };
+  alibaba_credentials_configured: boolean;
+};
+
+export type ListingFieldGroup = {
+  key: string;
+  label: string;
+  scope: "store" | "product";
+  input_mode: "ai_assisted" | "trusted_only";
+  fields: Array<{
+    name: string;
+    label: string;
+    reason: string;
+    aliases: string[];
+  }>;
+  allowed_sources: FieldSource[];
+  confirmation_rule: string;
+};
+
+export type ImageAnalysisResponse = {
+  observed_fields: Record<string, DraftField>;
+  generated_fields: Record<string, DraftField>;
+  category_suggestions: DraftField[];
+  manual_requirements: Array<{
+    name: string;
+    label: string;
+    reason: string;
+  }>;
+  warnings: string[];
+};
+
+export type BatchApiResult = {
+  reference: string;
+  success: boolean;
+  response?: Record<string, unknown>;
+  error?: string;
+};
+
+export type ToastMessage = {
+  id: number;
+  tone: "success" | "warning" | "error" | "info";
+  title: string;
+  detail?: string;
+};
+
+export type BatchRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  productCount: number;
+  completion: number;
+  draftCount: number;
+  publishedCount: number;
+  reviewStatus: "none" | "passed" | "failed" | "pending";
+  reviewLabel: string;
+  status: "processing" | "ready" | "complete" | "failed";
+  images: string[];
+};
