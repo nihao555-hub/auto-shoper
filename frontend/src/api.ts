@@ -1,4 +1,5 @@
 import type {
+  AlibabaOAuthStatus,
   BatchApiResult,
   CapabilityResponse,
   DraftField,
@@ -8,7 +9,10 @@ import type {
   StoreSettings,
 } from "./types";
 
-const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api/v1";
+const configuredApiRoot = import.meta.env.VITE_API_ROOT ?? "/api/v1";
+const API_ROOT = configuredApiRoot.startsWith("http")
+  ? configuredApiRoot
+  : new URL(configuredApiRoot, window.location.origin).toString().replace(/\/$/, "");
 
 class ApiError extends Error {
   status: number;
@@ -40,6 +44,14 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
 
 export const getCapabilities = async (): Promise<CapabilityResponse> =>
   parseResponse<CapabilityResponse>(await fetch(`${API_ROOT}/capabilities`));
+
+export const getAlibabaOAuthStatus = async (): Promise<AlibabaOAuthStatus> =>
+  parseResponse<AlibabaOAuthStatus>(await fetch(`${API_ROOT}/alibaba/oauth/status`));
+
+export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }> =>
+  parseResponse<{ authorization_url: string }>(
+    await fetch(`${API_ROOT}/alibaba/oauth/authorize`, { method: "POST" }),
+  );
 
 export const getListingFieldMatrix = async (): Promise<ListingFieldGroup[]> =>
   parseResponse<ListingFieldGroup[]>(await fetch(`${API_ROOT}/alibaba/listing-field-matrix`));

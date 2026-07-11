@@ -16,6 +16,7 @@ type SettingsDrawerProps = {
   open: boolean;
   capabilities: CapabilityResponse | null;
   settings: StoreSettings;
+  onAuthorizeAlibaba: () => void;
   onClose: () => void;
   onSave: (settings: StoreSettings) => void;
 };
@@ -38,6 +39,7 @@ export function SettingsDrawer({
   open,
   capabilities,
   settings,
+  onAuthorizeAlibaba,
   onClose,
   onSave,
 }: SettingsDrawerProps) {
@@ -209,7 +211,7 @@ export function SettingsDrawer({
               <>
                 <SettingsHeading
                   title="店铺连接"
-                  description="凭据保存在服务端，前端不会读取 App Secret 或 Access Token。"
+                  description="通过 Alibaba.com 官方授权连接店铺，平台不会读取店铺登录密码。"
                 />
                 <div className="status-detail">
                   <Buildings size={30} />
@@ -218,9 +220,25 @@ export function SettingsDrawer({
                     <p>
                       {capabilities?.alibaba_credentials_configured
                         ? "商品、类目、图片银行和发布能力已可用。"
-                        : "尚未授权真实账户，配置服务端凭据后可调用商品与发布接口。"}
+                        : "尚未连接真实店铺，完成授权后即可创建草稿和批量发布。"}
                     </p>
                   </div>
+                </div>
+                <div className="oauth-connect-card">
+                  <div>
+                    <strong>使用 Alibaba.com 官方授权</strong>
+                    <p>商家将前往 Alibaba.com 登录并确认授权，完成后自动返回工作台。</p>
+                  </div>
+                  <button type="button" className="button button-dark" onClick={onAuthorizeAlibaba}>
+                    {capabilities?.alibaba_credentials_configured
+                      ? "重新授权店铺"
+                      : capabilities?.alibaba_oauth_configured
+                        ? "登录并授权店铺"
+                        : "联系管理员开通"}
+                  </button>
+                  {!capabilities?.alibaba_oauth_configured ? (
+                    <small>店铺授权服务尚未开通，请联系管理员完成平台接入。</small>
+                  ) : null}
                 </div>
               </>
             ) : null}

@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     alibaba_api_base_url: str = "https://openapi-api.alibaba.com/rest"
     alibaba_append_operation_to_url: bool = False
     alibaba_timeout_seconds: float = 30
+    alibaba_oauth_authorize_url: str = "https://oauth.alibaba.com/authorize"
+    alibaba_oauth_token_url: str = "https://eco.taobao.com/router/rest"
+    alibaba_oauth_redirect_uri: str | None = None
+    alibaba_oauth_success_url: str = "http://localhost:5173/#/overview?alibaba=connected"
 
     max_upload_bytes: int = 10 * 1024 * 1024
 
@@ -29,6 +33,14 @@ class Settings(BaseSettings):
             self.alibaba_app_key
             and self.alibaba_app_secret
             and self.alibaba_access_token
+        )
+
+    @property
+    def has_alibaba_oauth_app(self) -> bool:
+        return bool(
+            self.alibaba_app_key
+            and self.alibaba_app_secret
+            and self.alibaba_oauth_redirect_uri
         )
 
 

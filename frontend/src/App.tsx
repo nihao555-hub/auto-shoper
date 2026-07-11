@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getCapabilities } from "./api";
+import { getCapabilities, startAlibabaOAuth } from "./api";
 import { AppShell } from "./components/AppShell";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
@@ -154,6 +154,15 @@ export default function App() {
     notify("success", "默认配置已保存", "新商品会自动带出允许复用的字段。");
   };
 
+  const authorizeAlibaba = async () => {
+    try {
+      const response = await startAlibabaOAuth();
+      window.location.assign(response.authorization_url);
+    } catch {
+      notify("error", "店铺授权服务尚未开通", "请联系管理员完成平台接入后再授权店铺。");
+    }
+  };
+
   const changeDataMode = (mode: DataMode) => {
     setDataMode(mode);
     if (mode === "demo" && demoProducts.length === 0) {
@@ -180,7 +189,6 @@ export default function App() {
   return (
     <AppShell
       activeView={activeView}
-      capabilities={capabilities}
       backendConnected={backendConnected}
       dataMode={dataMode}
       onDataModeChange={changeDataMode}
@@ -196,7 +204,6 @@ export default function App() {
           dataMode={dataMode}
           onNavigateWorkbench={() => navigate("workbench")}
           onNavigateBatches={() => navigate("batches")}
-          onOpenSettings={() => setSettingsOpen(true)}
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
@@ -222,6 +229,7 @@ export default function App() {
         open={settingsOpen}
         capabilities={capabilities}
         settings={settings}
+        onAuthorizeAlibaba={() => void authorizeAlibaba()}
         onClose={() => setSettingsOpen(false)}
         onSave={saveSettings}
       />

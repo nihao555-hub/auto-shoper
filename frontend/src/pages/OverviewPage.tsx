@@ -17,7 +17,6 @@ type OverviewPageProps = {
   dataMode: DataMode;
   onNavigateWorkbench: () => void;
   onNavigateBatches: () => void;
-  onOpenSettings: () => void;
 };
 
 const stageWeight: Record<ProductRecord["stage"], number> = {
@@ -41,7 +40,6 @@ export function OverviewPage({
   dataMode,
   onNavigateWorkbench,
   onNavigateBatches,
-  onOpenSettings,
 }: OverviewPageProps) {
   const drafted = products.filter(
     (product) => product.stage === "drafted" || product.stage === "published",
@@ -65,7 +63,7 @@ export function OverviewPage({
           <div className="page-context">
             <span>{dataMode === "demo" ? "演示空间" : "真实工作区"}</span>
             <i />
-            <span>{backendConnected ? "API 在线" : "API 未连接"}</span>
+            <span>{backendConnected ? "服务正常" : "服务暂不可用"}</span>
           </div>
           <h1>上品运营总览</h1>
           <p>集中查看当前批次、发布准备和需要处理的异常项。</p>
@@ -183,14 +181,14 @@ export function OverviewPage({
             <PlugsConnected size={21} />
           </div>
           <ReadinessLine
-            label="工作台后端"
-            detail={backendConnected ? "接口正常响应" : "请启动 FastAPI 服务"}
+            label="系统服务"
+            detail={backendConnected ? "上传与发布功能可用" : "请稍后重试或联系管理员"}
             ready={backendConnected}
           />
           <ReadinessLine
-            label="AI 内容服务"
+            label="智能生成"
             detail={
-              capabilities?.model_credentials_configured ? "模型凭据已配置" : "模型凭据尚未配置"
+              capabilities?.model_credentials_configured ? "智能生成可用" : "智能生成尚未开通"
             }
             ready={capabilities?.model_credentials_configured === true}
           />
@@ -201,9 +199,6 @@ export function OverviewPage({
             }
             ready={capabilities?.alibaba_credentials_configured === true}
           />
-          <button type="button" className="settings-link" onClick={onOpenSettings}>
-            查看店铺配置 <ArrowRight size={15} />
-          </button>
         </aside>
       </div>
 

@@ -3,6 +3,7 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import RedirectResponse
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.ai import AIClient, AIProviderError
@@ -40,6 +41,11 @@ from backend.app.models import (
     SchemaParseRequest,
     SchemaParseResult,
 )
+from backend.app.services.alibaba_oauth import (
+    AlibabaOAuthError,
+    get_alibaba_oauth_status,
+    get_alibaba_oauth_store,
+)
 from backend.app.services.field_policy import (
     effective_listing_fields,
     get_listing_field,
@@ -63,15 +69,41 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/capabilities")
 async def capabilities() -> dict[str, Any]:
+    oauth_status = get_alibaba_oauth_status()
     return {
         "modules": {
             "alibaba_listing": True,
             "ai_images": True,
             "sales_expert": False,
         },
-        "alibaba_credentials_configured": get_settings().has_alibaba_credentials,
+        "alibaba_credentials_configured": oauth_status["connected"],
+        "alibaba_oauth_configured": oauth_status["oauth_configured"],
+        "alibaba_connection_source": oauth_status["connection_source"],
         "model_credentials_configured": bool(get_settings().openai_api_key),
     }
+
+
+@router.get("/alibaba/oauth/status")
+async def alibaba_oauth_status() -> dict[str, Any]:
+    return get_alibaba_oauth_status()
+
+
+@router.post("/alibaba/oauth/authorize")
+async def alibaba_oauth_authorize() -> dict[str, str]:
+    try:
+        authorization_url = get_alibaba_oauth_store().create_authorization_url(get_settings())
+    except AlibabaOAuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/alibaba/oauth/callback")
+async def alibaba_oauth_callback(code: str, state: str) -> RedirectResponse:
+    try:
+        await get_alibaba_oauth_store().exchange_code(code, state, get_settings())
+    except AlibabaOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(get_settings().alibaba_oauth_success_url)
 
 
 @router.get("/alibaba/operations")

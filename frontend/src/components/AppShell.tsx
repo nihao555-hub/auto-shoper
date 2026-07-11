@@ -5,16 +5,15 @@ import {
   ChartBar,
   GearSix,
   PlayCircle,
-  PlugsConnected,
   UploadSimple,
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { PropsWithChildren } from "react";
-import type { AppView, CapabilityResponse, DataMode } from "../types";
+import type { AppView, DataMode } from "../types";
+import { BrandMark } from "./BrandMark";
 
 type AppShellProps = PropsWithChildren<{
   activeView: AppView;
-  capabilities: CapabilityResponse | null;
   backendConnected: boolean;
   dataMode: DataMode;
   onDataModeChange: (mode: DataMode) => void;
@@ -37,7 +36,6 @@ const loadCollapsed = () => window.localStorage.getItem("auto-shoper-sidebar") =
 
 export function AppShell({
   activeView,
-  capabilities,
   backendConnected,
   dataMode,
   onDataModeChange,
@@ -66,10 +64,10 @@ export function AppShell({
             onClick={() => onNavigate("overview")}
             aria-label="返回总览"
           >
-            <span className="brand-glyph">上</span>
+            <BrandMark />
             <span className="brand-copy">
               <strong>上品台</strong>
-              <small>Merchant OS</small>
+              <small>跨境商品发布</small>
             </span>
           </button>
           <button
@@ -102,27 +100,6 @@ export function AppShell({
         </nav>
 
         <div className="rail-bottom">
-          <div className="integration-panel">
-            <div className="integration-heading">
-              <PlugsConnected size={17} />
-              <span>服务状态</span>
-            </div>
-            <div className="integration-line">
-              <i className={`connection-dot ${backendConnected ? "is-online" : "is-offline"}`} />
-              <span>{backendConnected ? "后端 API 在线" : "后端 API 未连接"}</span>
-            </div>
-            <div className="integration-line">
-              <i
-                className={`connection-dot ${
-                  capabilities?.alibaba_credentials_configured ? "is-online" : "is-idle"
-                }`}
-              />
-              <span>
-                {capabilities?.alibaba_credentials_configured ? "Alibaba 已授权" : "Alibaba 待授权"}
-              </span>
-            </div>
-          </div>
-
           <button
             type="button"
             className={`demo-mode-control ${dataMode === "demo" ? "is-active" : ""}`}
@@ -154,7 +131,7 @@ export function AppShell({
       <main className="app-main" id="main-content">
         <div className="mobile-topbar">
           <button type="button" className="mobile-brand" onClick={() => onNavigate("overview")}>
-            <span className="brand-glyph">上</span>
+            <BrandMark size={30} />
             <strong>上品台</strong>
           </button>
           <div className="mobile-status">

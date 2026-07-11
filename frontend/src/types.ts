@@ -106,7 +106,17 @@ export type CapabilityResponse = {
     sales_expert: boolean;
   };
   alibaba_credentials_configured: boolean;
+  alibaba_oauth_configured: boolean;
+  alibaba_connection_source: "oauth" | "environment" | null;
   model_credentials_configured: boolean;
+};
+
+export type AlibabaOAuthStatus = {
+  oauth_configured: boolean;
+  connected: boolean;
+  connection_source: "oauth" | "environment" | null;
+  user_id: string | null;
+  expires_at: string | null;
 };
 
 export type ListingFieldGroup = {

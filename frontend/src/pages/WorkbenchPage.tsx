@@ -62,7 +62,7 @@ type WorkbenchPageProps = {
 
 const steps = [
   { label: "上传商品", caption: "一图一商品" },
-  { label: "AI 生成", caption: "确认内容候选" },
+  { label: "生成内容", caption: "确认标题与类目" },
   { label: "补齐资料", caption: "只填真实事实" },
   { label: "创建草稿", caption: "实时 Schema 校验" },
   { label: "预览发布", caption: "确认后正式发布" },
@@ -229,7 +229,7 @@ export function WorkbenchPage({
       notify(
         "error",
         !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
-        !backendConnected ? "请先启动后端服务。" : "配置模型凭据后再分析真实商品图片。",
+        !backendConnected ? "请稍后重试或联系管理员。" : "智能生成服务尚未开通。",
       );
       return;
     }
@@ -270,7 +270,7 @@ export function WorkbenchPage({
       notify(
         "error",
         !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
-        !backendConnected ? "请先启动后端服务。" : "配置模型凭据后再分析真实商品图片。",
+        !backendConnected ? "请稍后重试或联系管理员。" : "智能生成服务尚未开通。",
       );
       return;
     }
@@ -559,11 +559,11 @@ export function WorkbenchPage({
             <span>{products.length} 个商品</span>
           </div>
           <h1>批量上品</h1>
-          <p>上传图片，确认 AI 内容，补齐事实数据，再创建草稿并发布。</p>
+          <p>上传图片后，普通商品通常只需确认类目，并补齐价格、MOQ、库存和精确规格。</p>
         </div>
         <div className="header-actions">
           <div className={`workspace-mode-chip ${dataMode === "demo" ? "is-demo" : ""}`}>
-            <span>{dataMode === "demo" ? "DEMO" : "LIVE"}</span>
+            <span>{dataMode === "demo" ? "演示" : "真实"}</span>
             <strong>{dataMode === "demo" ? "隔离演示空间" : "真实工作区"}</strong>
           </div>
           <div className="compact-connection-status">
@@ -705,7 +705,7 @@ export function WorkbenchPage({
           <span>{products.length} 个商品 · 刚刚自动保存</span>
         </div>
         <div className="footer-metrics">
-          <Metric value={products.length - aiPending} label="AI 已确认" tone="ink" />
+          <Metric value={products.length - aiPending} label="内容已确认" tone="ink" />
           <Metric value={aiPending} label="待确认" tone="violet" />
           <Metric value={incompleteProducts.length} label="待补资料" tone="orange" />
           <Metric value={draftedProducts.length} label="草稿" tone="blue" />
