@@ -129,17 +129,21 @@ def test_batch_publish_requires_confirmation() -> None:
 
 
 def test_batch_requires_unique_references() -> None:
-    client = TestClient(app)
-    response = client.post(
-        "/api/v1/alibaba/products/batch/drafts",
-        json={
-            "items": [
-                {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
-                {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
-            ]
-        },
-    )
-    assert response.status_code == 422
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/alibaba/products/batch/drafts",
+            json={
+                "items": [
+                    {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
+                    {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
+                ]
+            },
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_render_draft_uses_product_and_category_ids() -> None:
