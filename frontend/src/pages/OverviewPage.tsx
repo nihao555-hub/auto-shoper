@@ -67,8 +67,8 @@ export function OverviewPage({
             <i />
             <span>{backendConnected ? "API 在线" : "API 未连接"}</span>
           </div>
-          <h1>今天的上品工作，从这里开始</h1>
-          <p>先处理缺失资料，再创建草稿；正式发布始终需要人工确认。</p>
+          <h1>上品运营总览</h1>
+          <p>集中查看当前批次、发布准备和需要处理的异常项。</p>
         </div>
         <button
           type="button"
@@ -120,8 +120,8 @@ export function OverviewPage({
         <section className="overview-panel current-batch-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">当前批次</span>
-              <h2>{products.length ? "商品准备进度" : "还没有进行中的批次"}</h2>
+              <span className="panel-kicker">进度与趋势</span>
+              <h2>{products.length ? "当前批次进度" : "还没有进行中的批次"}</h2>
             </div>
             {products.length ? (
               <button type="button" className="text-button" onClick={onNavigateWorkbench}>
@@ -178,7 +178,7 @@ export function OverviewPage({
           <div className="panel-heading compact">
             <div>
               <span className="panel-kicker">发布准备</span>
-              <h2>服务与授权</h2>
+              <h2>服务、模型与授权</h2>
             </div>
             <PlugsConnected size={21} />
           </div>

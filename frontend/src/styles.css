@@ -3356,6 +3356,308 @@ input[type="checkbox"] {
   }
 }
 
+/* Enterprise dashboard density pass */
+.app-shell {
+  --rail-width: 220px;
+}
+
+.nav-rail {
+  width: var(--rail-width);
+}
+
+.nav-brand {
+  min-height: 76px;
+  padding: 16px 18px;
+}
+
+.nav-sections {
+  padding: 14px 10px;
+}
+
+.nav-section-label {
+  margin: 0 8px 7px;
+}
+
+.rail-item,
+.demo-mode-control,
+.settings-launcher {
+  min-height: 52px;
+  padding: 9px 11px;
+}
+
+.integration-card {
+  margin: auto 10px 8px;
+  padding: 12px;
+}
+
+.overview-page {
+  max-width: 1460px;
+  padding: 22px 26px 36px;
+}
+
+.overview-header {
+  min-height: auto;
+  align-items: center;
+  padding: 0 0 18px;
+  border-bottom: 1px solid rgba(72, 65, 50, 0.09);
+}
+
+.overview-header h1 {
+  max-width: none;
+  margin: 4px 0 5px;
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.overview-header p {
+  max-width: 580px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.overview-header .primary-action {
+  min-height: 42px;
+  padding: 0 16px;
+}
+
+.demo-overview-notice {
+  min-height: 40px;
+  margin-top: 12px;
+  padding: 0 14px;
+}
+
+.overview-metrics {
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.overview-metric {
+  min-height: 96px;
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.overview-metric strong {
+  margin-top: 5px;
+  font-size: 32px;
+  line-height: 1;
+}
+
+.overview-metric small {
+  margin-top: 7px;
+}
+
+.metric-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.overview-grid {
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 14px;
+}
+
+.overview-panel {
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.current-batch-panel,
+.readiness-panel,
+.recent-batches-panel {
+  padding: 18px;
+}
+
+.panel-heading {
+  margin-bottom: 14px;
+}
+
+.panel-heading h2 {
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.batch-progress-hero {
+  min-height: 96px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 18px;
+  padding: 16px;
+  border-radius: 10px;
+}
+
+.progress-value strong {
+  font-size: 42px;
+}
+
+.stage-progress-list {
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.stage-line {
+  grid-template-columns: minmax(110px, 0.8fr) minmax(100px, 1.35fr) 34px;
+}
+
+.readiness-list {
+  gap: 0;
+}
+
+.readiness-item {
+  min-height: 58px;
+  padding: 10px 0;
+}
+
+.recent-batches-panel {
+  margin-top: 14px;
+}
+
+.recent-batch-list > button {
+  min-height: 58px;
+  padding: 9px 10px;
+}
+
+.refined-page-header {
+  min-height: 94px;
+  padding: 18px 24px;
+}
+
+.refined-page-header h1 {
+  margin: 4px 0;
+  font-size: 30px;
+  line-height: 1.08;
+}
+
+.refined-page-header p {
+  font-size: 13px;
+}
+
+.workflow-steps {
+  height: 68px;
+}
+
+.workflow-steps button {
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.workflow-steps button > span {
+  gap: 2px;
+}
+
+.workflow-steps strong {
+  font-size: 13px;
+}
+
+.workflow-steps small {
+  font-size: 10px;
+}
+
+.demo-banner {
+  min-height: 42px;
+  padding: 8px 20px;
+}
+
+.batches-header {
+  min-height: 94px;
+}
+
+.batch-stat-strip {
+  margin: 14px 0;
+}
+
+.batch-stat {
+  min-height: 78px;
+  padding: 14px 16px;
+}
+
+.batch-table th,
+.batch-table td {
+  padding-block: 12px;
+}
+
+@media (max-width: 1160px) {
+  .app-shell {
+    --rail-width: 204px;
+  }
+
+  .overview-page {
+    padding-inline: 22px;
+  }
+
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr) 246px;
+  }
+}
+
+@media (max-width: 920px) and (min-width: 821px) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .readiness-panel {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    column-gap: 20px;
+  }
+
+  .readiness-panel .secondary-action {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .overview-page {
+    padding: 18px 16px 94px;
+  }
+
+  .overview-header {
+    align-items: flex-start;
+  }
+
+  .overview-header h1 {
+    font-size: 28px;
+  }
+
+  .overview-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .overview-metric {
+    min-height: 88px;
+    padding: 13px;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .refined-page-header {
+    min-height: 84px;
+    padding: 14px 16px;
+  }
+
+  .refined-page-header h1 {
+    font-size: 26px;
+  }
+}
+
+@media (max-width: 620px) {
+  .overview-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-metric {
+    min-height: 76px;
+  }
+
+  .batch-progress-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -4528,5 +4830,149 @@ input[type="checkbox"] {
 
   .page-context {
     margin-bottom: 5px;
+  }
+}
+
+/* Final source-order overrides for the compact dashboard shell */
+.overview-page {
+  padding: 22px 26px 36px;
+}
+
+.overview-header {
+  min-height: auto;
+  align-items: center;
+  padding: 0 0 18px;
+  border-bottom: 1px solid rgba(72, 65, 50, 0.09);
+}
+
+.overview-header h1 {
+  max-width: none;
+  margin: 4px 0 5px;
+  font-size: clamp(28px, 3vw, 36px);
+  line-height: 1.08;
+}
+
+.overview-header p {
+  max-width: 580px;
+  font-size: 13px;
+}
+
+.overview-header .primary-action {
+  min-height: 42px;
+  padding: 0 16px;
+}
+
+.demo-overview-notice {
+  min-height: 40px;
+  margin-top: 12px;
+  padding: 0 14px;
+}
+
+.overview-metrics {
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.overview-metric {
+  min-height: 96px;
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.overview-metric strong {
+  margin-top: 5px;
+  font-size: 32px;
+  line-height: 1;
+}
+
+.overview-grid {
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 14px;
+}
+
+.overview-panel {
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.current-batch-panel,
+.readiness-panel,
+.recent-batches-panel {
+  padding: 18px;
+}
+
+.batch-progress-hero {
+  min-height: 96px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 18px;
+  padding: 16px;
+  border-radius: 10px;
+}
+
+.progress-value strong {
+  font-size: 42px;
+}
+
+.refined-page-header,
+.batches-header {
+  min-height: 94px;
+}
+
+.refined-page-header {
+  padding: 18px 24px;
+}
+
+.refined-page-header h1 {
+  margin: 4px 0;
+  font-size: 30px;
+  line-height: 1.08;
+}
+
+.workflow-steps {
+  height: 68px;
+}
+
+.demo-banner {
+  min-height: 42px;
+  padding: 8px 20px;
+}
+
+.batch-stat {
+  min-height: 78px;
+  padding: 14px 16px;
+}
+
+@media (max-width: 920px) and (min-width: 821px) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .overview-page {
+    padding: 18px 16px 94px;
+  }
+
+  .overview-header {
+    align-items: flex-start;
+  }
+
+  .overview-header h1 {
+    font-size: 28px;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .overview-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-progress-hero {
+    grid-template-columns: 1fr;
   }
 }
