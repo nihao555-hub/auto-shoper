@@ -657,6 +657,11 @@ table {
   overflow: auto;
 }
 
+.overview-page.has-recent-batches {
+  grid-template-rows: auto auto auto auto auto;
+  align-content: start;
+}
+
 .overview-header {
   min-height: 102px;
   margin-inline: -24px;

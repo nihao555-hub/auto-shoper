@@ -57,7 +57,7 @@ export function OverviewPage({
   const recentBatches = batches.slice(0, 4);
 
   return (
-    <div className="page overview-page">
+    <div className={`page overview-page ${recentBatches.length ? "has-recent-batches" : ""}`}>
       <header className="overview-header">
         <div>
           <div className="page-context">
