@@ -49,6 +49,14 @@ npm run dev
 
 Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到后端 `8000` 端口。
 
+### 生产部署（前端 Vercel + 后端 Render）
+
+前端默认调用同源 `/api/v1`。部署到 Vercel 时，`frontend/vercel.json` 会把 `/api/*`
+和 `/health` 反向代理到 Render 后端，因此前端无需 CORS、也无需单独配置后端地址即可直连。
+如果后端域名变化，改 `frontend/vercel.json` 里的 `destination`。
+（也可改为在 Vercel 设置 `VITE_API_ROOT=https://<backend-domain>/api/v1` 走跨域直连，
+后端 CORS 已放行 `*.vercel.app`。）Vercel 项目的 Root Directory 需指向 `frontend`。
+
 ### Alibaba 商家授权
 
 1. 在 Alibaba.com ICBU 开放平台创建应用并取得 AppKey/AppSecret。
