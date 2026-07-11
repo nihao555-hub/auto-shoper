@@ -69,11 +69,11 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
 
       <section className={`auth-panel ${mode === "register" ? "is-register" : ""}`}>
         <div className="auth-product-brand">
-          <BrandMark size={36} />
-          <div>
+          <div className="auth-product-brand-row">
+            <BrandMark size={40} />
             <strong>上品台</strong>
-            <span>Alibaba 国际站商品发布工作区</span>
           </div>
+          <span>Alibaba 国际站商品发布工作区</span>
         </div>
 
         <div className="auth-card">
@@ -97,12 +97,6 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
               注册
             </button>
           </div>
-
-          <p className="auth-mode-note">
-            {mode === "login"
-              ? "登录后继续管理独立工作区、店铺授权和上品批次。"
-              : "注册码仅供受邀客户使用，注册后自动创建独立工作区。"}
-          </p>
 
           {mode === "login" ? (
             <form className="auth-form" onSubmit={submitLogin}>
@@ -141,7 +135,7 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
                 label="姓名"
                 value={registration.display_name}
                 autoComplete="name"
-                placeholder="请输入你的姓名"
+                placeholder="请输入您的姓名"
                 onChange={(value) =>
                   setRegistration((current) => ({ ...current, display_name: value }))
                 }
@@ -150,7 +144,7 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
                 label="工作区名称"
                 value={registration.workspace_name}
                 autoComplete="organization"
-                placeholder="请输入公司或团队名称"
+                placeholder="请输入工作区名称"
                 onChange={(value) =>
                   setRegistration((current) => ({ ...current, workspace_name: value }))
                 }
@@ -160,20 +154,21 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
                 type="email"
                 value={registration.email}
                 autoComplete="email"
-                placeholder="name@company.com"
+                placeholder="请输入工作邮箱"
+                hint="用于接收系统通知与安全验证"
                 onChange={(value) => setRegistration((current) => ({ ...current, email: value }))}
               />
               <PasswordField
                 value={registration.password}
                 autoComplete="new-password"
                 showPassword={showPassword}
-                hint="至少 10 位"
+                hint="10–16 位，包含字母、数字和符号"
                 onChange={(value) =>
                   setRegistration((current) => ({ ...current, password: value }))
                 }
                 onToggle={() => setShowPassword((visible) => !visible)}
               />
-              <label className="auth-field">
+              <label className="auth-field auth-field-code">
                 <span>注册码</span>
                 <input
                   value={registration.registration_code}
@@ -193,7 +188,7 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
                   id="registration-code-help"
                   className={registrationCodeError ? "auth-field-error" : "auth-field-hint"}
                 >
-                  {registrationCodeError ?? "注册码仅在注册成功后核销，一码一次"}
+                  {registrationCodeError ?? "向邀请人获取注册码，一码一次"}
                 </small>
               </label>
               {error && !registrationCodeError ? (
@@ -238,6 +233,7 @@ function AuthField({
   type = "text",
   autoComplete,
   placeholder,
+  hint,
 }: {
   label: string;
   value: string;
@@ -245,6 +241,7 @@ function AuthField({
   type?: string;
   autoComplete: string;
   placeholder: string;
+  hint?: string;
 }) {
   return (
     <label className="auth-field">
@@ -257,6 +254,7 @@ function AuthField({
         onChange={(event) => onChange(event.target.value)}
         required
       />
+      {hint ? <small className="auth-field-hint">{hint}</small> : null}
     </label>
   );
 }
@@ -278,17 +276,14 @@ function PasswordField({
 }) {
   return (
     <label className="auth-field">
-      <span>
-        密码
-        {hint ? <small>{hint}</small> : null}
-      </span>
+      <span>密码</span>
       <div className="auth-password">
         <input
           type={showPassword ? "text" : "password"}
           value={value}
           minLength={autoComplete === "new-password" ? 10 : undefined}
           autoComplete={autoComplete}
-          placeholder="输入密码"
+          placeholder={autoComplete === "new-password" ? "请设置密码" : "请输入密码"}
           onChange={(event) => onChange(event.target.value)}
           required
         />
@@ -300,6 +295,7 @@ function PasswordField({
           {showPassword ? <EyeSlash size={19} /> : <Eye size={19} />}
         </button>
       </div>
+      {hint ? <small className="auth-field-hint">{hint}</small> : null}
     </label>
   );
 }

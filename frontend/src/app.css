@@ -5424,32 +5424,32 @@ a:focus-visible {
 .auth-product-brand {
   display: flex;
   width: min(100%, 420px);
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 26px;
-  text-align: left;
 }
 
 .auth-product-brand .brand-mark-svg {
   color: var(--brand);
 }
 
-.auth-product-brand > div {
-  display: grid;
-  gap: 1px;
+.auth-product-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .auth-product-brand strong {
   color: var(--ink);
-  font-size: 20px;
-  font-weight: 780;
-  letter-spacing: -0.035em;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
 }
 
 .auth-product-brand span {
-  color: var(--muted);
-  font-size: 10px;
+  color: #5c5b56;
+  font-size: 13px;
 }
 
 .auth-card,
@@ -5503,9 +5503,9 @@ a:focus-visible {
 }
 
 .auth-field > span {
-  color: var(--ink-soft);
-  font-size: 11px;
-  font-weight: 700;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .auth-field > input,
@@ -5513,8 +5513,12 @@ a:focus-visible {
 .auth-input-with-icon {
   min-height: 44px;
   border-color: var(--line-strong);
-  border-radius: 6px;
+  border-radius: 8px;
   background: #fff;
+}
+
+.auth-field-code > input {
+  border-color: var(--brand);
 }
 
 .auth-password input,
@@ -5533,8 +5537,8 @@ a:focus-visible {
 
 .auth-field-hint,
 .auth-field-error {
-  margin-top: -1px;
-  font-size: 9px;
+  margin-top: 0;
+  font-size: 11px;
   line-height: 1.45;
 }
 
