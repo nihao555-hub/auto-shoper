@@ -1,14 +1,4 @@
-import {
-  ArrowRight,
-  CheckCircle,
-  Clock,
-  FileText,
-  Package,
-  PlugsConnected,
-  Storefront,
-  Swap,
-  WarningCircle,
-} from "@phosphor-icons/react";
+import { CaretRight, Check } from "@phosphor-icons/react";
 import type {
   AlibabaConnectedStore,
   BatchRecord,
@@ -42,306 +32,310 @@ const stageWeight: Record<ProductRecord["stage"], number> = {
   error: 28,
 };
 
+const batchStatusMeta: Record<BatchRecord["status"], { label: string; className: string }> = {
+  processing: { label: "进行中", className: "is-processing" },
+  ready: { label: "草稿中", className: "is-draft" },
+  complete: { label: "已完成", className: "is-complete" },
+  failed: { label: "已取消", className: "is-cancelled" },
+};
+
 export function OverviewPage({
   batches,
   products,
   capabilities,
-  backendConnected,
-  dataMode,
   activeStore,
   onNavigateWorkbench,
   onNavigateBatches,
   onNavigateStores,
 }: OverviewPageProps) {
+  const total = products.length;
+  const confirmed = products.filter((product) => product.aiConfirmed).length;
+  const factsDone = products.filter(
+    (product) =>
+      product.stage !== "uploaded" &&
+      product.stage !== "analyzing" &&
+      product.stage !== "ai_ready" &&
+      product.stage !== "facts_needed",
+  ).length;
   const drafted = products.filter(
     (product) => product.stage === "drafted" || product.stage === "published",
   ).length;
-  const published = products.filter((product) => product.stage === "published").length;
   const needsAttention = products.filter(
     (product) => product.stage === "error" || product.errors.length > 0,
   ).length;
-  const progress = products.length
-    ? Math.round(
-        products.reduce((total, product) => total + stageWeight[product.stage], 0) /
-          products.length,
-      )
+  const progress = total
+    ? Math.round(products.reduce((sum, product) => sum + stageWeight[product.stage], 0) / total)
     : 0;
-  const recentBatches = batches.slice(0, 4);
+
+  const storeReady = activeStore?.draft_readiness === "ready";
+  const groupSelected =
+    capabilities?.active_store_id != null && activeStore?.photobank_sync_state === "synced";
+  const storeName = activeStore
+    ? (activeStore.login_id ?? activeStore.account ?? activeStore.user_id ?? "Alibaba 店铺")
+    : "尚未连接店铺";
+  const recentBatches = batches.slice(0, 5);
 
   return (
-    <div className={`page overview-page ${recentBatches.length ? "has-recent-batches" : ""}`}>
-      <header className="overview-header">
+    <div className="ds-page ov-page">
+      <header className="ds-page-header">
         <div>
-          <div className="page-context">
-            <span>{dataMode === "demo" ? "演示空间" : "真实工作区"}</span>
-            <i />
-            <span>{backendConnected ? "服务正常" : "服务暂不可用"}</span>
-          </div>
           <h1>上品运营总览</h1>
-          <p>集中查看当前批次、发布准备和需要处理的异常项。</p>
+          <p className="ds-page-subtitle">在这里查看当前上品批次的整体进度，快速完成上品流程。</p>
         </div>
-        <button
-          type="button"
-          className="button button-primary overview-primary"
-          onClick={onNavigateWorkbench}
-        >
+        <button type="button" className="ds-button-primary" onClick={onNavigateWorkbench}>
           新建上品批次
-          <span className="button-icon-island">
-            <ArrowRight size={16} />
-          </span>
         </button>
       </header>
 
-      {dataMode === "demo" ? (
-        <div className="workspace-notice is-demo">
-          <span>演示数据与真实账户完全隔离</span>
-          <p>可以完整查看上传、AI 确认、资料补齐、草稿与发布门禁。</p>
-        </div>
-      ) : !backendConnected ? (
-        <div className="workspace-notice is-warning">
-          <WarningCircle size={18} weight="fill" />
-          <span>后端服务未连接，上传与发布操作暂不可用。</span>
-        </div>
-      ) : null}
-
-      <section className="overview-store-context" aria-label="当前发布店铺">
-        <span className="overview-store-icon">
-          <Storefront size={19} />
+      <section className="ov-store-bar" aria-label="当前店铺">
+        <span className="ov-store-badge">阿</span>
+        <span>
+          当前店铺：{storeName}
+          {activeStore ? "（Alibaba）" : ""}
         </span>
-        <div>
-          <span>当前发布店铺</span>
-          <strong>
-            {activeStore
-              ? (activeStore.login_id ?? activeStore.account ?? activeStore.user_id)
-              : "尚未连接 Alibaba 店铺"}
-          </strong>
-        </div>
-        <span
-          className={`overview-store-readiness ${
-            activeStore?.draft_readiness === "ready" ? "is-ready" : ""
-          }`}
-        >
-          {activeStore?.draft_readiness === "ready" ? "可创建草稿" : "需要完成授权"}
-        </span>
-        <button type="button" className="text-button" onClick={onNavigateStores}>
-          <Swap size={15} />
+        <button type="button" className="ds-link" onClick={onNavigateStores}>
           {activeStore ? "切换店铺" : "前往授权"}
         </button>
       </section>
 
-      <section className="overview-metrics" aria-label="工作区指标">
-        <OverviewMetric
-          label="当前批次"
-          value={products.length}
-          detail={products.length ? `完成度 ${progress}%` : "尚未上传商品"}
-          icon={Package}
-        />
-        <OverviewMetric
-          label="可用草稿"
-          value={drafted}
-          detail={drafted ? `${published} 个已发布` : "通过校验后生成"}
-          icon={FileText}
-        />
-        <OverviewMetric
-          label="需要处理"
-          value={needsAttention}
-          detail={needsAttention ? "存在缺失或错误字段" : "当前没有阻塞项"}
-          icon={needsAttention ? WarningCircle : CheckCircle}
-          tone={needsAttention ? "warning" : "success"}
-        />
+      <section className="ov-metrics" aria-label="工作区指标">
+        <article className="ov-metric">
+          <span className="ov-metric-label">当前批次</span>
+          <div className="ov-metric-value">
+            <strong>{total}</strong>
+            <span>个商品</span>
+          </div>
+        </article>
+        <article className="ov-metric">
+          <span className="ov-metric-label">可用草稿</span>
+          <div className="ov-metric-value">
+            <strong>{drafted}</strong>
+            <span>个商品</span>
+          </div>
+        </article>
+        <article className={`ov-metric ${needsAttention ? "is-warning" : ""}`}>
+          <span className="ov-metric-label">需要处理</span>
+          <div className="ov-metric-value">
+            <strong>{needsAttention}</strong>
+            <span>个商品</span>
+          </div>
+        </article>
       </section>
 
-      <div className="overview-grid">
-        <section className="overview-panel current-batch-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="panel-kicker">进度与趋势</span>
-              <h2>{products.length ? "当前批次进度" : "还没有进行中的批次"}</h2>
-            </div>
-            {products.length ? (
-              <button type="button" className="text-button" onClick={onNavigateWorkbench}>
-                继续处理 <ArrowRight size={15} />
-              </button>
-            ) : null}
+      <div className="ov-grid">
+        <section className="ov-panel" aria-label="当前批次进度">
+          <h2>当前批次进度</h2>
+          <div className="ov-selected">
+            <strong>{confirmed}</strong>
+            <span className="ov-selected-total">/{total}</span>
+            <span>已选商品</span>
           </div>
+          <span className="ov-progress-track">
+            <i style={{ width: `${progress}%` }} />
+          </span>
+          <p className="ov-progress-caption">整体进度 {progress}%</p>
 
-          {products.length ? (
-            <>
-              <div className="batch-progress-hero">
-                <div className="progress-value">
-                  <strong>{progress}</strong>
-                  <span>%</span>
-                </div>
-                <div className="progress-copy">
-                  <span className="overview-progress-track">
-                    <i style={{ transform: `scaleX(${progress / 100})` }} />
-                  </span>
-                  <p>
-                    {products.length} 个商品 · {drafted} 个草稿 · {published} 个已发布
-                  </p>
-                </div>
-              </div>
-              <div className="stage-summary">
-                <StageLine
-                  label="AI 内容已确认"
-                  value={products.filter((product) => product.aiConfirmed).length}
-                  total={products.length}
-                />
-                <StageLine
-                  label="真实资料已补齐"
-                  value={products.filter((product) => product.stage !== "facts_needed").length}
-                  total={products.length}
-                />
-                <StageLine label="草稿已创建" value={drafted} total={products.length} />
-              </div>
-            </>
-          ) : (
-            <div className="overview-empty">
-              <div className="empty-visual">
-                <Package size={28} />
-              </div>
-              <h3>上传商品图片，建立第一个批次</h3>
-              <p>真实工作区默认不加载任何示例数据。每组图片会创建一条待处理商品。</p>
-              <button type="button" className="button button-dark" onClick={onNavigateWorkbench}>
-                前往批量上品
-              </button>
-            </div>
-          )}
+          <div className="ov-steps">
+            <BatchStep
+              index={1}
+              title="确认 AI 候选"
+              description="逐条确认 AI 生成的标题与卖点"
+              value={confirmed}
+              total={total}
+              onClick={onNavigateWorkbench}
+            />
+            <BatchStep
+              index={2}
+              title="补充商品事实"
+              description="补齐价格、库存与包装等真实资料"
+              value={factsDone}
+              total={total}
+              onClick={onNavigateWorkbench}
+            />
+            <BatchStep
+              index={3}
+              title="创建草稿"
+              description="校验通过后批量创建 Alibaba 草稿"
+              value={drafted}
+              total={total}
+              onClick={onNavigateWorkbench}
+            />
+          </div>
         </section>
 
-        <aside className="overview-panel readiness-panel">
-          <div className="panel-heading compact">
-            <div>
-              <span className="panel-kicker">发布准备</span>
-              <h2>服务、模型与授权</h2>
-            </div>
-            <PlugsConnected size={21} />
+        <section className="ov-panel" aria-label="开始下一步">
+          <h2>开始下一步</h2>
+          <p className="ov-panel-subtitle">按顺序完成以下任务，确保上品顺利进行。</p>
+          <div className="ov-next-steps">
+            <NextStep
+              index={1}
+              title="店铺授权"
+              description={storeReady ? `已授权：${storeName}` : "连接并授权 Alibaba 店铺"}
+              done={storeReady}
+              onClick={onNavigateStores}
+            />
+            <NextStep
+              index={2}
+              title="选择图片分组"
+              description="从图片银行选择要上品的商品图"
+              done={groupSelected}
+              onClick={onNavigateWorkbench}
+            />
+            <NextStep
+              index={3}
+              title="补充商品事实"
+              description="录入价格、库存等仅可信来源字段"
+              done={total > 0 && factsDone === total}
+              onClick={onNavigateWorkbench}
+            />
+            <NextStep
+              index={4}
+              title="创建草稿"
+              description="批量创建草稿并回渡发布"
+              done={total > 0 && drafted === total}
+              onClick={onNavigateWorkbench}
+            />
           </div>
-          <ReadinessLine
-            label="系统服务"
-            detail={backendConnected ? "上传与发布功能可用" : "请稍后重试或联系管理员"}
-            ready={backendConnected}
-          />
-          <ReadinessLine
-            label="智能生成"
-            detail={
-              capabilities?.model_credentials_configured ? "智能生成可用" : "智能生成尚未开通"
-            }
-            ready={capabilities?.model_credentials_configured === true}
-          />
-          <ReadinessLine
-            label="Alibaba.com"
-            detail={
-              capabilities?.alibaba_connection_state === "connected"
-                ? "真实账户已授权"
-                : capabilities?.alibaba_connection_state === "not_connected"
-                  ? "平台已就绪，等待商家授权"
-                  : capabilities?.alibaba_connection_state === "expired"
-                    ? "授权已过期，需要重新连接"
-                    : capabilities?.alibaba_connection_state === "configuration_error"
-                      ? "OAuth 回调配置有误"
-                      : "后端尚未配置 OAuth 应用"
-            }
-            ready={capabilities?.alibaba_credentials_configured === true}
-          />
-        </aside>
+        </section>
       </div>
 
-      {recentBatches.length ? (
-        <section className="overview-panel recent-batches-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="panel-kicker">最近记录</span>
-              <h2>批次结果</h2>
-            </div>
-            <button type="button" className="text-button" onClick={onNavigateBatches}>
-              查看全部 <ArrowRight size={15} />
-            </button>
-          </div>
-          <div className="recent-batch-list">
-            {recentBatches.map((batch) => (
-              <button type="button" key={batch.id} onClick={onNavigateBatches}>
-                <span className="recent-batch-icon">
-                  <Clock size={18} />
-                </span>
-                <span className="recent-batch-name">
-                  <strong>{batch.name}</strong>
-                  <small>
-                    {batch.id} · {batch.updatedAt}
-                  </small>
-                </span>
-                <span className="recent-batch-count">
-                  <strong>{batch.publishedCount}</strong>
-                  <small>/ {batch.productCount} 已发布</small>
-                </span>
-                <ArrowRight size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <section className="ov-recent" aria-label="最近批次">
+        <h2>最近批次</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>批次名称</th>
+              <th>创建时间</th>
+              <th>商品数量</th>
+              <th>草稿数量</th>
+              <th>进度</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentBatches.length ? (
+              recentBatches.map((batch) => {
+                const meta = batchStatusMeta[batch.status];
+                return (
+                  <tr key={batch.id}>
+                    <td>{batch.name}</td>
+                    <td className="ds-num">{batch.createdAt}</td>
+                    <td className="ds-num">{batch.productCount}</td>
+                    <td className="ds-num">{batch.draftCount}</td>
+                    <td>
+                      <span className="ov-progress-cell">
+                        <span
+                          className={`ov-progress-bar ${
+                            batch.completion >= 100 ? "is-complete" : ""
+                          }`}
+                        >
+                          <i
+                            style={{
+                              width: `${batch.completion}%`,
+                              background:
+                                batch.completion >= 100
+                                  ? "var(--ds-success)"
+                                  : batch.status === "failed"
+                                    ? "var(--ds-disabled)"
+                                    : "var(--ds-brand)",
+                            }}
+                          />
+                        </span>
+                        <span className="ds-num">{batch.completion}%</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`ov-status-text ${meta.className}`}>{meta.label}</span>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="ds-link-brand"
+                        onClick={
+                          batch.status === "complete" ? onNavigateBatches : onNavigateWorkbench
+                        }
+                      >
+                        {batch.status === "complete" ? "查看" : "继续"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td colSpan={7} className="ov-recent-empty">
+                  还没有批次记录，点击右上角「新建上品批次」开始。
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }
 
-function OverviewMetric({
-  label,
+function BatchStep({
+  index,
+  title,
+  description,
   value,
-  detail,
-  icon: Icon,
-  tone = "neutral",
+  total,
+  onClick,
 }: {
-  label: string;
+  index: number;
+  title: string;
+  description: string;
   value: number;
-  detail: string;
-  icon: typeof Package;
-  tone?: "neutral" | "success" | "warning";
+  total: number;
+  onClick: () => void;
 }) {
+  const done = total > 0 && value >= total;
+  const started = value > 0;
   return (
-    <article className={`overview-metric is-${tone}`}>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{detail}</small>
-      </div>
-      <Icon size={22} weight="duotone" />
-    </article>
-  );
-}
-
-function StageLine({ label, value, total }: { label: string; value: number; total: number }) {
-  const percentage = total ? Math.round((value / total) * 100) : 0;
-  return (
-    <div className="stage-line">
-      <span>{label}</span>
-      <span className="stage-line-track">
-        <i style={{ transform: `scaleX(${percentage / 100})` }} />
+    <button type="button" className="ov-step" onClick={onClick}>
+      <span className={`ov-step-index ${done ? "is-done-circle" : started ? "" : "is-pending"}`}>
+        {index}
       </span>
-      <strong>
+      <span className="ov-step-copy">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+      <span className={`ov-step-status ${done ? "is-done" : started ? "is-active" : "is-pending"}`}>
+        {done ? "已完成" : started ? "进行中" : "待开始"}
+      </span>
+      <span className="ov-step-count ds-num">
         {value}/{total}
-      </strong>
-    </div>
+      </span>
+      <CaretRight size={14} />
+    </button>
   );
 }
 
-function ReadinessLine({
-  label,
-  detail,
-  ready,
+function NextStep({
+  index,
+  title,
+  description,
+  done,
+  onClick,
 }: {
-  label: string;
-  detail: string;
-  ready: boolean;
+  index: number;
+  title: string;
+  description: string;
+  done: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div className="readiness-line">
-      <span className={`readiness-icon ${ready ? "is-ready" : ""}`}>
-        {ready ? <CheckCircle size={18} weight="fill" /> : <Clock size={18} />}
+    <button type="button" className="ov-next-step" onClick={onClick}>
+      <span className={`ov-next-index ${done ? "is-done" : ""}`}>
+        {done ? <Check size={14} weight="bold" /> : index}
       </span>
-      <span>
-        <strong>{label}</strong>
-        <small>{detail}</small>
+      <span className="ov-step-copy">
+        <strong>{title}</strong>
+        <small>{description}</small>
       </span>
-    </div>
+      <CaretRight size={14} className="ov-next-caret" />
+    </button>
   );
 }
