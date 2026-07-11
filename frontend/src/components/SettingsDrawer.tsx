@@ -262,7 +262,7 @@ export function SettingsDrawer({
                 <div className="oauth-connect-card">
                   <div>
                     <strong>使用 Alibaba.com 官方授权</strong>
-                    <p>商家将前往 Alibaba.com 登录并确认授权，完成后自动返回工作台。</p>
+                    <p>将在安全弹窗中登录 Alibaba.com，授权完成后弹窗自动关闭。</p>
                   </div>
                   <button
                     type="button"

@@ -65,10 +65,11 @@ Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到�
 3. 后端配置 `ALIBABA_APP_KEY`、`ALIBABA_APP_SECRET`、
    `ALIBABA_OAUTH_REDIRECT_URI`、`ALIBABA_OAUTH_SUCCESS_URL` 和
    `ALIBABA_OAUTH_ERROR_URL`。
-4. 任意商家在设置页「店铺连接」点击「登录并授权店铺」，后端生成 10 分钟有效的签名 `state`，
-   跳转 Alibaba 登录授权；回调验证 `state` 后向新版 GOP 网关
+4. 任意商家在设置页「店铺连接」点击「登录并授权店铺」，前端打开 Alibaba 官方安全登录弹窗，
+   后端生成 10 分钟有效的签名 `state`；回调验证 `state` 后向新版 GOP 网关
    （`ALIBABA_API_BASE_URL` 的 `/auth/token/create`）用授权码交换 token。
-5. token 按商家 `user_id` 分别保存，可同时连接多个店铺；设置页会列出已授权店铺。
+5. 授权结果通过同源 `postMessage` 返回工作台并自动关闭弹窗。token 按商家 `user_id`
+   分别保存，可同时连接多个店铺；设置页会列出已授权店铺。
 
 Token 交换使用新版开放平台 GOP 网关（`/auth/token/create`、`/auth/token/refresh`，
 HMAC-SHA256 签名），不再走旧版 TOP `eco.taobao.com` 网关。

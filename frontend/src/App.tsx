@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getCapabilities, startAlibabaOAuth } from "./api";
 import { AppShell } from "./components/AppShell";
 import { SettingsDrawer } from "./components/SettingsDrawer";
@@ -59,6 +59,23 @@ const formatTimestamp = () =>
     hour12: false,
   }).format(new Date());
 
+type AlibabaOAuthMessage = {
+  type: "alibaba-oauth-result";
+  result: "connected" | "error";
+  reason: string | null;
+};
+
+const isAlibabaOAuthMessage = (value: unknown): value is AlibabaOAuthMessage => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const message = value as Partial<AlibabaOAuthMessage>;
+  return (
+    message.type === "alibaba-oauth-result" &&
+    (message.result === "connected" || message.result === "error")
+  );
+};
+
 const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord | null => {
   if (!products.length) {
     return null;
@@ -112,6 +129,7 @@ export default function App() {
   const [capabilities, setCapabilities] = useState<CapabilityResponse | null>(null);
   const [backendConnected, setBackendConnected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const oauthPopup = useRef<Window | null>(null);
 
   const products = dataMode === "demo" ? demoProducts : liveProducts;
   const liveBatch = useMemo(() => buildLiveBatch(liveProducts, batchId), [liveProducts, batchId]);
@@ -152,25 +170,56 @@ export default function App() {
     }, 5000);
   }, []);
 
+  const handleAlibabaOAuthResult = useCallback(
+    (result: AlibabaOAuthMessage["result"], reason: string | null) => {
+      if (result === "connected") {
+        notify("success", "Alibaba 店铺已连接", "已刷新商家授权状态。");
+        refreshCapabilities();
+        return;
+      }
+      notify(
+        "error",
+        "Alibaba 店铺授权未完成",
+        reason === "denied" ? "商家取消或拒绝了授权。" : "请重新发起授权或联系管理员。",
+      );
+    },
+    [notify, refreshCapabilities],
+  );
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin || !isAlibabaOAuthMessage(event.data)) {
+        return;
+      }
+      oauthPopup.current?.close();
+      oauthPopup.current = null;
+      handleAlibabaOAuthResult(event.data.result, event.data.reason);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [handleAlibabaOAuthResult]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
     const oauthResult = params.get("alibaba");
     if (!oauthResult) {
       return;
     }
-    if (oauthResult === "connected") {
-      notify("success", "Alibaba 店铺已连接", "已刷新商家授权状态。");
-      refreshCapabilities();
-    } else {
-      const reason = params.get("reason");
-      notify(
-        "error",
-        "Alibaba 店铺授权未完成",
-        reason === "denied" ? "商家取消或拒绝了授权。" : "请重新发起授权或联系管理员。",
-      );
+    const result = oauthResult === "connected" ? "connected" : "error";
+    const reason = params.get("reason");
+    if (window.opener && !window.opener.closed) {
+      const message: AlibabaOAuthMessage = {
+        type: "alibaba-oauth-result",
+        result,
+        reason,
+      };
+      window.opener.postMessage(message, window.location.origin);
+      window.close();
+      return;
     }
+    handleAlibabaOAuthResult(result, reason);
     window.history.replaceState(null, "", `${window.location.pathname}#/overview`);
-  }, [notify, refreshCapabilities]);
+  }, [handleAlibabaOAuthResult]);
 
   const saveSettings = (nextSettings: StoreSettings) => {
     setSettings(nextSettings);
@@ -180,10 +229,23 @@ export default function App() {
   };
 
   const authorizeAlibaba = async () => {
+    const popup = window.open(
+      "",
+      "auto-shoper-alibaba-oauth",
+      "popup=yes,width=560,height=720,menubar=no,toolbar=no,location=yes,status=no",
+    );
+    oauthPopup.current = popup;
     try {
       const response = await startAlibabaOAuth();
-      window.location.assign(response.authorization_url);
+      if (popup && !popup.closed) {
+        popup.location.replace(response.authorization_url);
+        popup.focus();
+      } else {
+        window.location.assign(response.authorization_url);
+      }
     } catch (error) {
+      popup?.close();
+      oauthPopup.current = null;
       notify(
         "error",
         "无法开始店铺授权",
