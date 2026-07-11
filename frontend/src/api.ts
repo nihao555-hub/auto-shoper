@@ -7,6 +7,8 @@ import type {
   CapabilityResponse,
   DraftField,
   ImageAnalysisResponse,
+  ImagePromptTemplate,
+  ImageSlot,
   ListingFieldGroup,
   ProductImageGenerationResponse,
   ProductRecord,
@@ -105,12 +107,21 @@ export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }
 export const getListingFieldMatrix = async (): Promise<ListingFieldGroup[]> =>
   parseResponse<ListingFieldGroup[]>(await apiFetch(`${API_ROOT}/alibaba/listing-field-matrix`));
 
-export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysisResponse> => {
+export const analyzeProductImages = async (
+  files: File[],
+  schemaData?: Record<string, unknown> | string,
+): Promise<ImageAnalysisResponse> => {
   const body = new FormData();
   for (const file of files) {
     body.append("images", file);
   }
   body.append("known_facts", "{}");
+  if (schemaData) {
+    body.append(
+      "schema_data",
+      typeof schemaData === "string" ? schemaData : JSON.stringify(schemaData),
+    );
+  }
   return parseResponse<ImageAnalysisResponse>(
     await apiFetch(`${API_ROOT}/products/analyze-image`, {
       method: "POST",
@@ -119,45 +130,56 @@ export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysis
   );
 };
 
+export const getImagePromptTemplates = async (): Promise<ImagePromptTemplate[]> =>
+  parseResponse<ImagePromptTemplate[]>(await apiFetch(`${API_ROOT}/images/prompt-templates`));
+
 export const generateProductImages = async (
   product: ProductRecord,
-): Promise<ProductImageGenerationResponse> =>
-  parseResponse<ProductImageGenerationResponse>(
-    await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  reference: File,
+  options?: { slots?: ImageSlot[]; extraPrompt?: string },
+): Promise<ProductImageGenerationResponse> => {
+  const body = new FormData();
+  body.append("reference", reference);
+  body.append(
+    "request",
+    JSON.stringify({
+      product_id: product.id,
+      title: product.title,
+      category: product.facts.categoryLabel,
+      description: product.description,
+      keywords: product.keywords,
+      slots: options?.slots ?? [],
+      extra_prompt: options?.extraPrompt ?? "",
+      facts: {
+        brand: product.facts.brand,
+        model: product.facts.model,
+        material: product.facts.material,
+        price: product.facts.price,
+        moq: product.facts.moq,
+        stock: product.facts.stock,
+        product_length: product.facts.productLength,
+        product_width: product.facts.productWidth,
+        product_height: product.facts.productHeight,
+        net_weight: product.facts.netWeight,
+        package_length: product.facts.packageLength,
+        package_width: product.facts.packageWidth,
+        package_height: product.facts.packageHeight,
+        gross_weight: product.facts.grossWeight,
+        units_per_carton: product.facts.unitsPerCarton,
+        lead_time: product.facts.leadTime,
+        origin: product.facts.origin,
+        hs_code: product.facts.hsCode,
+        certifications: product.facts.certifications,
       },
-      body: JSON.stringify({
-        product_id: product.id,
-        title: product.title,
-        category: product.facts.categoryLabel,
-        description: product.description,
-        keywords: product.keywords,
-        facts: {
-          brand: product.facts.brand,
-          model: product.facts.model,
-          material: product.facts.material,
-          price: product.facts.price,
-          moq: product.facts.moq,
-          stock: product.facts.stock,
-          product_length: product.facts.productLength,
-          product_width: product.facts.productWidth,
-          product_height: product.facts.productHeight,
-          net_weight: product.facts.netWeight,
-          package_length: product.facts.packageLength,
-          package_width: product.facts.packageWidth,
-          package_height: product.facts.packageHeight,
-          gross_weight: product.facts.grossWeight,
-          units_per_carton: product.facts.unitsPerCarton,
-          lead_time: product.facts.leadTime,
-          origin: product.facts.origin,
-          hs_code: product.facts.hsCode,
-          certifications: product.facts.certifications,
-        },
-      }),
     }),
   );
+  return parseResponse<ProductImageGenerationResponse>(
+    await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {
+      method: "POST",
+      body,
+    }),
+  );
+};
 
 export const uploadPhotoBankImage = async (
   file: File,

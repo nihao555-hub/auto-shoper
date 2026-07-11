@@ -297,8 +297,19 @@ export function WorkbenchPage({
           image.id !== mainImage.id && image.sourceFile ? [image.sourceFile] : [],
         ),
       ];
-      const response = await analyzeProductImages(orderedFiles);
-      replaceProduct(product.id, (current) => applyAnalysis(current, response));
+      let schemaData = product.schemaData;
+      if (!schemaData && product.facts.categoryId) {
+        try {
+          const payload = await getCategorySchema(product.facts.categoryId);
+          schemaData = findSchemaData(payload) ?? undefined;
+        } catch {
+          schemaData = undefined;
+        }
+      }
+      const response = await analyzeProductImages(orderedFiles, schemaData);
+      replaceProduct(product.id, (current) =>
+        applyAnalysis(schemaData ? { ...current, schemaData } : current, response),
+      );
     } catch (error) {
       replaceProduct(product.id, (current) => ({
         ...current,
@@ -378,10 +389,15 @@ export function WorkbenchPage({
       notify("info", "演示商品不调用生图", "切换到真实商品后再生成候选图片。");
       return;
     }
+    const referenceFile = getMainProductImage(activeProduct).sourceFile;
+    if (!referenceFile) {
+      notify("warning", "缺少参考图", "生图采用图生图，需要先上传真实商品主图作为参考。");
+      return;
+    }
     setImageGenerationBusy(true);
     setImageCandidates([]);
     try {
-      const response = await generateProductImages(activeProduct);
+      const response = await generateProductImages(activeProduct, referenceFile);
       setImageCandidates(response.candidates);
       const successCount = response.candidates.filter((candidate) => candidate.image_url).length;
       notify(
@@ -1470,8 +1486,11 @@ function WbInspector({
         <section className="wb-inspector-section wb-image-generation">
           <div className="wb-image-generation-heading">
             <div>
-              <h3>生图候选</h3>
-              <p>按 ICBU 图位生成，候选图片需确认后再加入图库。</p>
+              <h3>生图候选（图生图）</h3>
+              <p>
+                以商品主图为参考图生成主图 / 详情图 /
+                场景图，保留商品本体，候选需人工确认后加入图库。
+              </p>
             </div>
             <button
               type="button"
@@ -1484,7 +1503,7 @@ function WbInspector({
               ) : (
                 <MagicWand size={15} />
               )}
-              {imageGenerationBusy ? "生成中" : "生成 5 个图位"}
+              {imageGenerationBusy ? "生成中" : "按图位生成"}
             </button>
           </div>
           {product.isDemo ? (

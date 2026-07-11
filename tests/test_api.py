@@ -35,14 +35,18 @@ async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
 
 class FakeAIClient:
     received_image_count = 0
+    received_field_guidance: str | None = None
+    edit_prompts: list[str] = []
 
     async def analyze_product_images(
         self,
         images: list[tuple[bytes, str]],
         known_facts: dict[str, object],
         category_hint: str | None,
+        field_guidance: str | None = None,
     ) -> ProductImageAnalysis:
         self.received_image_count = len(images)
+        self.received_field_guidance = field_guidance
         return ProductImageAnalysis(
             observed_fields={},
             generated_fields={},
@@ -50,6 +54,22 @@ class FakeAIClient:
             manual_requirements=[],
             warnings=[],
         )
+
+    async def edit_product_image(
+        self,
+        image_bytes: bytes,
+        file_name: str,
+        content_type: str,
+        prompt: str,
+        size: str,
+        count: int,
+    ) -> dict[str, object]:
+        self.edit_prompts.append(prompt)
+        return {
+            "data": [{"url": "https://example.test/generated.png"}],
+            "requires_confirmation": True,
+            "source_image_preservation_required": True,
+        }
 
 
 fake_ai = FakeAIClient()
@@ -83,6 +103,57 @@ def test_product_analysis_accepts_multiple_images_for_one_product() -> None:
         assert fake_ai.received_image_count == 3
     finally:
         app.dependency_overrides.clear()
+
+
+def test_product_analysis_passes_schema_field_guidance_to_ai() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/analyze-image",
+            files=[("images", ("main.jpg", b"main", "image/jpeg"))],
+            data={"known_facts": "{}", "schema_data": SCHEMA_XML},
+        )
+        assert response.status_code == 200
+        assert fake_ai.received_field_guidance is not None
+        assert "productTitle" in fake_ai.received_field_guidance
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_product_images_uses_reference_image_to_image() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    fake_ai.edit_prompts = []
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/p1/generate-images",
+            files=[("reference", ("main.jpg", b"main", "image/jpeg"))],
+            data={
+                "request": (
+                    '{"product_id":"p1","title":"Pad","category":"Paper",'
+                    '"description":"","keywords":[],"slots":["main","detail"]}'
+                )
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        slots = [candidate["slot"] for candidate in body["candidates"]]
+        assert slots == ["main", "detail"]
+        assert all(candidate["requires_confirmation"] for candidate in body["candidates"])
+        assert len(fake_ai.edit_prompts) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_image_prompt_templates_lists_required_slots() -> None:
+    client = TestClient(app)
+    response = client.get("/api/v1/images/prompt-templates")
+    assert response.status_code == 200
+    templates = {item["slot"]: item for item in response.json()}
+    assert templates["main"]["required"] is True
+    assert templates["main"]["schema_field"] == "scImages"
+    assert templates["detail"]["schema_field"] == "detailImage"
 
 
 def test_oauth_callback_redirects_provider_errors_to_frontend() -> None:

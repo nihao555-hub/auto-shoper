@@ -48,11 +48,13 @@ class AIClient:
         content_type: str,
         known_facts: dict[str, Any],
         category_hint: str | None,
+        field_guidance: str | None = None,
     ) -> ProductImageAnalysis:
         return await self.analyze_product_images(
             [(image_bytes, content_type)],
             known_facts,
             category_hint,
+            field_guidance,
         )
 
     async def analyze_product_images(
@@ -60,6 +62,7 @@ class AIClient:
         images: list[tuple[bytes, str]],
         known_facts: dict[str, Any],
         category_hint: str | None,
+        field_guidance: str | None = None,
     ) -> ProductImageAnalysis:
         facts = json.dumps(known_facts, ensure_ascii=False)
         prompt = (
@@ -78,6 +81,8 @@ class AIClient:
             '"warnings":["..."]}. Return no more than three keywords. '
             f"Known facts: {facts}. Category hint: {category_hint or 'none'}."
         )
+        if field_guidance:
+            prompt = f"{prompt}\n{field_guidance}"
         message_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         message_content.extend(
             {

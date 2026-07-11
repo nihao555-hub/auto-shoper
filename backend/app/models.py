@@ -141,6 +141,9 @@ class ProductImageFacts(BaseModel):
     certifications: list[str] = Field(default_factory=list)
 
 
+ImageSlot = Literal["main", "detail", "scenario", "specification", "packaging"]
+
+
 class ProductImageGenerationRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=200)
     title: str = Field(max_length=500)
@@ -148,13 +151,25 @@ class ProductImageGenerationRequest(BaseModel):
     description: str = Field(max_length=4000)
     keywords: list[str] = Field(default_factory=list, max_length=20)
     facts: ProductImageFacts = Field(default_factory=ProductImageFacts)
+    slots: list[ImageSlot] = Field(default_factory=list)
+    extra_prompt: str = Field(default="", max_length=2000)
+
+
+class ImagePromptTemplate(BaseModel):
+    slot: ImageSlot
+    label: str
+    schema_field: str | None = None
+    required: bool = False
+    instruction: str
 
 
 class ProductImageCandidate(BaseModel):
-    slot: Literal["main", "detail", "scenario", "specification", "packaging"]
+    slot: ImageSlot
     label: str
     image_url: str | None = None
     error: str | None = None
+    requires_confirmation: bool = True
+    source_image_preservation_required: bool = True
 
 
 class ProductImageGenerationResponse(BaseModel):
@@ -268,6 +283,23 @@ class SchemaParseResult(BaseModel):
     fields: list[ParsedSchemaField]
     required_field_ids: list[str]
     manual_confirmation_field_ids: list[str]
+
+
+class SchemaFieldGuidance(BaseModel):
+    field: str
+    name: str | None = None
+    type: str | None = None
+    required: bool = False
+    manual_fact: bool = False
+    max_length: int | None = None
+    tip: str | None = None
+    options: list[SchemaOption] = Field(default_factory=list)
+
+
+class SchemaGuidanceResult(BaseModel):
+    ai_fillable_fields: list[SchemaFieldGuidance]
+    manual_fact_fields: list[SchemaFieldGuidance]
+    required_field_ids: list[str]
 
 
 class ListingChecklistItem(BaseModel):

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from httpx import HTTPError
@@ -27,6 +27,8 @@ from backend.app.models import (
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
     ImageGenerationRequest,
+    ImagePromptTemplate,
+    ImageSlot,
     ListingFieldGroup,
     OfficialListingBatchPublishRequest,
     OfficialListingBatchRequest,
@@ -43,6 +45,7 @@ from backend.app.models import (
     ProductValidationResult,
     SchemaBuildRequest,
     SchemaBuildResult,
+    SchemaGuidanceResult,
     SchemaParseRequest,
     SchemaParseResult,
 )
@@ -52,10 +55,20 @@ from backend.app.services.field_policy import (
     get_listing_field,
     validate_product_fields,
 )
+from backend.app.services.image_templates import (
+    SLOT_TEMPLATES,
+    build_slot_prompt,
+    list_prompt_templates,
+    resolve_slots,
+)
 from backend.app.services.official_listing import (
     build_official_checklist,
     listing_field_groups,
     official_listing_flow,
+)
+from backend.app.services.schema_guidance import (
+    build_schema_guidance,
+    render_guidance_prompt,
 )
 from backend.app.services.schema_rules import (
     SchemaParseError,
@@ -431,6 +444,7 @@ async def analyze_product_image(
     image: Annotated[UploadFile | None, File()] = None,
     known_facts: Annotated[str, Form()] = "{}",
     category_hint: Annotated[str | None, Form()] = None,
+    schema_data: Annotated[str | None, Form()] = None,
 ) -> ProductImageAnalysis:
     uploads = images or ([image] if image else [])
     if not uploads:
@@ -451,14 +465,55 @@ async def analyze_product_image(
         raise HTTPException(status_code=422, detail="known_facts must be a JSON object") from exc
     if not isinstance(parsed_facts, dict):
         raise HTTPException(status_code=422, detail="known_facts must be a JSON object")
+    field_guidance = _field_guidance_prompt(schema_data)
     try:
         return await ai_client.analyze_product_images(
             image_payloads,
             parsed_facts,
             category_hint,
+            field_guidance,
         )
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _field_guidance_prompt(schema_data: str | None) -> str | None:
+    if not schema_data or not schema_data.strip():
+        return None
+    try:
+        guidance = build_schema_guidance(schema_data)
+    except SchemaParseError:
+        return None
+    prompt = render_guidance_prompt(guidance)
+    return prompt or None
+
+
+@router.get(
+    "/alibaba/categories/{category_id}/schema/guidance",
+    response_model=SchemaGuidanceResult,
+)
+async def get_schema_guidance(
+    category_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    language: str = "en_US",
+) -> SchemaGuidanceResult:
+    schema = await _alibaba_call(
+        client,
+        "schema_get",
+        {"cat_id": category_id, "language": language},
+    )
+    try:
+        return build_schema_guidance(schema)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/alibaba/schemas/guidance", response_model=SchemaGuidanceResult)
+async def build_guidance(request: SchemaParseRequest) -> SchemaGuidanceResult:
+    try:
+        return build_schema_guidance(request.schema_data)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/products/validate", response_model=ProductValidationResult)
@@ -630,33 +685,9 @@ def _image_url(payload: object) -> str | None:
     return None
 
 
-def _product_image_prompt(
-    request: ProductImageGenerationRequest,
-    slot: str,
-    instruction: str,
-) -> str:
-    fact_values = [
-        f"品牌={request.facts.brand}",
-        f"型号={request.facts.model}",
-        f"材质={request.facts.material}",
-        f"商品尺寸={request.facts.product_length}×{request.facts.product_width}×"
-        f"{request.facts.product_height} cm",
-        f"包装尺寸={request.facts.package_length}×{request.facts.package_width}×"
-        f"{request.facts.package_height} cm",
-        f"原产地={request.facts.origin}",
-    ]
-    confirmed_facts = "；".join(value for value in fact_values if not value.endswith("="))
-    keywords = "、".join(request.keywords[:8])
-    return (
-        f"Create the {slot} image for an Alibaba.com product listing. {instruction} "
-        "Preserve the exact product identity and do not invent product parts, claims, "
-        "certifications, dimensions, materials, or text that are not supplied. "
-        f"Product title: {request.title or 'not supplied'}. "
-        f"Category: {request.category or 'not supplied'}. "
-        f"Description: {request.description or 'not supplied'}. "
-        f"Keywords: {keywords or 'not supplied'}. "
-        f"Confirmed facts: {confirmed_facts or 'not supplied'}."
-    )
+@router.get("/images/prompt-templates", response_model=list[ImagePromptTemplate])
+async def get_image_prompt_templates() -> list[ImagePromptTemplate]:
+    return list_prompt_templates()
 
 
 @router.post(
@@ -665,74 +696,49 @@ def _product_image_prompt(
 )
 async def generate_product_images(
     product_id: str,
-    request: ProductImageGenerationRequest,
     ai_client: Annotated[AIClient, Depends(get_ai_client)],
+    reference: Annotated[UploadFile, File(...)],
+    request: Annotated[str, Form(...)],
 ) -> ProductImageGenerationResponse:
-    if product_id != request.product_id:
+    try:
+        parsed = ProductImageGenerationRequest.model_validate_json(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="request 不是有效的生图参数") from exc
+    if product_id != parsed.product_id:
         raise HTTPException(status_code=400, detail="商品 ID 与请求内容不一致")
-    slots: tuple[
-        tuple[
-            Literal["main", "detail", "scenario", "specification", "packaging"],
-            str,
-            str,
-        ],
-        ...,
-    ] = (
-        (
-            "main",
-            "主图",
-            "Use a clean white background, centered studio product photography, "
-            "balanced lighting, and no decorative text.",
-        ),
-        (
-            "detail",
-            "细节特写",
-            "Show a close-up of the product's visible construction and texture in a "
-            "clean product-detail composition.",
-        ),
-        (
-            "scenario",
-            "场景图",
-            "Place the product in a realistic use scenario appropriate to its category, "
-            "with a calm commercial lifestyle composition.",
-        ),
-        (
-            "specification",
-            "规格图",
-            "Create a restrained product specification infographic with clear dimension "
-            "callouts only for supplied dimensions; do not invent measurements.",
-        ),
-        (
-            "packaging",
-            "包装图",
-            "Show a realistic packaging and shipment presentation without inventing "
-            "labels, certifications, or packaging claims.",
-        ),
-    )
+    content = await reference.read()
+    _validate_upload(reference, content)
+    file_name = reference.filename or "reference-image"
+    content_type = reference.content_type or "image/jpeg"
+    slots = resolve_slots(parsed.slots)
 
-    async def generate_slot(
-        slot: Literal["main", "detail", "scenario", "specification", "packaging"],
-        label: str,
-        instruction: str,
-    ) -> ProductImageCandidate:
+    async def generate_slot(slot: ImageSlot) -> ProductImageCandidate:
+        template = SLOT_TEMPLATES[slot]
         try:
-            result = await ai_client.generate_image(
-                _product_image_prompt(request, slot, instruction),
+            result = await ai_client.edit_product_image(
+                content,
+                file_name,
+                content_type,
+                build_slot_prompt(template, parsed),
                 "1024x1024",
                 1,
             )
-            image_url = _image_url(result)
+            image_url = _image_url(result.get("data"))
             if image_url is None:
                 return ProductImageCandidate(
                     slot=slot,
-                    label=label,
+                    label=template.label,
                     error="图片服务未返回可用图片地址",
                 )
-            return ProductImageCandidate(slot=slot, label=label, image_url=image_url)
+            return ProductImageCandidate(
+                slot=slot,
+                label=template.label,
+                image_url=image_url,
+            )
         except (AIProviderError, HTTPError, ValueError, TypeError) as exc:
-            return ProductImageCandidate(slot=slot, label=label, error=str(exc))
+            return ProductImageCandidate(slot=slot, label=template.label, error=str(exc))
 
-    candidates = await asyncio.gather(*(generate_slot(*slot) for slot in slots))
+    candidates = await asyncio.gather(*(generate_slot(slot) for slot in slots))
     return ProductImageGenerationResponse(product_id=product_id, candidates=list(candidates))
 
 

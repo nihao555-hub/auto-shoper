@@ -226,11 +226,23 @@ export type ImageAnalysisResponse = {
   warnings: string[];
 };
 
+export type ImageSlot = "main" | "detail" | "scenario" | "specification" | "packaging";
+
+export type ImagePromptTemplate = {
+  slot: ImageSlot;
+  label: string;
+  schema_field: string | null;
+  required: boolean;
+  instruction: string;
+};
+
 export type ProductImageCandidate = {
-  slot: "main" | "detail" | "scenario" | "specification" | "packaging";
+  slot: ImageSlot;
   label: string;
   image_url: string | null;
   error: string | null;
+  requires_confirmation?: boolean;
+  source_image_preservation_required?: boolean;
 };
 
 export type ProductImageGenerationResponse = {
