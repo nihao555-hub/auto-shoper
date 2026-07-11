@@ -1,22 +1,28 @@
 import {
   ArrowRight,
+  Bell,
+  CaretLeft,
+  CaretRight,
   Check,
   CheckCircle,
   CheckSquare,
   CircleNotch,
   CloudArrowUp,
   FileText,
+  Funnel,
+  GearSix,
   Image,
-  Info,
   MagicWand,
   MagnifyingGlass,
-  Package,
   Plus,
+  Question,
   Sparkle,
   Trash,
   UploadSimple,
   Warning,
+  WarningCircle,
   X,
+  XCircle,
 } from "@phosphor-icons/react";
 import {
   type ChangeEvent,
@@ -37,9 +43,9 @@ import {
   publishBatch,
   uploadPhotoBankImage,
 } from "../api";
-import { ProductInspector } from "../components/ProductInspector";
 import { createEmptyFacts, getMainProductImage } from "../data";
 import type {
+  AlibabaConnectedStore,
   CapabilityResponse,
   DataMode,
   DraftField,
@@ -55,6 +61,7 @@ type WorkbenchPageProps = {
   capabilities: CapabilityResponse | null;
   backendConnected: boolean;
   dataMode: DataMode;
+  activeStore: AlibabaConnectedStore | null;
   products: ProductRecord[];
   settings: StoreSettings;
   onProductsChange: (products: ProductRecord[]) => void;
@@ -63,13 +70,7 @@ type WorkbenchPageProps = {
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
 
-const steps = [
-  { label: "上传商品", caption: "一组图片一个商品" },
-  { label: "生成内容", caption: "确认标题与类目" },
-  { label: "补齐资料", caption: "只填真实事实" },
-  { label: "创建草稿", caption: "实时 Schema 校验" },
-  { label: "预览发布", caption: "确认后正式发布" },
-];
+const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
 
 const requiredFactKeys: Array<keyof ProductRecord["facts"]> = [
   "categoryId",
@@ -86,6 +87,7 @@ export function WorkbenchPage({
   capabilities,
   backendConnected,
   dataMode,
+  activeStore,
   products,
   settings,
   onProductsChange,
@@ -93,12 +95,22 @@ export function WorkbenchPage({
   onOpenSettings,
   notify,
 }: WorkbenchPageProps) {
-  const [step, setStep] = useState(() =>
-    products.length === 0 ? 0 : products.some((product) => !product.aiConfirmed) ? 1 : 2,
+  const [step, setStep] = useState(() => {
+    if (products.length === 0) {
+      return 0;
+    }
+    if (dataMode === "demo") {
+      return 2;
+    }
+    return products.some((product) => !product.aiConfirmed) ? 1 : 2;
+  });
+  const [activeProductId, setActiveProductId] = useState(
+    () => (dataMode === "demo" ? products[2]?.id : undefined) ?? products[0]?.id ?? "",
   );
-  const [activeProductId, setActiveProductId] = useState(products[0]?.id ?? "");
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1080);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(() =>
+    dataMode === "demo" && products[2] ? new Set([products[2].id]) : new Set(),
+  );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -153,7 +165,6 @@ export function WorkbenchPage({
   }, [products, query]);
 
   const aiPending = products.filter((product) => !product.aiConfirmed).length;
-  const incompleteProducts = products.filter((product) => getProductErrors(product).length > 0);
   const draftedProducts = products.filter(
     (product) => product.stage === "drafted" || product.stage === "published",
   );
@@ -611,67 +622,87 @@ export function WorkbenchPage({
     }
   };
 
+  const confirmedCount = products.filter((product) => product.aiConfirmed).length;
+  const failedCount = products.filter((product) => product.stage === "error").length;
+  const missingCount = products.filter(
+    (product) => product.stage !== "error" && getFactErrors(product).length > 0,
+  ).length;
+  const draftReadyCount = products.filter(
+    (product) =>
+      product.aiConfirmed && product.stage !== "error" && getFactErrors(product).length === 0,
+  ).length;
+  const stepCaptions = [
+    `已上传 ${products.length}`,
+    `已确认 ${confirmedCount}`,
+    `缺失事实 ${missingCount}`,
+    `可建草稿 ${draftReadyCount}`,
+    `待发布 ${publishedProducts.length}`,
+  ];
+  const backendHealthy = dataMode === "live" && backendConnected && failedCount === 0;
+
   return (
     <div
-      className={`page workbench-page ${
-        step === 2 && activeProduct && inspectorOpen ? "has-inspector" : ""
-      }`}
+      className={`wb-page ${step === 2 && activeProduct && inspectorOpen ? "has-inspector" : ""}`}
     >
-      <header className="page-header workbench-header refined-page-header">
-        <div>
-          <div className="page-context">
-            <span>{dataMode === "demo" ? "演示批次" : "当前批次"}</span>
-            <i />
-            <span>{products.length} 个商品</span>
-          </div>
-          <h1>批量上品</h1>
-          <p>上传图片后，普通商品通常只需确认类目，并补齐价格、MOQ、库存和精确规格。</p>
+      <header className="wb-topbar">
+        <div className="wb-topbar-meta">
+          <span>
+            当前店铺：
+            <strong>{activeStore?.login_id ?? activeStore?.account ?? "未连接店铺"}</strong>
+          </span>
+          <span>
+            批次 ID：<strong>{batchId}</strong>
+          </span>
+          <span>
+            数据模式：<strong>AI 候选 + 用户补齐</strong>
+          </span>
+          <span>
+            后台状态：
+            {backendHealthy ? (
+              <strong className="wb-health is-ok">
+                <CheckCircle size={14} weight="fill" />
+                运行正常
+              </strong>
+            ) : (
+              <strong className="wb-health is-warn">
+                <Warning size={14} weight="fill" />
+                部分异常
+              </strong>
+            )}
+          </span>
         </div>
-        <div className="header-actions">
-          <div className={`workspace-mode-chip ${dataMode === "demo" ? "is-demo" : ""}`}>
-            <span>{dataMode === "demo" ? "演示" : "真实"}</span>
-            <strong>{dataMode === "demo" ? "隔离演示空间" : "真实工作区"}</strong>
-          </div>
-          <div className="compact-connection-status">
-            <i className={`connection-dot ${backendConnected ? "is-online" : "is-offline"}`} />
-            <span>{backendConnected ? "后端在线" : "后端离线"}</span>
-          </div>
+        <div className="wb-topbar-tools">
+          <button type="button" className="wb-bell" aria-label="通知">
+            <Bell size={19} />
+            <i>12</i>
+          </button>
+          <button type="button" className="wb-help">
+            <Question size={17} />
+            帮助中心
+          </button>
         </div>
       </header>
 
-      <nav className="workflow-steps" aria-label="上品流程">
-        {steps.map((item, index) => (
-          <button
-            key={item.label}
-            type="button"
-            className={`${step === index ? "is-active" : ""} ${
-              completedSteps[index] ? "is-complete" : ""
-            }`}
-            onClick={() => setStep(index)}
-          >
-            <span className="step-number">
-              {completedSteps[index] ? <Check size={15} /> : index + 1}
-            </span>
-            <span>
-              <strong>{item.label}</strong>
-              <small>{item.caption}</small>
-            </span>
-          </button>
-        ))}
-      </nav>
-
-      <div className="workbench-body">
-        <section className="workbench-content">
-          {dataMode === "demo" ? (
-            <div className="demo-banner">
-              <Info size={18} weight="fill" />
-              <p>演示空间已开启。所有草稿和发布动作仅更新页面状态，不会调用真实账户。</p>
-              <button type="button" onClick={() => fileInputRef.current?.click()}>
-                上传真实商品
+      <div className="wb-body">
+        <section className="wb-content">
+          <nav className="wb-steps" aria-label="上品流程">
+            {stepLabels.map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                className={`wb-step ${step === index ? "is-active" : ""} ${
+                  completedSteps[index] ? "is-complete" : ""
+                }`}
+                onClick={() => setStep(index)}
+              >
+                <span className="wb-step-number">{index + 1}</span>
+                <span className="wb-step-copy">
+                  <strong>{label}</strong>
+                  <small>{stepCaptions[index]}</small>
+                </span>
               </button>
-            </div>
-          ) : null}
-
+            ))}
+          </nav>
           {step === 0 ? (
             <UploadStep
               products={products}
@@ -711,7 +742,6 @@ export function WorkbenchPage({
                 setActiveProductId(id);
                 setInspectorOpen(true);
               }}
-              onBulkConfirmAi={confirmAllAi}
               onOpenSettings={onOpenSettings}
             />
           ) : null}
@@ -744,62 +774,72 @@ export function WorkbenchPage({
         </section>
 
         {step === 2 && activeProduct && inspectorOpen ? (
-          <ProductInspector
+          <WbInspector
             product={activeProduct}
-            productIndex={activeIndex}
-            total={products.length}
             onClose={() => setInspectorOpen(false)}
-            onPrevious={() => {
-              const previous = products[activeIndex - 1];
-              if (previous) {
-                setActiveProductId(previous.id);
-              }
-            }}
-            onNext={() => {
-              const next = products[activeIndex + 1];
+            onSwitch={() => {
+              const next = products[(activeIndex + 1) % products.length];
               if (next) {
                 setActiveProductId(next.id);
               }
             }}
             onChange={updateProduct}
-            onSave={saveInspector}
           />
         ) : null}
       </div>
 
-      <footer className="workbench-footer">
-        <div className="batch-identity">
-          <strong>{batchId}</strong>
-          <span>{products.length} 个商品 · 刚刚自动保存</span>
+      <footer className="wb-footer">
+        <div className="wb-footer-stats">
+          <div className="wb-footer-stat is-ok">
+            <CheckCircle size={20} weight="fill" />
+            <span>
+              <small>已确认</small>
+              <strong>{confirmedCount}</strong>
+            </span>
+          </div>
+          <i className="wb-footer-sep" />
+          <div className="wb-footer-stat is-warn">
+            <WarningCircle size={20} weight="fill" />
+            <span>
+              <small>缺失事实</small>
+              <strong>{missingCount}</strong>
+            </span>
+          </div>
+          <i className="wb-footer-sep" />
+          <div className="wb-footer-stat is-info">
+            <FileText size={20} weight="fill" />
+            <span>
+              <small>可建草稿</small>
+              <strong>{draftReadyCount}</strong>
+            </span>
+          </div>
+          <i className="wb-footer-sep" />
+          <div className="wb-footer-stat is-danger">
+            <XCircle size={20} weight="fill" />
+            <span>
+              <small>校验失败</small>
+              <strong>{failedCount}</strong>
+            </span>
+          </div>
         </div>
-        <div className="footer-metrics">
-          <Metric value={products.length - aiPending} label="内容已确认" tone="ink" />
-          <Metric value={aiPending} label="待确认" tone="violet" />
-          <Metric value={incompleteProducts.length} label="待补资料" tone="orange" />
-          <Metric value={draftedProducts.length} label="草稿" tone="blue" />
-          <Metric value={publishedProducts.length} label="已发布" tone="green" />
-        </div>
-        <div className="footer-actions">
-          {step > 0 ? (
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={() => setStep((current) => Math.max(0, current - 1))}
-              disabled={busy}
-            >
-              上一步
-            </button>
-          ) : (
-            <span />
-          )}
+        <div className="wb-footer-actions">
+          <span className="wb-footer-total">共 {products.length} 条</span>
           <button
             type="button"
-            className={`button button-primary button-large ${step === 4 ? "button-publish" : ""}`}
+            className="wb-button-primary"
             onClick={goNext}
             disabled={busy || !products.length || (step === 4 && publishTargets.length === 0)}
           >
-            {busy ? <CircleNotch size={19} className="spin" /> : actionIcon(step)}
+            {busy ? <CircleNotch size={17} className="spin" /> : null}
             {actionLabel(step, aiPending)}
+          </button>
+          <button
+            type="button"
+            className="wb-button-secondary"
+            onClick={saveInspector}
+            disabled={busy || !activeProduct}
+          >
+            保存草稿
           </button>
         </div>
       </footer>
@@ -1104,6 +1144,16 @@ function AiStep({
   );
 }
 
+type SourceFilter = "all" | "user_confirmed" | "ai_candidate";
+type CheckFilter = "all" | "passed" | "missing" | "failed";
+
+function getCheckState(product: ProductRecord): "passed" | "missing" | "failed" {
+  if (product.stage === "error") {
+    return "failed";
+  }
+  return getFactErrors(product).length ? "missing" : "passed";
+}
+
 function FactsStep({
   products,
   allProducts,
@@ -1114,7 +1164,6 @@ function FactsStep({
   onToggleSelected,
   onToggleAll,
   onOpenProduct,
-  onBulkConfirmAi,
   onOpenSettings,
 }: {
   products: ProductRecord[];
@@ -1126,76 +1175,101 @@ function FactsStep({
   onToggleSelected: (id: string) => void;
   onToggleAll: () => void;
   onOpenProduct: (id: string) => void;
-  onBulkConfirmAi: () => void;
   onOpenSettings: () => void;
 }) {
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [checkFilter, setCheckFilter] = useState<CheckFilter>("all");
+  const visibleProducts = products.filter((product) => {
+    if (sourceFilter !== "all") {
+      const source = product.aiConfirmed ? "user_confirmed" : "ai_candidate";
+      if (source !== sourceFilter) {
+        return false;
+      }
+    }
+    return checkFilter === "all" || getCheckState(product) === checkFilter;
+  });
+
   return (
-    <div className="facts-step">
-      <div className="facts-summary">
-        <p>
-          <strong>AI 已完成 {allProducts.length * 4 + 2} 项</strong>
-          <span>待确认 {allProducts.filter((product) => !product.aiConfirmed).length} 项</span>
-          <span>
-            待填写{" "}
-            {allProducts.reduce((count, product) => count + getProductErrors(product).length, 0)} 项
-          </span>
-        </p>
-        <div className="facts-summary-actions">
-          <label className="search-field">
-            <MagnifyingGlass size={17} />
-            <span className="sr-only">搜索商品</span>
-            <input
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="搜索商品 / Ref / SKU"
-            />
-          </label>
-        </div>
+    <div className="wb-facts">
+      <div className="wb-toolbar">
+        <label className="wb-select">
+          <span className="sr-only">来源状态</span>
+          <select
+            value={sourceFilter}
+            onChange={(event) => setSourceFilter(event.target.value as SourceFilter)}
+          >
+            <option value="all">全部来源状态</option>
+            <option value="user_confirmed">user_confirmed</option>
+            <option value="ai_candidate">ai_candidate</option>
+          </select>
+        </label>
+        <label className="wb-select">
+          <span className="sr-only">校验状态</span>
+          <select
+            value={checkFilter}
+            onChange={(event) => setCheckFilter(event.target.value as CheckFilter)}
+          >
+            <option value="all">全部校验状态</option>
+            <option value="passed">已通过</option>
+            <option value="missing">缺失事实</option>
+            <option value="failed">校验失败</option>
+          </select>
+        </label>
+        <label className="wb-search">
+          <span className="sr-only">搜索商品</span>
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="请输入商品标题 / SKU"
+          />
+          <MagnifyingGlass size={16} />
+        </label>
+        <button type="button" className="wb-filter-button">
+          <Funnel size={16} />
+          筛选
+        </button>
+        <button
+          type="button"
+          className="wb-gear-button"
+          onClick={onOpenSettings}
+          aria-label="批量默认配置"
+        >
+          <GearSix size={17} />
+        </button>
       </div>
 
-      <div className="bulk-toolbar">
-        <strong>已选择 {selected.size} 项</strong>
-        <button type="button" onClick={onBulkConfirmAi}>
-          <CheckSquare size={17} />
-          批量确认 AI
-        </button>
-        <button type="button" onClick={onOpenSettings}>
-          <Package size={17} />
-          批量使用默认配置
-        </button>
-      </div>
-
-      <div className="product-table-scroll">
-        <table className="product-table">
+      <div className="wb-table-shell">
+        <table className="wb-table">
           <thead>
             <tr>
-              <th>
+              <th className="wb-col-check">
                 <input
                   type="checkbox"
                   aria-label="选择全部商品"
-                  checked={products.length > 0 && selected.size === products.length}
+                  checked={visibleProducts.length > 0 && selected.size === visibleProducts.length}
                   onChange={onToggleAll}
                 />
               </th>
-              <th>商品</th>
-              <th>来源</th>
-              <th>内部参考 / Ref</th>
-              <th>AI 英文标题</th>
+              <th className="wb-col-index">#</th>
+              <th>图片</th>
+              <th>商品标题</th>
               <th>类目</th>
-              <th>材质</th>
-              <th>价格</th>
+              <th>SKU</th>
+              <th>价格（USD）</th>
               <th>MOQ</th>
-              <th>库存</th>
-              <th>状态</th>
+              <th>来源状态</th>
+              <th>校验状态</th>
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => {
-              const errors = getProductErrors(product);
+            {visibleProducts.map((product, index) => {
+              const checkState = getCheckState(product);
               return (
                 <tr
                   key={product.id}
-                  className={activeProductId === product.id ? "is-active-row" : ""}
+                  className={`${checkState === "failed" ? "is-failed" : ""} ${
+                    activeProductId === product.id ? "is-active" : ""
+                  }`}
                   onClick={() => onOpenProduct(product.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -1205,7 +1279,7 @@ function FactsStep({
                   }}
                   tabIndex={0}
                 >
-                  <td>
+                  <td className="wb-col-check">
                     <input
                       type="checkbox"
                       aria-label={`选择 ${product.reference}`}
@@ -1214,42 +1288,45 @@ function FactsStep({
                       onChange={() => onToggleSelected(product.id)}
                     />
                   </td>
+                  <td className="wb-col-index">{index + 1}</td>
                   <td>
-                    <img
-                      className="product-thumbnail"
-                      src={getMainProductImage(product).url}
-                      alt=""
-                    />
+                    <img className="wb-thumb" src={getMainProductImage(product).url} alt="" />
                   </td>
-                  <td>
-                    <SourceBadge
-                      source={product.aiConfirmed ? "confirmed" : "ai"}
-                      label={product.aiConfirmed ? "用户确认" : "AI 候选"}
-                    />
+                  <td className="wb-col-title">
+                    <span>{product.title || "等待 AI 生成"}</span>
                   </td>
-                  <td>
-                    <strong className="reference-cell">{product.reference}</strong>
-                    <span className="model-cell">{product.facts.model || "型号待填"}</span>
+                  <td className="wb-col-category">
+                    {product.facts.categoryLabel
+                      ? product.facts.categoryLabel
+                          .split(">")
+                          .map((part) => part.trim())
+                          .join(" > ")
+                          .replace(/ > ([^>]*)$/, " >\n$1")
+                      : "待确认"}
                   </td>
-                  <td>
-                    <span className="title-cell">{product.title || "等待 AI 生成"}</span>
+                  <td className="wb-col-sku">{product.reference}</td>
+                  <td className="wb-col-price">
+                    {product.facts.price ? product.facts.price : "—"}
                   </td>
+                  <td className="wb-col-moq">{product.facts.moq ? product.facts.moq : "—"}</td>
                   <td>
-                    <span className="category-cell">
-                      {product.facts.categoryLabel
-                        ? product.facts.categoryLabel.split(">").at(-1)?.trim()
-                        : "待确认"}
+                    <span
+                      className={`wb-source ${product.aiConfirmed ? "is-confirmed" : "is-candidate"}`}
+                    >
+                      {product.aiConfirmed ? "user_confirmed" : "ai_candidate"}
                     </span>
                   </td>
-                  <td>{product.facts.material || <MissingValue />}</td>
-                  <td>{product.facts.price ? `$${product.facts.price}` : <MissingValue />}</td>
-                  <td>{product.facts.moq || <MissingValue />}</td>
-                  <td>{product.facts.stock || <MissingValue />}</td>
                   <td>
-                    {errors.length ? (
-                      <SourceBadge source="missing" label={`缺 ${errors.length} 项`} />
+                    {checkState === "failed" ? (
+                      <span className="wb-check is-failed">
+                        <XCircle size={14} weight="fill" />
+                        校验失败
+                        <small>{product.errors[0] ?? "价格、库存必填"}</small>
+                      </span>
+                    ) : checkState === "missing" ? (
+                      <span className="wb-check is-missing">缺失事实</span>
                     ) : (
-                      <SourceBadge source="trusted" label="资料完整" />
+                      <span className="wb-check is-passed">已通过</span>
                     )}
                   </td>
                 </tr>
@@ -1257,12 +1334,252 @@ function FactsStep({
             })}
           </tbody>
         </table>
-      </div>
-      <div className="table-footer compact">
-        <span>共 {products.length} 条</span>
-        <span>点击商品行，在右侧补充精确资料</span>
+        <div className="wb-table-footer">
+          <span>共 {allProducts.length} 条</span>
+          <div className="wb-pagination">
+            <button type="button" aria-label="上一页" disabled>
+              <CaretLeft size={13} />
+            </button>
+            <button type="button" className="is-current">
+              1
+            </button>
+            <button type="button" aria-label="下一页" disabled>
+              <CaretRight size={13} />
+            </button>
+            <label className="wb-select wb-page-size">
+              <span className="sr-only">每页条数</span>
+              <select defaultValue="20">
+                <option value="20">20 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+            </label>
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function WbInspector({
+  product,
+  onClose,
+  onSwitch,
+  onChange,
+}: {
+  product: ProductRecord;
+  onClose: () => void;
+  onSwitch: () => void;
+  onChange: (product: ProductRecord) => void;
+}) {
+  const setFact = (key: keyof ProductRecord["facts"], value: string) => {
+    onChange({ ...product, facts: { ...product.facts, [key]: value } });
+  };
+  const sourceBadge = (confirmed: boolean) => (
+    <span className={`wb-source ${confirmed ? "is-confirmed" : "is-candidate"}`}>
+      {confirmed ? "user_confirmed" : "ai_candidate"}
+    </span>
+  );
+  const complianceNote = product.facts.certifications[0] ?? "";
+
+  return (
+    <aside className="wb-inspector" aria-label="商品资料">
+      <header className="wb-inspector-header">
+        <strong>已选择 1 条商品</strong>
+        <div className="wb-inspector-header-actions">
+          <button type="button" className="wb-link" onClick={onSwitch}>
+            切换商品
+          </button>
+          <button type="button" className="wb-inspector-close" onClick={onClose} aria-label="关闭">
+            <X size={15} />
+          </button>
+        </div>
+      </header>
+
+      <div className="wb-inspector-scroll">
+        <section className="wb-inspector-section">
+          <h3>基础信息</h3>
+          <div className="wb-field">
+            <span className="wb-field-label">商品标题</span>
+            <div className="wb-field-control">
+              <div className="wb-input wb-input-counter">
+                <input
+                  value={product.title}
+                  onChange={(event) => onChange({ ...product, title: event.target.value })}
+                />
+                <small>{product.title.length}/128</small>
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">类目</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input wb-input-select">
+                <select
+                  value={product.facts.categoryLabel}
+                  onChange={(event) => setFact("categoryLabel", event.target.value)}
+                >
+                  <option value={product.facts.categoryLabel || "工具 > 涂装工具 > 刷子"}>
+                    {product.facts.categoryLabel || "工具 > 涂装工具 > 刷子"}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">品牌</span>
+            <div className="wb-field-control">
+              {sourceBadge(product.aiConfirmed)}
+              <div className="wb-input">
+                <input
+                  value={product.facts.brand}
+                  onChange={(event) => setFact("brand", event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">商品描述</span>
+            <div className="wb-field-control">
+              {sourceBadge(product.aiConfirmed)}
+              <div className="wb-input wb-input-counter wb-input-area">
+                <textarea
+                  rows={2}
+                  value={product.description}
+                  onChange={(event) => onChange({ ...product, description: event.target.value })}
+                />
+                <small>{product.description.length}/500</small>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="wb-inspector-section">
+          <h3>SKU 与价格</h3>
+          <div className="wb-field">
+            <span className="wb-field-label">SKU</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input wb-input-counter">
+                <input
+                  value={product.reference}
+                  onChange={(event) => onChange({ ...product, reference: event.target.value })}
+                />
+                <small>{product.reference.length}/64</small>
+              </div>
+            </div>
+          </div>
+          <div className="wb-field wb-field-split">
+            <div>
+              <span className="wb-field-label">价格（USD）</span>
+              <div className="wb-input">
+                <input
+                  value={product.facts.price}
+                  onChange={(event) => setFact("price", event.target.value)}
+                />
+              </div>
+            </div>
+            <div>
+              <span className="wb-field-label">库存（可售）</span>
+              <div className="wb-input">
+                <input
+                  value={product.facts.stock}
+                  onChange={(event) => setFact("stock", event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">单位</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input wb-input-select">
+                <select defaultValue="套">
+                  <option value="套">套</option>
+                  <option value="件">件</option>
+                  <option value="个">个</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="wb-inspector-section">
+          <h3>包装物流</h3>
+          <div className="wb-field wb-field-split">
+            <div>
+              <span className="wb-field-label">包装尺寸（cm）</span>
+              <div className="wb-input">
+                <input
+                  value={
+                    product.facts.packageLength && product.facts.packageWidth
+                      ? `${product.facts.packageLength}×${product.facts.packageWidth}×${product.facts.packageHeight}`
+                      : ""
+                  }
+                  readOnly
+                />
+              </div>
+            </div>
+            <div>
+              <span className="wb-field-label">包装重量（kg）</span>
+              <div className="wb-input">
+                <input
+                  value={product.facts.grossWeight}
+                  onChange={(event) => setFact("grossWeight", event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">运费模版</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input wb-input-select">
+                <select defaultValue="标准物流">
+                  <option value="标准物流">标准物流</option>
+                  <option value="快速物流">快速物流</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="wb-inspector-section">
+          <h3>合规资料</h3>
+          <div className="wb-field">
+            <span className="wb-field-label">材质</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input">
+                <input
+                  value={product.facts.material}
+                  onChange={(event) => setFact("material", event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="wb-field">
+            <span className="wb-field-label">合规说明</span>
+            <div className="wb-field-control">
+              {sourceBadge(true)}
+              <div className="wb-input wb-input-counter wb-input-area">
+                <textarea
+                  rows={2}
+                  value={complianceNote}
+                  onChange={(event) =>
+                    onChange({
+                      ...product,
+                      facts: { ...product.facts, certifications: [event.target.value] },
+                    })
+                  }
+                />
+                <small>{complianceNote.length}/200</small>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
   );
 }
 
@@ -1665,27 +1982,6 @@ function SourceBadge({
   return <span className={`source-badge source-${source}`}>{label}</span>;
 }
 
-function MissingValue() {
-  return <span className="missing-value">待填写</span>;
-}
-
-function Metric({
-  value,
-  label,
-  tone,
-}: {
-  value: number;
-  label: string;
-  tone: "ink" | "violet" | "orange" | "blue" | "green";
-}) {
-  return (
-    <div className={`footer-metric metric-${tone}`}>
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
-  );
-}
-
 function actionLabel(step: number, aiPending: number) {
   if (step === 0) {
     return "开始 AI 分析";
@@ -1694,7 +1990,7 @@ function actionLabel(step: number, aiPending: number) {
     return aiPending ? `确认剩余 ${aiPending} 项` : "进入资料填写";
   }
   if (step === 2) {
-    return "校验商品资料";
+    return "校验并继续";
   }
   if (step === 3) {
     return "校验并创建草稿";
@@ -1702,31 +1998,24 @@ function actionLabel(step: number, aiPending: number) {
   return "确认正式发布";
 }
 
-function actionIcon(step: number) {
-  if (step === 0 || step === 1) {
-    return <MagicWand size={19} />;
-  }
-  if (step === 2) {
-    return <CheckSquare size={19} />;
-  }
-  if (step === 3) {
-    return <FileText size={19} />;
-  }
-  return <UploadSimple size={19} />;
-}
-
 function getProductErrors(product: ProductRecord): string[] {
   const errors: string[] = [];
   if (!product.aiConfirmed) {
     errors.push("AI 内容尚未确认");
   }
+  errors.push(...getFactErrors(product));
+  return errors;
+}
+
+function getFactErrors(product: ProductRecord): string[] {
+  const errors: string[] = [];
   for (const key of requiredFactKeys) {
     if (!String(product.facts[key] ?? "").trim()) {
       errors.push(factErrorLabel(key));
     }
   }
   if (!product.title.trim()) {
-    errors.push("英文标题缺失");
+    errors.push("商品标题缺失");
   }
   return errors;
 }

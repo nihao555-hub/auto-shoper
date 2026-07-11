@@ -67,106 +67,153 @@ const demoImage = (id: string, url: string): ProductImage => ({
 export const getMainProductImage = (product: ProductRecord): ProductImage =>
   product.images.find((image) => image.id === product.mainImageId) ?? product.images[0];
 
+const brushCategory = {
+  categoryId: "127814008",
+  categoryLabel: "工具 > 涂装工具 > 刷子",
+  brand: "BrushPro",
+};
+
+const demoProduct = (input: {
+  id: string;
+  sku: string;
+  image: string;
+  title: string;
+  description: string;
+  aiConfirmed: boolean;
+  stage: ProductRecord["stage"];
+  factOverrides: Partial<ProductFacts>;
+  errors: string[];
+}): ProductRecord => ({
+  id: input.id,
+  reference: input.sku,
+  images: [demoImage(`${input.id}-main`, input.image)],
+  mainImageId: `${input.id}-main`,
+  title: input.title,
+  keywords: ["paint brush", "painting tools", "wall painting"],
+  sellingPoints: [],
+  description: input.description,
+  visibleTraits: [],
+  aiConfirmed: input.aiConfirmed,
+  stage: input.stage,
+  facts: facts({ ...brushCategory, ...input.factOverrides }),
+  errors: input.errors,
+  isDemo: true,
+});
+
 export const sampleProducts: ProductRecord[] = [
-  {
-    id: "product-fan-01",
-    reference: "PT-FB-001",
-    images: [demoImage("fan-main", "/products/fan-brush-set.webp")],
-    mainImageId: "fan-main",
-    title: "Professional Fan Brush Set 9 Pcs for Acrylic and Oil Painting",
-    keywords: ["fan brush set", "artist paint brushes", "nylon hair brush"],
-    sellingPoints: [
-      "Nine graduated fan brush sizes",
-      "Flexible nylon hair for controlled texture",
-      "Balanced black lacquered handles",
-    ],
-    description:
-      "A nine-piece fan brush set designed for blending, foliage, texture and soft edge work.",
-    visibleTraits: ["9 pieces", "black handles", "fan-shaped bristles"],
+  demoProduct({
+    id: "product-pb-set-09",
+    sku: "BP-PB-SET-09",
+    image: "/products/fan-brush-set.webp",
+    title: "专业级油漆刷套装 9件套 墙面木器涂用 尼龙刷毛",
+    description: "适用于乳胶漆、墙面漆等多种涂料，刷毛顺滑不掉毛，手柄舒适省力。",
+    aiConfirmed: true,
+    stage: "ready",
+    factOverrides: {
+      model: "PB-SET-09",
+      price: "8.99",
+      moq: "2",
+      stock: "1200",
+      grossWeight: "9.80",
+    },
+    errors: [],
+  }),
+  demoProduct({
+    id: "product-ang-2in",
+    sku: "BP-ANG-2IN",
+    image: "/products/flat-brush-set.webp",
+    title: "2英寸斜角刷 油漆刷 适用于切边和角落",
+    description: "斜角设计，方便处理墙角与边缘细节。",
+    aiConfirmed: false,
+    stage: "facts_needed",
+    factOverrides: { model: "ANG-2IN", price: "1.29", moq: "10", stock: "860", grossWeight: "" },
+    errors: ["包装毛重缺失"],
+  }),
+  demoProduct({
+    id: "product-latex-3p",
+    sku: "BP-LATEX-3P",
+    image: "/products/round-brush-set.webp",
+    title: "3件套乳胶漆刷 家庭装修 墙面涂刷工具套装",
+    description: "适用于乳胶漆、墙面漆等多种涂料，刷毛顺滑不掉毛，手柄舒适省力。",
     aiConfirmed: true,
     stage: "facts_needed",
-    facts: facts({
-      model: "FB-9N",
-      price: "6.50",
-      stock: "520",
-      grossWeight: "",
-    }),
-    errors: ["请填写包装毛重"],
-    isDemo: true,
-  },
-  {
-    id: "product-flat-02",
-    reference: "PT-FB-002",
-    images: [demoImage("flat-main", "/products/flat-brush-set.webp")],
-    mainImageId: "flat-main",
-    title: "Flat Paint Brush Set 6 Pcs with Golden Ferrules for Artists",
-    keywords: ["flat paint brushes", "artist brush set", "gold ferrule brush"],
-    sellingPoints: [
-      "Six useful graduated widths",
-      "Smooth synthetic bristles",
-      "Easy-clean matte handles",
-    ],
-    description: "A compact six-piece flat brush set for broad strokes, blocking and clean edges.",
-    visibleTraits: ["6 pieces", "gold ferrules", "flat bristles"],
+    factOverrides: { model: "LATEX-3P", price: "4.59", moq: "5", stock: "", grossWeight: "" },
+    errors: ["库存缺失", "包装毛重缺失"],
+  }),
+  demoProduct({
+    id: "product-foam-5p",
+    sku: "BP-FOAM-5P",
+    image: "/products/filbert-brush-set.webp",
+    title: "泡沫刷套装 5件套 海绵刷 油漆涂抹工具",
+    description: "细腻海绵刷头，涂抹均匀无刷痕。",
     aiConfirmed: false,
     stage: "ai_ready",
-    facts: facts({
-      model: "FLAT-6G",
-      price: "4.80",
-      stock: "860",
-      grossWeight: "8.40",
-    }),
+    factOverrides: {
+      model: "FOAM-5P",
+      price: "2.19",
+      moq: "10",
+      stock: "1500",
+      grossWeight: "6.20",
+    },
     errors: ["AI 内容尚未确认"],
-    isDemo: true,
-  },
-  {
-    id: "product-round-03",
-    reference: "PT-RB-001",
-    images: [demoImage("round-main", "/products/round-brush-set.webp")],
-    mainImageId: "round-main",
-    title: "Round Detail Paint Brush Set 12 Pcs Fine Tip Artist Brushes",
-    keywords: ["detail paint brush", "round brush set", "fine tip brushes"],
-    sellingPoints: ["Twelve precision sizes", "Fine pointed tips", "Comfortable espresso handles"],
-    description:
-      "A twelve-piece detail set for miniature painting, line work and controlled highlights.",
-    visibleTraits: ["12 pieces", "fine tips", "brown handles"],
+  }),
+  demoProduct({
+    id: "product-frame-9in",
+    sku: "BP-FRAME-9IN",
+    image: "/products/fan-brush-set.webp",
+    title: "9英寸滚筒刷架 带手柄 适配标准滚筒芯",
+    description: "金属支架结实耐用，适配标准 9 英寸滚筒芯。",
     aiConfirmed: true,
-    stage: "ready",
-    facts: facts({
-      model: "ROUND-12S",
-      price: "7.20",
-      stock: "1200",
-      grossWeight: "9.60",
-    }),
-    errors: [],
-    isDemo: true,
-  },
-  {
-    id: "product-filbert-04",
-    reference: "PT-FILB-001",
-    images: [demoImage("filbert-main", "/products/filbert-brush-set.webp")],
-    mainImageId: "filbert-main",
-    title: "Filbert Artist Brush Set 7 Pcs for Acrylic and Oil Painting",
-    keywords: ["filbert brush set", "acrylic paint brush", "oil painting brush"],
-    sellingPoints: [
-      "Seven oval filbert shapes",
-      "Soft synthetic blend",
-      "Deep green lacquered handles",
-    ],
-    description:
-      "A versatile filbert brush set that combines the control of a flat brush with soft rounded edges.",
-    visibleTraits: ["7 pieces", "oval tips", "green handles"],
+    stage: "facts_needed",
+    factOverrides: {
+      model: "FRAME-9IN",
+      material: "",
+      price: "2.89",
+      moq: "10",
+      stock: "960",
+      grossWeight: "7.10",
+    },
+    errors: ["材质缺失"],
+  }),
+  demoProduct({
+    id: "product-cover-9in-3",
+    sku: "BP-COVER-9IN-3",
+    image: "/products/flat-brush-set.webp",
+    title: "9英寸乳胶漆滚筒刷芯 3只装 高吸附 耐用",
+    description: "高吸附纤维刷芯，覆盖均匀省漆。",
+    aiConfirmed: false,
+    stage: "ai_ready",
+    factOverrides: {
+      model: "COVER-9IN-3",
+      price: "3.49",
+      moq: "10",
+      stock: "2100",
+      grossWeight: "8.40",
+    },
+    errors: ["AI 内容尚未确认"],
+  }),
+  demoProduct({
+    id: "product-detail-6p",
+    sku: "BP-DETAIL-6P",
+    image: "/products/round-brush-set.webp",
+    title: "细节刷套装 6件套 适合细节涂装与修补",
+    description: "小巧刷头，适合家具修补与细节涂装。",
+    aiConfirmed: false,
+    stage: "facts_needed",
+    factOverrides: { model: "DETAIL-6P", price: "2.79", moq: "10", stock: "780", grossWeight: "" },
+    errors: ["包装毛重缺失"],
+  }),
+  demoProduct({
+    id: "product-wide-4in",
+    sku: "BP-WIDE-4IN",
+    image: "/products/filbert-brush-set.webp",
+    title: "4英寸宽平刷 木柄刷 适用于水性漆和油性漆",
+    description: "宽幅刷头，大面积涂刷效率更高。",
     aiConfirmed: true,
-    stage: "ready",
-    facts: facts({
-      model: "FILB-7G",
-      price: "5.40",
-      stock: "610",
-      grossWeight: "8.90",
-    }),
-    errors: [],
-    isDemo: true,
-  },
+    stage: "error",
+    factOverrides: { model: "WIDE-4IN", price: "", moq: "", stock: "", grossWeight: "5.60" },
+    errors: ["价格、库存必填"],
+  }),
 ];
 
 const demoTargetStore = "杭州上品优选贸易有限公司";

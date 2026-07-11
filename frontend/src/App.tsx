@@ -459,6 +459,7 @@ export default function App() {
       ) : activeView === "workbench" ? (
         <WorkbenchPage
           batchId={batchId}
+          activeStore={visibleStores.find((store) => store.id === visibleActiveStoreId) ?? null}
           capabilities={capabilities}
           backendConnected={backendConnected}
           dataMode={dataMode}
