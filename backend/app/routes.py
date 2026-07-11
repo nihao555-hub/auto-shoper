@@ -70,6 +70,7 @@ async def capabilities() -> dict[str, Any]:
             "sales_expert": False,
         },
         "alibaba_credentials_configured": get_settings().has_alibaba_credentials,
+        "model_credentials_configured": bool(get_settings().openai_api_key),
     }
 
 

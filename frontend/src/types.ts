@@ -1,4 +1,6 @@
-export type AppView = "workbench" | "batches";
+export type AppView = "overview" | "workbench" | "batches";
+
+export type DataMode = "live" | "demo";
 
 export type FieldSource =
   | "image_extracted"
@@ -104,6 +106,7 @@ export type CapabilityResponse = {
     sales_expert: boolean;
   };
   alibaba_credentials_configured: boolean;
+  model_credentials_configured: boolean;
 };
 
 export type ListingFieldGroup = {

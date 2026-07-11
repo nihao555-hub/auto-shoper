@@ -218,7 +218,7 @@ export function SettingsDrawer({
                     <p>
                       {capabilities?.alibaba_credentials_configured
                         ? "商品、类目、图片银行和发布能力已可用。"
-                        : "当前为演示模式，配置服务端凭据后可调用真实账户。"}
+                        : "尚未授权真实账户，配置服务端凭据后可调用商品与发布接口。"}
                     </p>
                   </div>
                 </div>

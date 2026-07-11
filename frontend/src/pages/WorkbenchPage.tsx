@@ -6,7 +6,6 @@ import {
   CircleNotch,
   CloudArrowUp,
   FileText,
-  GearSix,
   Image,
   Info,
   MagicWand,
@@ -40,6 +39,7 @@ import { ProductInspector } from "../components/ProductInspector";
 import { createEmptyFacts } from "../data";
 import type {
   CapabilityResponse,
+  DataMode,
   DraftField,
   ImageAnalysisResponse,
   ListingFieldGroup,
@@ -50,11 +50,13 @@ import type {
 
 type WorkbenchPageProps = {
   capabilities: CapabilityResponse | null;
+  backendConnected: boolean;
+  dataMode: DataMode;
   products: ProductRecord[];
   settings: StoreSettings;
   onProductsChange: (products: ProductRecord[]) => void;
+  onDataModeChange: (mode: DataMode) => void;
   onOpenSettings: () => void;
-  onNavigateBatches: () => void;
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
 
@@ -78,15 +80,17 @@ const requiredFactKeys: Array<keyof ProductRecord["facts"]> = [
 
 export function WorkbenchPage({
   capabilities,
+  backendConnected,
+  dataMode,
   products,
   settings,
   onProductsChange,
+  onDataModeChange,
   onOpenSettings,
-  onNavigateBatches,
   notify,
 }: WorkbenchPageProps) {
   const [step, setStep] = useState(() =>
-    products.some((product) => !product.aiConfirmed) ? 1 : 2,
+    products.length === 0 ? 0 : products.some((product) => !product.aiConfirmed) ? 1 : 2,
   );
   const [activeProductId, setActiveProductId] = useState(products[0]?.id ?? "");
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1080);
@@ -108,6 +112,9 @@ export function WorkbenchPage({
   useEffect(() => {
     if (!products.some((product) => product.id === activeProductId)) {
       setActiveProductId(products[0]?.id ?? "");
+    }
+    if (products.length === 0) {
+      setStep(0);
     }
   }, [activeProductId, products]);
 
@@ -192,8 +199,11 @@ export function WorkbenchPage({
       errors: ["等待 AI 分析"],
     }));
 
-    const shouldReplaceDemo = products.length > 0 && products.every((product) => product.isDemo);
+    const shouldReplaceDemo = dataMode === "demo";
     const nextProducts = shouldReplaceDemo ? newProducts : [...products, ...newProducts];
+    if (shouldReplaceDemo) {
+      onDataModeChange("live");
+    }
     onProductsChange(nextProducts);
     setActiveProductId(newProducts[0].id);
     setStep(0);
@@ -215,6 +225,14 @@ export function WorkbenchPage({
   };
 
   const analyzeOne = async (product: ProductRecord) => {
+    if (!product.isDemo && (!backendConnected || !capabilities?.model_credentials_configured)) {
+      notify(
+        "error",
+        !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
+        !backendConnected ? "请先启动后端服务。" : "配置模型凭据后再分析真实商品图片。",
+      );
+      return;
+    }
     replaceProduct(product.id, (current) => ({
       ...current,
       stage: "analyzing",
@@ -246,6 +264,14 @@ export function WorkbenchPage({
   const analyzeAll = async () => {
     if (!products.length) {
       notify("warning", "请先上传商品图片");
+      return;
+    }
+    if (dataMode === "live" && (!backendConnected || !capabilities?.model_credentials_configured)) {
+      notify(
+        "error",
+        !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
+        !backendConnected ? "请先启动后端服务。" : "配置模型凭据后再分析真实商品图片。",
+      );
       return;
     }
     setBusy(true);
@@ -525,35 +551,25 @@ export function WorkbenchPage({
 
   return (
     <div className={`page workbench-page ${inspectorOpen ? "has-inspector" : ""}`}>
-      <header className="page-header workbench-header">
+      <header className="page-header workbench-header refined-page-header">
         <div>
-          <span className="eyebrow">批次 B250521-001</span>
-          <h1>批量上品工作台</h1>
-          <p>上传商品图，补齐真实资料，通过草稿回读后再发布。</p>
+          <div className="page-context">
+            <span>{dataMode === "demo" ? "演示批次" : "当前批次"}</span>
+            <i />
+            <span>{products.length} 个商品</span>
+          </div>
+          <h1>批量上品</h1>
+          <p>上传图片，确认 AI 内容，补齐事实数据，再创建草稿并发布。</p>
         </div>
         <div className="header-actions">
-          <div className="account-status">
-            <span className="alibaba-symbol small">a</span>
-            <div>
-              <strong>Alibaba.com</strong>
-              <span>
-                <i
-                  className={`connection-dot ${
-                    capabilities?.alibaba_credentials_configured ? "is-online" : "is-offline"
-                  }`}
-                />
-                {capabilities?.alibaba_credentials_configured ? "已连接" : "演示模式"}
-              </span>
-            </div>
+          <div className={`workspace-mode-chip ${dataMode === "demo" ? "is-demo" : ""}`}>
+            <span>{dataMode === "demo" ? "DEMO" : "LIVE"}</span>
+            <strong>{dataMode === "demo" ? "隔离演示空间" : "真实工作区"}</strong>
           </div>
-          <button type="button" className="button button-secondary" onClick={onNavigateBatches}>
-            <FileText size={18} />
-            批次记录
-          </button>
-          <button type="button" className="button button-secondary" onClick={onOpenSettings}>
-            <GearSix size={18} />
-            工作台设置
-          </button>
+          <div className="compact-connection-status">
+            <i className={`connection-dot ${backendConnected ? "is-online" : "is-offline"}`} />
+            <span>{backendConnected ? "后端在线" : "后端离线"}</span>
+          </div>
         </div>
       </header>
 
@@ -580,12 +596,12 @@ export function WorkbenchPage({
 
       <div className="workbench-body">
         <section className="workbench-content">
-          {products.some((product) => product.isDemo) ? (
+          {dataMode === "demo" ? (
             <div className="demo-banner">
               <Info size={18} weight="fill" />
-              <p>当前展示示例批次。上传自己的图片后会自动清空示例，真实发布仍需明确确认。</p>
+              <p>演示空间已开启。所有草稿和发布动作仅更新页面状态，不会调用真实账户。</p>
               <button type="button" onClick={() => fileInputRef.current?.click()}>
-                上传我的商品
+                上传真实商品
               </button>
             </div>
           ) : null}

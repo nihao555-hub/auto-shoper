@@ -1,21 +1,31 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCapabilities } from "./api";
 import { AppShell } from "./components/AppShell";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { ToastStack } from "./components/ToastStack";
-import { defaultSettings, sampleProducts } from "./data";
+import { defaultSettings, sampleBatches, sampleProducts } from "./data";
 import { BatchesPage } from "./pages/BatchesPage";
+import { OverviewPage } from "./pages/OverviewPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import type {
   AppView,
+  BatchRecord,
   CapabilityResponse,
+  DataMode,
   ProductRecord,
   StoreSettings,
   ToastMessage,
 } from "./types";
 
-const getViewFromHash = (): AppView =>
-  window.location.hash === "#/batches" ? "batches" : "workbench";
+const getViewFromHash = (): AppView => {
+  if (window.location.hash === "#/workbench") {
+    return "workbench";
+  }
+  if (window.location.hash === "#/batches") {
+    return "batches";
+  }
+  return "overview";
+};
 
 const loadSettings = (): StoreSettings => {
   const saved = window.localStorage.getItem("auto-shoper-settings");
@@ -29,13 +39,82 @@ const loadSettings = (): StoreSettings => {
   }
 };
 
+const cloneDemoProducts = () =>
+  sampleProducts.map((product) => ({
+    ...product,
+    facts: { ...product.facts, certifications: [...product.facts.certifications] },
+    keywords: [...product.keywords],
+    sellingPoints: [...product.sellingPoints],
+    visibleTraits: [...product.visibleTraits],
+    errors: [...product.errors],
+  }));
+
+const formatTimestamp = () =>
+  new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date());
+
+const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord | null => {
+  if (!products.length) {
+    return null;
+  }
+  const drafted = products.filter(
+    (product) => product.stage === "drafted" || product.stage === "published",
+  ).length;
+  const published = products.filter((product) => product.stage === "published").length;
+  const failed = products.some((product) => product.stage === "error");
+  const status: BatchRecord["status"] = failed
+    ? "failed"
+    : published === products.length
+      ? "complete"
+      : drafted === products.length
+        ? "ready"
+        : "processing";
+  return {
+    id: batchId,
+    name: products[0]?.title || "新商品批次",
+    createdAt: formatTimestamp(),
+    updatedAt: "刚刚",
+    productCount: products.length,
+    completion: Math.round(
+      products.reduce((total, product) => {
+        if (product.stage === "published") return total + 100;
+        if (product.stage === "drafted") return total + 82;
+        if (product.stage === "ready") return total + 64;
+        if (product.aiConfirmed) return total + 46;
+        return total + 18;
+      }, 0) / products.length,
+    ),
+    draftCount: drafted,
+    publishedCount: published,
+    reviewStatus: failed ? "failed" : published ? "passed" : "pending",
+    reviewLabel: failed ? "需要处理" : published ? "已通过" : "等待发布",
+    status,
+    images: products.slice(0, 3).map((product) => product.imageUrl),
+  };
+};
+
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>(getViewFromHash);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<StoreSettings>(loadSettings);
-  const [products, setProducts] = useState<ProductRecord[]>(sampleProducts);
+  const [dataMode, setDataMode] = useState<DataMode>("live");
+  const [liveProducts, setLiveProducts] = useState<ProductRecord[]>([]);
+  const [demoProducts, setDemoProducts] = useState<ProductRecord[]>(cloneDemoProducts);
+  const [batchId] = useState(
+    () => `B${new Date().toISOString().slice(2, 10).replaceAll("-", "")}-001`,
+  );
   const [capabilities, setCapabilities] = useState<CapabilityResponse | null>(null);
+  const [backendConnected, setBackendConnected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const products = dataMode === "demo" ? demoProducts : liveProducts;
+  const liveBatch = useMemo(() => buildLiveBatch(liveProducts, batchId), [liveProducts, batchId]);
+  const batches = dataMode === "demo" ? sampleBatches : liveBatch ? [liveBatch] : [];
 
   useEffect(() => {
     const onHashChange = () => setActiveView(getViewFromHash());
@@ -45,21 +124,18 @@ export default function App() {
 
   useEffect(() => {
     getCapabilities()
-      .then(setCapabilities)
-      .catch(() =>
-        setCapabilities({
-          modules: {
-            alibaba_listing: true,
-            ai_images: true,
-            sales_expert: false,
-          },
-          alibaba_credentials_configured: false,
-        }),
-      );
+      .then((response) => {
+        setCapabilities(response);
+        setBackendConnected(true);
+      })
+      .catch(() => {
+        setCapabilities(null);
+        setBackendConnected(false);
+      });
   }, []);
 
   const navigate = (view: AppView) => {
-    window.location.hash = view === "batches" ? "#/batches" : "#/workbench";
+    window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;
     setActiveView(view);
   };
 
@@ -78,25 +154,69 @@ export default function App() {
     notify("success", "默认配置已保存", "新商品会自动带出允许复用的字段。");
   };
 
+  const changeDataMode = (mode: DataMode) => {
+    setDataMode(mode);
+    if (mode === "demo" && demoProducts.length === 0) {
+      setDemoProducts(cloneDemoProducts());
+    }
+    notify(
+      "info",
+      mode === "demo" ? "已进入演示空间" : "已切回真实工作区",
+      mode === "demo" ? "演示操作不会调用真实 Alibaba 账户。" : "示例数据已隐藏。",
+    );
+  };
+
+  const updateProducts = (nextProducts: ProductRecord[]) => {
+    if (dataMode === "demo" && nextProducts.some((product) => !product.isDemo)) {
+      setLiveProducts(nextProducts.filter((product) => !product.isDemo));
+      setDataMode("live");
+    } else if (dataMode === "demo") {
+      setDemoProducts(nextProducts);
+    } else {
+      setLiveProducts(nextProducts);
+    }
+  };
+
   return (
     <AppShell
       activeView={activeView}
       capabilities={capabilities}
+      backendConnected={backendConnected}
+      dataMode={dataMode}
+      onDataModeChange={changeDataMode}
       onNavigate={navigate}
       onOpenSettings={() => setSettingsOpen(true)}
     >
-      {activeView === "workbench" ? (
+      {activeView === "overview" ? (
+        <OverviewPage
+          batches={batches}
+          products={products}
+          capabilities={capabilities}
+          backendConnected={backendConnected}
+          dataMode={dataMode}
+          onNavigateWorkbench={() => navigate("workbench")}
+          onNavigateBatches={() => navigate("batches")}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      ) : activeView === "workbench" ? (
         <WorkbenchPage
           capabilities={capabilities}
+          backendConnected={backendConnected}
+          dataMode={dataMode}
           products={products}
           settings={settings}
-          onProductsChange={setProducts}
+          onProductsChange={updateProducts}
+          onDataModeChange={changeDataMode}
           onOpenSettings={() => setSettingsOpen(true)}
-          onNavigateBatches={() => navigate("batches")}
           notify={notify}
         />
       ) : (
-        <BatchesPage capabilities={capabilities} onNewBatch={() => navigate("workbench")} />
+        <BatchesPage
+          batches={batches}
+          capabilities={capabilities}
+          dataMode={dataMode}
+          onNewBatch={() => navigate("workbench")}
+        />
       )}
       <SettingsDrawer
         open={settingsOpen}
