@@ -71,7 +71,7 @@ export function AppShell({
           }}
           aria-label="返回总览"
         >
-          <BrandMark size={32} />
+          <BrandMark size={30} variant="glyph" />
           <strong>上品台</strong>
         </button>
 

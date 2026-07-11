@@ -1,8 +1,29 @@
 type BrandMarkProps = {
   size?: number;
+  variant?: "tile" | "glyph";
 };
 
-export function BrandMark({ size = 34 }: BrandMarkProps) {
+export function BrandMark({ size = 34, variant = "tile" }: BrandMarkProps) {
+  if (variant === "glyph") {
+    return (
+      <svg
+        aria-hidden="true"
+        className="brand-mark-svg"
+        width={size}
+        height={size}
+        viewBox="0 0 40 40"
+        fill="none"
+      >
+        <g fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+          <path d="M11.5 7.5h17L20 13Z" />
+          <path d="M32.5 11.5v17L27 20Z" />
+          <path d="M28.5 32.5h-17L20 27Z" />
+          <path d="M7.5 28.5v-17L13 20Z" />
+        </g>
+        <circle cx="34" cy="34" r="2.4" fill="currentColor" />
+      </svg>
+    );
+  }
   return (
     <svg
       aria-hidden="true"

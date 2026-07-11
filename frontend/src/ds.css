@@ -73,19 +73,11 @@
   flex: 0 0 auto;
 }
 
-.ds-brand .brand-mark-svg rect {
-  fill: transparent;
-}
-
-.ds-brand .brand-mark-svg path {
-  stroke: var(--ds-brand);
-}
-
 .ds-brand strong {
   color: var(--ds-text);
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
 }
 
 .ds-nav {
@@ -325,9 +317,10 @@
 }
 
 .ds-page-header h1 {
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 32px;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  line-height: 40px;
 }
 
 .ds-page-header .ds-page-subtitle {
@@ -546,7 +539,7 @@
 
 .ov-metric-value strong {
   font-size: 40px;
-  font-weight: 700;
+  font-weight: 900;
   line-height: 44px;
   font-variant-numeric: tabular-nums;
 }
@@ -576,7 +569,7 @@
 
 .ov-panel h2 {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 24px;
 }
 
@@ -595,7 +588,7 @@
 
 .ov-selected strong {
   font-size: 48px;
-  font-weight: 700;
+  font-weight: 900;
   line-height: 52px;
   font-variant-numeric: tabular-nums;
 }
@@ -775,7 +768,7 @@
 
 .ov-recent h2 {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .ov-recent table {
