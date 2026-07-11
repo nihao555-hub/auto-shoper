@@ -96,7 +96,7 @@ export default function App() {
           notify={notify}
         />
       ) : (
-        <BatchesPage onNewBatch={() => navigate("workbench")} />
+        <BatchesPage capabilities={capabilities} onNewBatch={() => navigate("workbench")} />
       )}
       <SettingsDrawer
         open={settingsOpen}

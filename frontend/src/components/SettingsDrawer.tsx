@@ -67,6 +67,17 @@ export function SettingsDrawer({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, open]);
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
   if (!open) {
     return null;
   }
@@ -109,8 +120,8 @@ export function SettingsDrawer({
               {capabilities?.alibaba_credentials_configured ? "已连接" : "尚未连接"}
             </span>
           </div>
-          <button type="button" className="text-button">
-            {capabilities?.alibaba_credentials_configured ? "重新授权" : "查看配置"}
+          <button type="button" className="text-button" onClick={() => setSection("connection")}>
+            {capabilities?.alibaba_credentials_configured ? "授权说明" : "连接说明"}
           </button>
         </div>
 

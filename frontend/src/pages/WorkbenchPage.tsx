@@ -12,7 +12,6 @@ import {
   MagicWand,
   MagnifyingGlass,
   Package,
-  PencilSimple,
   Plus,
   Sparkle,
   Trash,
@@ -86,9 +85,11 @@ export function WorkbenchPage({
   onNavigateBatches,
   notify,
 }: WorkbenchPageProps) {
-  const [step, setStep] = useState(2);
+  const [step, setStep] = useState(() =>
+    products.some((product) => !product.aiConfirmed) ? 1 : 2,
+  );
   const [activeProductId, setActiveProductId] = useState(products[0]?.id ?? "");
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1080);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -109,6 +110,17 @@ export function WorkbenchPage({
       setActiveProductId(products[0]?.id ?? "");
     }
   }, [activeProductId, products]);
+
+  useEffect(() => {
+    if (!publishDialogOpen) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [publishDialogOpen]);
 
   const activeProduct =
     products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
@@ -135,6 +147,16 @@ export function WorkbenchPage({
     (product) => product.stage === "drafted" || product.stage === "published",
   );
   const publishedProducts = products.filter((product) => product.stage === "published");
+  const publishTargets = getActionProducts(products, selected).filter(
+    (product) => product.stage === "drafted",
+  );
+  const completedSteps = [
+    products.length > 0,
+    products.length > 0 && products.every((product) => product.aiConfirmed),
+    products.length > 0 && products.every((product) => getProductErrors(product).length === 0),
+    draftedProducts.length > 0,
+    publishedProducts.length > 0,
+  ];
 
   const updateProduct = (nextProduct: ProductRecord) => {
     onProductsChange(
@@ -325,6 +347,7 @@ export function WorkbenchPage({
           ),
         );
         notify("success", `已创建 ${targets.length} 个演示草稿`, "没有联系或改动真实账户。");
+        setActiveProductId(targets[0].id);
         setStep(4);
         return;
       }
@@ -366,6 +389,13 @@ export function WorkbenchPage({
         `草稿创建完成: ${succeeded}/${results.length}`,
         "失败商品已隔离，不影响其他商品。",
       );
+      const firstSucceeded = results.find((result) => result.success);
+      if (firstSucceeded) {
+        const product = products.find((item) => item.reference === firstSucceeded.reference);
+        if (product) {
+          setActiveProductId(product.id);
+        }
+      }
       setStep(4);
     } catch (error) {
       markProducts(targets, "error", error instanceof Error ? error.message : "草稿创建失败");
@@ -532,10 +562,14 @@ export function WorkbenchPage({
           <button
             key={item.label}
             type="button"
-            className={`${step === index ? "is-active" : ""} ${step > index ? "is-complete" : ""}`}
+            className={`${step === index ? "is-active" : ""} ${
+              completedSteps[index] ? "is-complete" : ""
+            }`}
             onClick={() => setStep(index)}
           >
-            <span className="step-number">{step > index ? <Check size={15} /> : index + 1}</span>
+            <span className="step-number">
+              {completedSteps[index] ? <Check size={15} /> : index + 1}
+            </span>
             <span>
               <strong>{item.label}</strong>
               <small>{item.caption}</small>
@@ -602,6 +636,7 @@ export function WorkbenchPage({
             <DraftStep
               products={products}
               busy={busy}
+              selected={selected}
               onOpenProduct={(id) => {
                 setActiveProductId(id);
                 setInspectorOpen(true);
@@ -616,6 +651,7 @@ export function WorkbenchPage({
               products={products}
               activeProductId={activeProduct?.id ?? ""}
               selected={selected}
+              publishCount={publishTargets.length}
               onSelect={toggleSelected}
               onActiveChange={setActiveProductId}
               onPublish={() => setPublishDialogOpen(true)}
@@ -670,15 +706,13 @@ export function WorkbenchPage({
               上一步
             </button>
           ) : (
-            <button type="button" className="button button-secondary">
-              保存批次
-            </button>
+            <span />
           )}
           <button
             type="button"
             className={`button button-primary button-large ${step === 4 ? "button-publish" : ""}`}
             onClick={goNext}
-            disabled={busy || !products.length}
+            disabled={busy || !products.length || (step === 4 && publishTargets.length === 0)}
           >
             {busy ? <CircleNotch size={19} className="spin" /> : actionIcon(step)}
             {actionLabel(step, aiPending)}
@@ -697,10 +731,8 @@ export function WorkbenchPage({
 
       {publishDialogOpen ? (
         <PublishDialog
-          productCount={
-            getActionProducts(products, selected).filter((product) => product.stage === "drafted")
-              .length
-          }
+          productCount={publishTargets.length}
+          isDemo={publishTargets.every((product) => product.isDemo)}
           confirmed={publishConfirmed}
           busy={busy}
           onConfirmedChange={setPublishConfirmed}
@@ -1013,10 +1045,6 @@ function FactsStep({
           <Package size={17} />
           批量使用默认配置
         </button>
-        <button type="button">
-          <PencilSimple size={17} />
-          批量编辑事实
-        </button>
       </div>
 
       <div className="product-table-scroll">
@@ -1119,15 +1147,20 @@ function FactsStep({
 function DraftStep({
   products,
   busy,
+  selected,
   onOpenProduct,
   onCreateDrafts,
 }: {
   products: ProductRecord[];
   busy: boolean;
+  selected: Set<string>;
   onOpenProduct: (id: string) => void;
   onCreateDrafts: () => void;
 }) {
-  const ready = products.filter((product) => getProductErrors(product).length === 0);
+  const scopedProducts = selected.size
+    ? products.filter((product) => selected.has(product.id))
+    : products;
+  const ready = scopedProducts.filter((product) => getProductErrors(product).length === 0);
   return (
     <div className="step-page draft-step">
       <div className="step-heading">
@@ -1143,7 +1176,7 @@ function DraftStep({
           disabled={!ready.length || busy}
         >
           {busy ? <CircleNotch size={19} className="spin" /> : <FileText size={19} />}为{" "}
-          {ready.length} 个商品创建草稿
+          {ready.length} 个{selected.size ? "所选" : ""}商品创建草稿
         </button>
       </div>
 
@@ -1152,23 +1185,26 @@ function DraftStep({
           <span>可创建草稿</span>
           <strong>
             {ready.length}
-            <small> / {products.length}</small>
+            <small> / {scopedProducts.length}</small>
           </strong>
           <p>只有来源和 Schema 校验同时通过的商品会写入。</p>
         </div>
         <div className="draft-checks">
-          <CheckLine label="AI 内容已人工确认" passed={products.every((p) => p.aiConfirmed)} />
+          <CheckLine
+            label="AI 内容已人工确认"
+            passed={scopedProducts.every((p) => p.aiConfirmed)}
+          />
           <CheckLine
             label="交易和库存来自可信数据"
-            passed={products.every((p) => p.facts.price && p.facts.stock)}
+            passed={scopedProducts.every((p) => p.facts.price && p.facts.stock)}
           />
           <CheckLine
             label="尺寸、重量和包装完整"
-            passed={products.every((p) => p.facts.grossWeight)}
+            passed={scopedProducts.every((p) => p.facts.grossWeight)}
           />
           <CheckLine
             label="实时 Alibaba Schema"
-            passed={products.every((p) => p.isDemo || Boolean(p.schemaData))}
+            passed={scopedProducts.every((p) => p.isDemo || Boolean(p.schemaData))}
             pendingLabel="创建草稿时获取"
           />
         </div>
@@ -1229,6 +1265,7 @@ function PreviewStep({
   products,
   activeProductId,
   selected,
+  publishCount,
   onSelect,
   onActiveChange,
   onPublish,
@@ -1236,15 +1273,16 @@ function PreviewStep({
   products: ProductRecord[];
   activeProductId: string;
   selected: Set<string>;
+  publishCount: number;
   onSelect: (id: string) => void;
   onActiveChange: (id: string) => void;
   onPublish: () => void;
 }) {
-  const activeProduct =
-    products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
   const drafted = products.filter(
     (product) => product.stage === "drafted" || product.stage === "published",
   );
+  const activeProduct =
+    drafted.find((product) => product.id === activeProductId) ?? drafted[0] ?? null;
 
   return (
     <div className="preview-step">
@@ -1256,7 +1294,7 @@ function PreviewStep({
           </div>
           <span>{drafted.length} 个草稿</span>
         </div>
-        {products.map((product) => {
+        {drafted.map((product) => {
           const canPublish = product.stage === "drafted";
           return (
             <button
@@ -1349,15 +1387,20 @@ function PreviewStep({
                   </p>
                 ))}
               </div>
-              <button type="button" className="preview-inquiry-button">
-                Contact supplier
+              <button type="button" className="preview-inquiry-button" disabled>
+                Contact supplier · preview
               </button>
             </div>
           </div>
           <div className="preview-review-strip">
             <CheckCircle size={19} weight="fill" />
             <p>请检查图片、标题、属性、SKU、价格、MOQ、库存、包装物流和认证。</p>
-            <button type="button" className="button button-primary" onClick={onPublish}>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={onPublish}
+              disabled={publishCount === 0}
+            >
               确认并发布所选商品
             </button>
           </div>
@@ -1371,6 +1414,7 @@ function PreviewStep({
 
 function PublishDialog({
   productCount,
+  isDemo,
   confirmed,
   busy,
   onConfirmedChange,
@@ -1378,6 +1422,7 @@ function PublishDialog({
   onConfirm,
 }: {
   productCount: number;
+  isDemo: boolean;
   confirmed: boolean;
   busy: boolean;
   onConfirmedChange: (confirmed: boolean) => void;
@@ -1400,9 +1445,13 @@ function PublishDialog({
         <div className="publish-dialog-icon">
           <UploadSimple size={26} />
         </div>
-        <span className="eyebrow">正式写入 Alibaba.com</span>
+        <span className="eyebrow">{isDemo ? "演示发布检查" : "正式写入 Alibaba.com"}</span>
         <h2 id="publish-title">确认发布 {productCount} 个商品</h2>
-        <p>正式发布会写入真实商家账户，并进入 Alibaba 审核流程。失败商品会单独返回。</p>
+        <p>
+          {isDemo
+            ? "演示商品只会更新当前页面状态，不会联系或改动真实 Alibaba 账户。"
+            : "正式发布会写入真实商家账户，并进入 Alibaba 审核流程。失败商品会单独返回。"}
+        </p>
         <label className="confirmation-check">
           <input
             type="checkbox"
@@ -1422,7 +1471,7 @@ function PublishDialog({
             onClick={onConfirm}
           >
             {busy ? <CircleNotch size={18} className="spin" /> : <UploadSimple size={18} />}
-            确认正式发布
+            {isDemo ? "确认演示发布" : "确认正式发布"}
           </button>
         </div>
       </section>

@@ -490,6 +490,15 @@ table {
   color: var(--danger);
 }
 
+.row-action-muted {
+  cursor: default;
+  color: var(--faint);
+}
+
+.row-action-muted:hover {
+  color: var(--faint);
+}
+
 .field {
   position: relative;
   display: flex;
@@ -2026,6 +2035,11 @@ input[type="checkbox"] {
   color: white;
   font-size: 12px;
   font-weight: 700;
+}
+
+.preview-inquiry-button:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .preview-review-strip {

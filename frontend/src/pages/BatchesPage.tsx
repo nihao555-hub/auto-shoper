@@ -1,32 +1,36 @@
-import {
-  ArrowRight,
-  CaretDown,
-  CaretLeft,
-  CaretRight,
-  MagnifyingGlass,
-  Plus,
-} from "@phosphor-icons/react";
+import { ArrowRight, MagnifyingGlass, Plus } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { sampleBatches } from "../data";
-import type { BatchRecord } from "../types";
+import type { BatchRecord, CapabilityResponse } from "../types";
 
 type BatchesPageProps = {
+  capabilities: CapabilityResponse | null;
   onNewBatch: () => void;
 };
 
 type BatchFilter = "all" | "processing" | "ready" | "failed" | "complete";
 
-const filters: Array<{ key: BatchFilter; label: string; count: number }> = [
-  { key: "all", label: "全部", count: 12 },
-  { key: "processing", label: "处理中", count: 2 },
-  { key: "ready", label: "待发布", count: 3 },
-  { key: "failed", label: "审核异常", count: 1 },
-  { key: "complete", label: "已完成", count: 6 },
+const filters: Array<{ key: BatchFilter; label: string }> = [
+  { key: "all", label: "全部" },
+  { key: "processing", label: "处理中" },
+  { key: "ready", label: "待发布" },
+  { key: "failed", label: "审核异常" },
+  { key: "complete", label: "已完成" },
 ];
 
-export function BatchesPage({ onNewBatch }: BatchesPageProps) {
+export function BatchesPage({ capabilities, onNewBatch }: BatchesPageProps) {
   const [filter, setFilter] = useState<BatchFilter>("all");
   const [query, setQuery] = useState("");
+  const connected = capabilities?.alibaba_credentials_configured === true;
+  const totals = useMemo(
+    () => ({
+      uploaded: sampleBatches.reduce((count, batch) => count + batch.productCount, 0),
+      drafted: sampleBatches.reduce((count, batch) => count + batch.draftCount, 0),
+      published: sampleBatches.reduce((count, batch) => count + batch.publishedCount, 0),
+      attention: sampleBatches.filter((batch) => batch.status !== "complete").length,
+    }),
+    [],
+  );
 
   const batches = useMemo(
     () =>
@@ -41,6 +45,10 @@ export function BatchesPage({ onNewBatch }: BatchesPageProps) {
       }),
     [filter, query],
   );
+  const filterCount = (key: BatchFilter) =>
+    key === "all"
+      ? sampleBatches.length
+      : sampleBatches.filter((batch) => batch.status === key).length;
 
   return (
     <div className="page batches-page">
@@ -56,8 +64,8 @@ export function BatchesPage({ onNewBatch }: BatchesPageProps) {
             <div>
               <strong>Alibaba.com</strong>
               <span>
-                <i className="connection-dot is-online" />
-                已连接
+                <i className={`connection-dot ${connected ? "is-online" : "is-offline"}`} />
+                {connected ? "已连接" : "演示模式"}
               </span>
             </div>
           </div>
@@ -82,7 +90,7 @@ export function BatchesPage({ onNewBatch }: BatchesPageProps) {
                   onClick={() => setFilter(item.key)}
                 >
                   {item.label}
-                  <span>{item.count}</span>
+                  <span>{filterCount(item.key)}</span>
                 </button>
               ))}
             </div>
@@ -127,40 +135,21 @@ export function BatchesPage({ onNewBatch }: BatchesPageProps) {
           </div>
 
           <footer className="table-footer">
-            <span>共 12 条</span>
-            <div className="pagination">
-              <button type="button" className="icon-button" disabled>
-                <CaretLeft size={17} />
-                <span className="sr-only">上一页</span>
-              </button>
-              <button type="button" className="page-number is-active">
-                1
-              </button>
-              <button type="button" className="page-number">
-                2
-              </button>
-              <button type="button" className="icon-button">
-                <CaretRight size={17} />
-                <span className="sr-only">下一页</span>
-              </button>
-              <button type="button" className="page-size">
-                10 条/页
-                <CaretDown size={14} />
-              </button>
-            </div>
+            <span>共 {batches.length} 条</span>
+            <span>演示记录 · 全部展示</span>
           </footer>
         </section>
 
         <aside className="weekly-summary">
-          <span className="eyebrow">5.19 - 5.25</span>
-          <h2>本周进度</h2>
+          <span className="eyebrow">演示数据</span>
+          <h2>批次汇总</h2>
           <div className="summary-metrics">
-            <SummaryMetric label="已上传" value="148" />
-            <SummaryMetric label="已建草稿" value="121" />
-            <SummaryMetric label="已发布" value="96" tone="success" />
-            <SummaryMetric label="待处理" value="7" tone="danger" />
+            <SummaryMetric label="已上传" value={String(totals.uploaded)} />
+            <SummaryMetric label="已建草稿" value={String(totals.drafted)} />
+            <SummaryMetric label="已发布" value={String(totals.published)} tone="success" />
+            <SummaryMetric label="待处理批次" value={String(totals.attention)} tone="danger" />
           </div>
-          <p>数据每小时更新</p>
+          <p>连接真实业务数据后自动更新</p>
         </aside>
       </div>
     </div>
@@ -168,6 +157,7 @@ export function BatchesPage({ onNewBatch }: BatchesPageProps) {
 }
 
 function BatchRow({ batch, onOpen }: { batch: BatchRecord; onOpen: () => void }) {
+  const isCurrentDemoBatch = batch.id === "B250521-001";
   return (
     <tr className={batch.status === "failed" ? "is-error-row" : ""}>
       <td>
@@ -238,18 +228,14 @@ function BatchRow({ batch, onOpen }: { batch: BatchRecord; onOpen: () => void })
       </td>
       <td className="muted-cell">{batch.updatedAt}</td>
       <td>
-        <button
-          type="button"
-          className={`row-action ${batch.status === "failed" ? "is-danger" : ""}`}
-          onClick={onOpen}
-        >
-          {batch.status === "failed"
-            ? "处理异常"
-            : batch.status === "complete"
-              ? "查看结果"
-              : "继续编辑"}
-          <ArrowRight size={15} />
-        </button>
+        {isCurrentDemoBatch ? (
+          <button type="button" className="row-action" onClick={onOpen}>
+            继续编辑
+            <ArrowRight size={15} />
+          </button>
+        ) : (
+          <span className="row-action row-action-muted">演示记录</span>
+        )}
       </td>
     </tr>
   );

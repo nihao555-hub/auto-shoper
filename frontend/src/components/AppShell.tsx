@@ -1,11 +1,4 @@
-import {
-  Archive,
-  GearSix,
-  Headset,
-  Package,
-  SquaresFour,
-  UploadSimple,
-} from "@phosphor-icons/react";
+import { Archive, GearSix, UploadSimple } from "@phosphor-icons/react";
 import type { PropsWithChildren } from "react";
 import type { AppView, CapabilityResponse } from "../types";
 
@@ -19,7 +12,7 @@ type AppShellProps = PropsWithChildren<{
 const navItems: Array<{
   view: AppView;
   label: string;
-  icon: typeof SquaresFour;
+  icon: typeof UploadSimple;
 }> = [
   {
     view: "workbench",
@@ -66,14 +59,6 @@ export function AppShell({
               <span>{label}</span>
             </button>
           ))}
-          <button type="button" className="rail-item rail-item-disabled" disabled>
-            <Package size={22} />
-            <span>商品</span>
-          </button>
-          <button type="button" className="rail-item rail-item-disabled" disabled>
-            <SquaresFour size={22} />
-            <span>数据</span>
-          </button>
         </nav>
 
         <div className="rail-bottom">
@@ -81,10 +66,6 @@ export function AppShell({
             <GearSix size={22} />
             <span>设置</span>
           </button>
-          <a className="rail-item" href="https://docs.devin.ai" target="_blank" rel="noreferrer">
-            <Headset size={22} />
-            <span>帮助</span>
-          </a>
         </div>
       </aside>
 
