@@ -223,10 +223,21 @@ export default function App() {
     if (!user) {
       return;
     }
-    setSettings(loadSettings(user.workspace_id, activeStoreId));
+    const savedSettings = loadSettings(user.workspace_id, activeStoreId);
+    const storeAssets = stores.find((store) => store.id === activeStoreId)?.merchant_assets;
+    setSettings({
+      ...savedSettings,
+      companyProfile: savedSettings.companyProfile || storeAssets?.company_profile || "",
+      afterSalesPolicy: savedSettings.afterSalesPolicy || storeAssets?.after_sales_policy || "",
+      customizationPolicy:
+        savedSettings.customizationPolicy || storeAssets?.customization_policy || "",
+      detailTemplate: savedSettings.detailTemplate || storeAssets?.detail_template || "",
+      origin: savedSettings.origin || storeAssets?.origin || "",
+      brand: savedSettings.brand || storeAssets?.brand || "",
+    });
     setLiveProducts([]);
     setBatchId(createBatchId());
-  }, [activeStoreId, user]);
+  }, [activeStoreId, stores, user]);
 
   const navigate = (view: AppView) => {
     window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;

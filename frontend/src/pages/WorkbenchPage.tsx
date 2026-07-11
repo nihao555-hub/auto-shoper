@@ -38,6 +38,7 @@ import {
   createDraftBatch,
   findPhotoBankUrl,
   findSchemaData,
+  generateProductImages,
   getCategorySchema,
   getListingFieldMatrix,
   publishBatch,
@@ -51,6 +52,7 @@ import type {
   DraftField,
   ImageAnalysisResponse,
   ListingFieldGroup,
+  ProductImageCandidate,
   ProductRecord,
   StoreSettings,
   ToastMessage,
@@ -117,7 +119,10 @@ export function WorkbenchPage({
   const [fieldGroups, setFieldGroups] = useState<ListingFieldGroup[]>([]);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
+  const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previousActiveProductId = useRef(activeProductId);
 
   useEffect(() => {
     getListingFieldMatrix()
@@ -133,6 +138,13 @@ export function WorkbenchPage({
       setStep(0);
     }
   }, [activeProductId, products]);
+
+  useEffect(() => {
+    if (previousActiveProductId.current !== activeProductId) {
+      previousActiveProductId.current = activeProductId;
+      setImageCandidates([]);
+    }
+  }, [activeProductId]);
 
   useEffect(() => {
     if (!publishDialogOpen) {
@@ -359,6 +371,53 @@ export function WorkbenchPage({
     } else {
       notify("success", "商品资料已完整", "可以继续校验并创建草稿。");
     }
+  };
+
+  const generateImagesForProduct = async () => {
+    if (!activeProduct || activeProduct.isDemo) {
+      notify("info", "演示商品不调用生图", "切换到真实商品后再生成候选图片。");
+      return;
+    }
+    setImageGenerationBusy(true);
+    setImageCandidates([]);
+    try {
+      const response = await generateProductImages(activeProduct);
+      setImageCandidates(response.candidates);
+      const successCount = response.candidates.filter((candidate) => candidate.image_url).length;
+      notify(
+        successCount ? "success" : "error",
+        successCount ? "候选图片已生成" : "生图未返回图片",
+        successCount
+          ? `${successCount} 个图位返回候选，可逐个加入商品图库。`
+          : "请检查失败图位的原因后重试。",
+      );
+    } catch (error) {
+      notify("error", "生图请求失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setImageGenerationBusy(false);
+    }
+  };
+
+  const addGeneratedImage = (candidate: ProductImageCandidate) => {
+    if (!activeProduct || !candidate.image_url) {
+      return;
+    }
+    if (activeProduct.images.some((image) => image.url === candidate.image_url)) {
+      notify("info", "图片已在图库中", "无需重复添加。");
+      return;
+    }
+    updateProduct({
+      ...activeProduct,
+      images: [
+        ...activeProduct.images,
+        {
+          id: `generated-${candidate.slot}-${Date.now()}`,
+          url: candidate.image_url,
+          name: `${candidate.label}候选`,
+        },
+      ],
+    });
+    notify("success", "已加入商品图库", `${candidate.label}可继续确认或设为主图。`);
   };
 
   const validateAll = () => {
@@ -776,6 +835,8 @@ export function WorkbenchPage({
         {step === 2 && activeProduct && inspectorOpen ? (
           <WbInspector
             product={activeProduct}
+            imageCandidates={imageCandidates}
+            imageGenerationBusy={imageGenerationBusy}
             onClose={() => setInspectorOpen(false)}
             onSwitch={() => {
               const next = products[(activeIndex + 1) % products.length];
@@ -784,6 +845,8 @@ export function WorkbenchPage({
               }
             }}
             onChange={updateProduct}
+            onGenerateImages={() => void generateImagesForProduct()}
+            onAddGeneratedImage={addGeneratedImage}
           />
         ) : null}
       </div>
@@ -1362,14 +1425,22 @@ function FactsStep({
 
 function WbInspector({
   product,
+  imageCandidates,
+  imageGenerationBusy,
   onClose,
   onSwitch,
   onChange,
+  onGenerateImages,
+  onAddGeneratedImage,
 }: {
   product: ProductRecord;
+  imageCandidates: ProductImageCandidate[];
+  imageGenerationBusy: boolean;
   onClose: () => void;
   onSwitch: () => void;
   onChange: (product: ProductRecord) => void;
+  onGenerateImages: () => void;
+  onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
 }) {
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
     onChange({ ...product, facts: { ...product.facts, [key]: value } });
@@ -1396,6 +1467,60 @@ function WbInspector({
       </header>
 
       <div className="wb-inspector-scroll">
+        <section className="wb-inspector-section wb-image-generation">
+          <div className="wb-image-generation-heading">
+            <div>
+              <h3>生图候选</h3>
+              <p>按 ICBU 图位生成，候选图片需确认后再加入图库。</p>
+            </div>
+            <button
+              type="button"
+              className="button button-secondary wb-image-generation-button"
+              onClick={onGenerateImages}
+              disabled={imageGenerationBusy || product.isDemo}
+            >
+              {imageGenerationBusy ? (
+                <CircleNotch size={15} className="spin" />
+              ) : (
+                <MagicWand size={15} />
+              )}
+              {imageGenerationBusy ? "生成中" : "生成 5 个图位"}
+            </button>
+          </div>
+          {product.isDemo ? (
+            <p className="wb-image-generation-empty">演示商品不调用真实生图服务。</p>
+          ) : null}
+          {imageCandidates.length ? (
+            <div className="wb-image-candidate-list">
+              {imageCandidates.map((candidate) => (
+                <article key={candidate.slot} className="wb-image-candidate">
+                  {candidate.image_url ? (
+                    <img src={candidate.image_url} alt={`${candidate.label}候选`} />
+                  ) : (
+                    <div className="wb-image-candidate-error">
+                      <WarningCircle size={17} />
+                      <span>{candidate.error ?? "未返回图片"}</span>
+                    </div>
+                  )}
+                  <div>
+                    <strong>{candidate.label}</strong>
+                    {candidate.image_url ? (
+                      <button
+                        type="button"
+                        className="wb-link"
+                        onClick={() => onAddGeneratedImage(candidate)}
+                      >
+                        加入图库
+                      </button>
+                    ) : (
+                      <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
         <section className="wb-inspector-section">
           <h3>基础信息</h3>
           <div className="wb-field">
@@ -1509,14 +1634,26 @@ function WbInspector({
           <div className="wb-field wb-field-split">
             <div>
               <span className="wb-field-label">包装尺寸（cm）</span>
-              <div className="wb-input">
+              <div className="wb-dimension-row">
                 <input
-                  value={
-                    product.facts.packageLength && product.facts.packageWidth
-                      ? `${product.facts.packageLength}×${product.facts.packageWidth}×${product.facts.packageHeight}`
-                      : ""
-                  }
-                  readOnly
+                  aria-label="包装长度（cm）"
+                  inputMode="decimal"
+                  value={product.facts.packageLength}
+                  onChange={(event) => setFact("packageLength", event.target.value)}
+                />
+                <span>×</span>
+                <input
+                  aria-label="包装宽度（cm）"
+                  inputMode="decimal"
+                  value={product.facts.packageWidth}
+                  onChange={(event) => setFact("packageWidth", event.target.value)}
+                />
+                <span>×</span>
+                <input
+                  aria-label="包装高度（cm）"
+                  inputMode="decimal"
+                  value={product.facts.packageHeight}
+                  onChange={(event) => setFact("packageHeight", event.target.value)}
                 />
               </div>
             </div>

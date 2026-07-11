@@ -217,17 +217,26 @@ export function SettingsDrawer({ open, settings, onClose, onSave }: SettingsDraw
                 <TextAreaField
                   label="公司介绍"
                   value={draft.companyProfile}
+                  emptyPrompt="未从店铺获取到，请填写"
                   onChange={(value) => update("companyProfile", value)}
                 />
                 <TextAreaField
                   label="售后说明"
                   value={draft.afterSalesPolicy}
+                  emptyPrompt="未从店铺获取到，请填写"
                   onChange={(value) => update("afterSalesPolicy", value)}
                 />
                 <TextAreaField
                   label="定制说明"
                   value={draft.customizationPolicy}
+                  emptyPrompt="未从店铺获取到，请填写"
                   onChange={(value) => update("customizationPolicy", value)}
+                />
+                <TextAreaField
+                  label="详情页版式"
+                  value={draft.detailTemplate}
+                  emptyPrompt="未从店铺获取到，请填写"
+                  onChange={(value) => update("detailTemplate", value)}
                 />
               </>
             ) : null}
@@ -242,11 +251,13 @@ export function SettingsDrawer({ open, settings, onClose, onSave }: SettingsDraw
                   <TextField
                     label="常用品牌"
                     value={draft.brand}
+                    emptyPrompt="未从店铺获取到，请填写"
                     onChange={(value) => update("brand", value)}
                   />
                   <TextField
                     label="常用原产国"
                     value={draft.origin}
+                    emptyPrompt="未从店铺获取到，请填写"
                     onChange={(value) => update("origin", value)}
                   />
                 </div>
@@ -296,16 +307,19 @@ function SettingsHeading({ title, description }: { title: string; description: s
 function TextField({
   label,
   value,
+  emptyPrompt,
   onChange,
 }: {
   label: string;
   value: string;
+  emptyPrompt?: string;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
       <input value={value} onChange={(event) => onChange(event.target.value)} />
+      {!value && emptyPrompt ? <small className="field-hint">{emptyPrompt}</small> : null}
     </label>
   );
 }
@@ -339,16 +353,19 @@ function SelectField({
 function TextAreaField({
   label,
   value,
+  emptyPrompt,
   onChange,
 }: {
   label: string;
   value: string;
+  emptyPrompt?: string;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="field field-wide">
       <span>{label}</span>
       <textarea value={value} rows={4} onChange={(event) => onChange(event.target.value)} />
+      {!value && emptyPrompt ? <small className="field-hint">{emptyPrompt}</small> : null}
     </label>
   );
 }

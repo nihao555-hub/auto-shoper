@@ -8,6 +8,7 @@ import type {
   DraftField,
   ImageAnalysisResponse,
   ListingFieldGroup,
+  ProductImageGenerationResponse,
   ProductRecord,
   RegisterPayload,
   StoreSettings,
@@ -117,6 +118,46 @@ export const analyzeProductImages = async (files: File[]): Promise<ImageAnalysis
     }),
   );
 };
+
+export const generateProductImages = async (
+  product: ProductRecord,
+): Promise<ProductImageGenerationResponse> =>
+  parseResponse<ProductImageGenerationResponse>(
+    await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        product_id: product.id,
+        title: product.title,
+        category: product.facts.categoryLabel,
+        description: product.description,
+        keywords: product.keywords,
+        facts: {
+          brand: product.facts.brand,
+          model: product.facts.model,
+          material: product.facts.material,
+          price: product.facts.price,
+          moq: product.facts.moq,
+          stock: product.facts.stock,
+          product_length: product.facts.productLength,
+          product_width: product.facts.productWidth,
+          product_height: product.facts.productHeight,
+          net_weight: product.facts.netWeight,
+          package_length: product.facts.packageLength,
+          package_width: product.facts.packageWidth,
+          package_height: product.facts.packageHeight,
+          gross_weight: product.facts.grossWeight,
+          units_per_carton: product.facts.unitsPerCarton,
+          lead_time: product.facts.leadTime,
+          origin: product.facts.origin,
+          hs_code: product.facts.hsCode,
+          certifications: product.facts.certifications,
+        },
+      }),
+    }),
+  );
 
 export const uploadPhotoBankImage = async (
   file: File,

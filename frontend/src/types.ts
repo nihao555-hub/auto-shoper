@@ -169,6 +169,16 @@ export type AlibabaConnectedStore = {
   ready_to_create_draft: boolean;
   readiness_blockers: string[];
   sync_error: string | null;
+  merchant_assets: MerchantAssets;
+};
+
+export type MerchantAssets = {
+  company_profile: string;
+  after_sales_policy: string;
+  customization_policy: string;
+  detail_template: string;
+  origin: string;
+  brand: string;
 };
 
 export type AlibabaOAuthStatus = {
@@ -214,6 +224,18 @@ export type ImageAnalysisResponse = {
     reason: string;
   }>;
   warnings: string[];
+};
+
+export type ProductImageCandidate = {
+  slot: "main" | "detail" | "scenario" | "specification" | "packaging";
+  label: string;
+  image_url: string | null;
+  error: string | null;
+};
+
+export type ProductImageGenerationResponse = {
+  product_id: string;
+  candidates: ProductImageCandidate[];
 };
 
 export type BatchApiResult = {

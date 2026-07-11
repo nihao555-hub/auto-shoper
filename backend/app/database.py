@@ -236,6 +236,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_stores_workspace ON store_connections(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expiry ON oauth_states(expires_at);
 CREATE INDEX IF NOT EXISTS idx_batches_workspace ON batches(workspace_id);
+CREATE TABLE IF NOT EXISTS merchant_assets (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    store_connection_id TEXT NOT NULL REFERENCES store_connections(id) ON DELETE CASCADE,
+    company_profile TEXT NOT NULL DEFAULT '',
+    after_sales_policy TEXT NOT NULL DEFAULT '',
+    customization_policy TEXT NOT NULL DEFAULT '',
+    detail_template TEXT NOT NULL DEFAULT '',
+    origin TEXT NOT NULL DEFAULT '',
+    brand TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, store_connection_id)
+);
 """
 
 
@@ -345,6 +357,24 @@ OCEANBASE_SCHEMA = (
             REFERENCES store_connections(id)
     ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
     """,
+    """
+    CREATE TABLE IF NOT EXISTS merchant_assets (
+        workspace_id VARCHAR(36) NOT NULL,
+        store_connection_id VARCHAR(36) NOT NULL,
+        company_profile TEXT NOT NULL,
+        after_sales_policy TEXT NOT NULL,
+        customization_policy TEXT NOT NULL,
+        detail_template TEXT NOT NULL,
+        origin VARCHAR(255) NOT NULL,
+        brand VARCHAR(255) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (workspace_id, store_connection_id),
+        CONSTRAINT fk_assets_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE,
+        CONSTRAINT fk_assets_store FOREIGN KEY (store_connection_id)
+            REFERENCES store_connections(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
 )
 
 
@@ -384,6 +414,19 @@ class StoreConnection:
     @property
     def expired(self) -> bool:
         return bool(self.expires_at and self.expires_at <= _now())
+
+
+@dataclass(frozen=True)
+class MerchantAssets:
+    workspace_id: str
+    store_connection_id: str
+    company_profile: str
+    after_sales_policy: str
+    customization_policy: str
+    detail_template: str
+    origin: str
+    brand: str
+    updated_at: datetime
 
 
 class TokenCipher:
@@ -874,6 +917,100 @@ class Database:
         if store is None:
             raise RuntimeError("Alibaba 店铺不存在")
         return store
+
+    def upsert_merchant_assets(
+        self,
+        *,
+        workspace_id: str,
+        store_connection_id: str,
+        company_profile: str,
+        after_sales_policy: str,
+        customization_policy: str,
+        detail_template: str,
+        origin: str,
+        brand: str,
+    ) -> MerchantAssets:
+        now = _iso()
+        values = (
+            workspace_id,
+            store_connection_id,
+            company_profile,
+            after_sales_policy,
+            customization_policy,
+            detail_template,
+            origin,
+            brand,
+            now,
+        )
+        with self._lock, self._connection:
+            query = (
+                """
+                INSERT INTO merchant_assets(
+                    workspace_id, store_connection_id, company_profile,
+                    after_sales_policy, customization_policy, detail_template,
+                    origin, brand, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    company_profile = VALUES(company_profile),
+                    after_sales_policy = VALUES(after_sales_policy),
+                    customization_policy = VALUES(customization_policy),
+                    detail_template = VALUES(detail_template),
+                    origin = VALUES(origin),
+                    brand = VALUES(brand),
+                    updated_at = VALUES(updated_at)
+                """
+                if self._connection.dialect == "oceanbase"
+                else """
+                INSERT INTO merchant_assets(
+                    workspace_id, store_connection_id, company_profile,
+                    after_sales_policy, customization_policy, detail_template,
+                    origin, brand, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, store_connection_id) DO UPDATE SET
+                    company_profile = excluded.company_profile,
+                    after_sales_policy = excluded.after_sales_policy,
+                    customization_policy = excluded.customization_policy,
+                    detail_template = excluded.detail_template,
+                    origin = excluded.origin,
+                    brand = excluded.brand,
+                    updated_at = excluded.updated_at
+                """
+            )
+            self._connection.execute(query, values)
+        assets = self.get_merchant_assets(workspace_id, store_connection_id)
+        if assets is None:
+            raise RuntimeError("商家资产保存失败")
+        return assets
+
+    def get_merchant_assets(
+        self,
+        workspace_id: str,
+        store_connection_id: str,
+    ) -> MerchantAssets | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT workspace_id, store_connection_id, company_profile,
+                       after_sales_policy, customization_policy, detail_template,
+                       origin, brand, updated_at
+                FROM merchant_assets
+                WHERE workspace_id = ? AND store_connection_id = ?
+                """,
+                (workspace_id, store_connection_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return MerchantAssets(
+            workspace_id=str(row["workspace_id"]),
+            store_connection_id=str(row["store_connection_id"]),
+            company_profile=str(row["company_profile"]),
+            after_sales_policy=str(row["after_sales_policy"]),
+            customization_policy=str(row["customization_policy"]),
+            detail_template=str(row["detail_template"]),
+            origin=str(row["origin"]),
+            brand=str(row["brand"]),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
 
     def ensure_batch(
         self,

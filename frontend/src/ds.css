@@ -2352,6 +2352,31 @@ tr.is-failed .bt-store small {
   background-position: right 10px center;
 }
 
+.wb-dimension-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+}
+
+.wb-dimension-row input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ds-border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ds-text);
+  padding: 7px 8px;
+  background: var(--ds-surface);
+  box-sizing: border-box;
+}
+
+.wb-dimension-row > span {
+  color: var(--ds-text-3);
+  font-size: 11px;
+}
+
 .wb-field-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2374,6 +2399,86 @@ tr.is-failed .bt-store small {
 .wb-field-split .wb-input {
   flex: 1;
   min-width: 0;
+}
+
+.wb-image-generation-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wb-image-generation-heading h3 {
+  margin-bottom: 3px;
+}
+
+.wb-image-generation-heading p,
+.wb-image-generation-empty {
+  margin: 0;
+  color: var(--ds-text-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.wb-image-generation-button {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.wb-image-candidate-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wb-image-candidate {
+  overflow: hidden;
+  border: 1px solid var(--ds-border-soft);
+  border-radius: 7px;
+  background: var(--ds-surface-muted);
+}
+
+.wb-image-candidate > img,
+.wb-image-candidate-error {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+.wb-image-candidate-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px;
+  color: var(--ds-danger);
+  font-size: 10px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.wb-image-candidate > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 7px;
+}
+
+.wb-image-candidate strong {
+  overflow: hidden;
+  color: var(--ds-text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-image-candidate small {
+  color: var(--ds-text-3);
+  font-size: 10px;
 }
 
 .wb-footer {

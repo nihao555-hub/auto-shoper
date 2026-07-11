@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from contextlib import suppress
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -10,6 +12,7 @@ from backend.app.config import Settings, get_settings
 from backend.app.database import (
     AuthenticatedUser,
     Database,
+    MerchantAssets,
     StoreConnection,
     get_database,
 )
@@ -47,7 +50,30 @@ def _extract_count(payload: object) -> int | None:
     return None
 
 
-def _store_payload(store: StoreConnection) -> dict[str, object]:
+def _merchant_assets_payload(assets: MerchantAssets | None) -> dict[str, str]:
+    if assets is None:
+        return {
+            "company_profile": "",
+            "after_sales_policy": "",
+            "customization_policy": "",
+            "detail_template": "",
+            "origin": "",
+            "brand": "",
+        }
+    return {
+        "company_profile": assets.company_profile,
+        "after_sales_policy": assets.after_sales_policy,
+        "customization_policy": assets.customization_policy,
+        "detail_template": assets.detail_template,
+        "origin": assets.origin,
+        "brand": assets.brand,
+    }
+
+
+def _store_payload(
+    store: StoreConnection,
+    assets: MerchantAssets | None = None,
+) -> dict[str, object]:
     permission_values = list(store.permissions.values())
     verified = sum(value == "verified" for value in permission_values)
     failed = sum(value == "failed" for value in permission_values)
@@ -93,6 +119,120 @@ def _store_payload(store: StoreConnection) -> dict[str, object]:
         "ready_to_create_draft": draft_readiness == "ready",
         "readiness_blockers": blockers,
         "sync_error": store.sync_error,
+        "merchant_assets": _merchant_assets_payload(assets),
+    }
+
+
+def _first_text(payload: object, keys: set[str]) -> str:
+    if isinstance(payload, Mapping):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in payload.values():
+            result = _first_text(value, keys)
+            if result:
+                return result
+    elif isinstance(payload, list):
+        for value in payload:
+            result = _first_text(value, keys)
+            if result:
+                return result
+    return ""
+
+
+def _first_product_id(payload: object) -> str:
+    if isinstance(payload, Mapping):
+        products = payload.get("products")
+        if isinstance(products, list):
+            for product in products:
+                if isinstance(product, Mapping):
+                    value = product.get("id")
+                    if isinstance(value, int | str) and str(value).strip():
+                        return str(value)
+        for value in payload.values():
+            result = _first_product_id(value)
+            if result:
+                return result
+    elif isinstance(payload, list):
+        for value in payload:
+            result = _first_product_id(value)
+            if result:
+                return result
+    return ""
+
+
+async def _fetch_merchant_assets(
+    client: AlibabaClient,
+    product_payload: object,
+) -> dict[str, str]:
+    payloads: list[object] = [product_payload]
+    product_id = _first_product_id(product_payload)
+    if product_id:
+        with suppress(AlibabaAPIError):
+            payloads.append(
+                await client.call(
+                    OPERATIONS["product_get"].operation,
+                    {"product_get_request": {"productId": product_id}},
+                )
+            )
+    return {
+        "company_profile": _first_text(
+            payloads,
+            {
+                "company_profile",
+                "companyProfile",
+                "company_introduction",
+                "companyIntroduction",
+                "company_description",
+                "companyDescription",
+                "company_name",
+                "companyName",
+                "seller_company_name",
+                "sellerCompanyName",
+            },
+        ),
+        "after_sales_policy": _first_text(
+            payloads,
+            {
+                "after_sales_policy",
+                "afterSalesPolicy",
+                "after_sales",
+                "afterSales",
+                "service_policy",
+                "servicePolicy",
+            },
+        ),
+        "customization_policy": _first_text(
+            payloads,
+            {
+                "customization_policy",
+                "customizationPolicy",
+                "customization",
+                "customized_service",
+                "customizedService",
+            },
+        ),
+        "detail_template": _first_text(
+            payloads,
+            {
+                "detail_page_template",
+                "detailPageTemplate",
+                "detail_template",
+                "detailTemplate",
+            },
+        ),
+        "origin": _first_text(
+            payloads,
+            {
+                "country_of_origin",
+                "countryOfOrigin",
+                "origin_country",
+                "originCountry",
+                "country",
+            },
+        ),
+        "brand": _first_text(payloads, {"brand", "brand_name", "brandName"}),
     }
 
 
@@ -107,6 +247,14 @@ async def _sync_store(
     errors: list[str] = []
     product_count = store.product_count
     photobank_group_count = store.photobank_group_count
+    merchant_assets = {
+        "company_profile": "",
+        "after_sales_policy": "",
+        "customization_policy": "",
+        "detail_template": "",
+        "origin": "",
+        "brand": "",
+    }
     product_state = "failed"
     photobank_state = "failed"
     try:
@@ -117,6 +265,7 @@ async def _sync_store(
         product_count = _extract_count(product_payload)
         product_state = "synced"
         permissions["product_read"] = "verified"
+        merchant_assets = await _fetch_merchant_assets(client, product_payload)
     except AlibabaAPIError as exc:
         permissions["product_read"] = "failed"
         errors.append(f"商品同步：{exc}")
@@ -133,6 +282,11 @@ async def _sync_store(
         errors.append(f"图片银行：{exc}")
     finally:
         await client.close()
+    database.upsert_merchant_assets(
+        workspace_id=store.workspace_id,
+        store_connection_id=store.id,
+        **merchant_assets,
+    )
     return database.update_store_summary(
         workspace_id=store.workspace_id,
         store_id=store.id,
@@ -153,7 +307,10 @@ def list_stores(
     stores = database.list_stores(user.workspace_id)
     return {
         "active_store_id": next((store.id for store in stores if store.active), None),
-        "stores": [_store_payload(store) for store in stores],
+        "stores": [
+            _store_payload(store, database.get_merchant_assets(user.workspace_id, store.id))
+            for store in stores
+        ],
     }
 
 
@@ -174,7 +331,10 @@ def activate_store(
     store = database.activate_store(user.workspace_id, store_id)
     if store is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="店铺不存在")
-    return _store_payload(store)
+    return _store_payload(
+        store,
+        database.get_merchant_assets(user.workspace_id, store.id),
+    )
 
 
 @router.post("/stores/{store_id}/sync")
@@ -193,7 +353,10 @@ async def sync_store(
         synced = await _sync_store(database, settings, store)
     except AlibabaAPIError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return _store_payload(synced)
+    return _store_payload(
+        synced,
+        database.get_merchant_assets(user.workspace_id, synced.id),
+    )
 
 
 @router.get("/oauth/status")
@@ -222,7 +385,10 @@ def oauth_status(
         "configuration_error": settings.alibaba_oauth_configuration_error,
         "redirect_uri": settings.alibaba_oauth_redirect_uri,
         "active_store_id": active.id if active else None,
-        "stores": [_store_payload(store) for store in stores],
+        "stores": [
+            _store_payload(store, database.get_merchant_assets(user.workspace_id, store.id))
+            for store in stores
+        ],
     }
 
 

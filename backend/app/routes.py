@@ -1,8 +1,10 @@
 import asyncio
 import json
-from typing import Annotated, Any
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from httpx import HTTPError
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.ai import AIClient, AIProviderError
@@ -34,6 +36,9 @@ from backend.app.models import (
     OfficialListingPublishRequest,
     OfficialListingValidationResult,
     ProductImageAnalysis,
+    ProductImageCandidate,
+    ProductImageGenerationRequest,
+    ProductImageGenerationResponse,
     ProductValidationRequest,
     ProductValidationResult,
     SchemaBuildRequest,
@@ -603,6 +608,132 @@ async def generate_image(
         return await ai_client.generate_image(request.prompt, request.size, request.count)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _image_url(payload: object) -> str | None:
+    if isinstance(payload, Mapping):
+        url = payload.get("url")
+        if isinstance(url, str) and url.startswith(("http://", "https://", "data:")):
+            return url
+        encoded = payload.get("b64_json")
+        if isinstance(encoded, str) and encoded:
+            return f"data:image/png;base64,{encoded}"
+        for value in payload.values():
+            found = _image_url(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _image_url(value)
+            if found:
+                return found
+    return None
+
+
+def _product_image_prompt(
+    request: ProductImageGenerationRequest,
+    slot: str,
+    instruction: str,
+) -> str:
+    fact_values = [
+        f"品牌={request.facts.brand}",
+        f"型号={request.facts.model}",
+        f"材质={request.facts.material}",
+        f"商品尺寸={request.facts.product_length}×{request.facts.product_width}×"
+        f"{request.facts.product_height} cm",
+        f"包装尺寸={request.facts.package_length}×{request.facts.package_width}×"
+        f"{request.facts.package_height} cm",
+        f"原产地={request.facts.origin}",
+    ]
+    confirmed_facts = "；".join(value for value in fact_values if not value.endswith("="))
+    keywords = "、".join(request.keywords[:8])
+    return (
+        f"Create the {slot} image for an Alibaba.com product listing. {instruction} "
+        "Preserve the exact product identity and do not invent product parts, claims, "
+        "certifications, dimensions, materials, or text that are not supplied. "
+        f"Product title: {request.title or 'not supplied'}. "
+        f"Category: {request.category or 'not supplied'}. "
+        f"Description: {request.description or 'not supplied'}. "
+        f"Keywords: {keywords or 'not supplied'}. "
+        f"Confirmed facts: {confirmed_facts or 'not supplied'}."
+    )
+
+
+@router.post(
+    "/products/{product_id}/generate-images",
+    response_model=ProductImageGenerationResponse,
+)
+async def generate_product_images(
+    product_id: str,
+    request: ProductImageGenerationRequest,
+    ai_client: Annotated[AIClient, Depends(get_ai_client)],
+) -> ProductImageGenerationResponse:
+    if product_id != request.product_id:
+        raise HTTPException(status_code=400, detail="商品 ID 与请求内容不一致")
+    slots: tuple[
+        tuple[
+            Literal["main", "detail", "scenario", "specification", "packaging"],
+            str,
+            str,
+        ],
+        ...,
+    ] = (
+        (
+            "main",
+            "主图",
+            "Use a clean white background, centered studio product photography, "
+            "balanced lighting, and no decorative text.",
+        ),
+        (
+            "detail",
+            "细节特写",
+            "Show a close-up of the product's visible construction and texture in a "
+            "clean product-detail composition.",
+        ),
+        (
+            "scenario",
+            "场景图",
+            "Place the product in a realistic use scenario appropriate to its category, "
+            "with a calm commercial lifestyle composition.",
+        ),
+        (
+            "specification",
+            "规格图",
+            "Create a restrained product specification infographic with clear dimension "
+            "callouts only for supplied dimensions; do not invent measurements.",
+        ),
+        (
+            "packaging",
+            "包装图",
+            "Show a realistic packaging and shipment presentation without inventing "
+            "labels, certifications, or packaging claims.",
+        ),
+    )
+
+    async def generate_slot(
+        slot: Literal["main", "detail", "scenario", "specification", "packaging"],
+        label: str,
+        instruction: str,
+    ) -> ProductImageCandidate:
+        try:
+            result = await ai_client.generate_image(
+                _product_image_prompt(request, slot, instruction),
+                "1024x1024",
+                1,
+            )
+            image_url = _image_url(result)
+            if image_url is None:
+                return ProductImageCandidate(
+                    slot=slot,
+                    label=label,
+                    error="图片服务未返回可用图片地址",
+                )
+            return ProductImageCandidate(slot=slot, label=label, image_url=image_url)
+        except (AIProviderError, HTTPError, ValueError, TypeError) as exc:
+            return ProductImageCandidate(slot=slot, label=label, error=str(exc))
+
+    candidates = await asyncio.gather(*(generate_slot(*slot) for slot in slots))
+    return ProductImageGenerationResponse(product_id=product_id, candidates=list(candidates))
 
 
 @router.post("/images/generate-from-product")

@@ -119,6 +119,49 @@ class ImageGenerationRequest(BaseModel):
     count: int = Field(default=1, ge=1, le=4)
 
 
+class ProductImageFacts(BaseModel):
+    brand: str = ""
+    model: str = ""
+    material: str = ""
+    price: str = ""
+    moq: str = ""
+    stock: str = ""
+    product_length: str = ""
+    product_width: str = ""
+    product_height: str = ""
+    net_weight: str = ""
+    package_length: str = ""
+    package_width: str = ""
+    package_height: str = ""
+    gross_weight: str = ""
+    units_per_carton: str = ""
+    lead_time: str = ""
+    origin: str = ""
+    hs_code: str = ""
+    certifications: list[str] = Field(default_factory=list)
+
+
+class ProductImageGenerationRequest(BaseModel):
+    product_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(max_length=500)
+    category: str = Field(max_length=500)
+    description: str = Field(max_length=4000)
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    facts: ProductImageFacts = Field(default_factory=ProductImageFacts)
+
+
+class ProductImageCandidate(BaseModel):
+    slot: Literal["main", "detail", "scenario", "specification", "packaging"]
+    label: str
+    image_url: str | None = None
+    error: str | None = None
+
+
+class ProductImageGenerationResponse(BaseModel):
+    product_id: str
+    candidates: list[ProductImageCandidate]
+
+
 class AlibabaSchemaRequest(BaseModel):
     category_id: str
     xml: str = Field(min_length=20)

@@ -355,6 +355,14 @@ export const demoStores: AlibabaConnectedStore[] = [
     ready_to_create_draft: true,
     readiness_blockers: [],
     sync_error: null,
+    merchant_assets: {
+      company_profile: "",
+      after_sales_policy: "",
+      customization_policy: "",
+      detail_template: "",
+      origin: "",
+      brand: "",
+    },
   },
   {
     id: "demo-store-2",
@@ -381,6 +389,14 @@ export const demoStores: AlibabaConnectedStore[] = [
     ready_to_create_draft: true,
     readiness_blockers: [],
     sync_error: null,
+    merchant_assets: {
+      company_profile: "",
+      after_sales_policy: "",
+      customization_policy: "",
+      detail_template: "",
+      origin: "",
+      brand: "",
+    },
   },
   {
     id: "demo-store-3",
@@ -407,5 +423,13 @@ export const demoStores: AlibabaConnectedStore[] = [
     ready_to_create_draft: false,
     readiness_blockers: ["授权已过期，请重新授权后再同步"],
     sync_error: "同步异常",
+    merchant_assets: {
+      company_profile: "",
+      after_sales_policy: "",
+      customization_policy: "",
+      detail_template: "",
+      origin: "",
+      brand: "",
+    },
   },
 ];
