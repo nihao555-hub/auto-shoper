@@ -1,13 +1,4 @@
-import {
-  ArrowRight,
-  Check,
-  Eye,
-  EyeSlash,
-  Key,
-  LockKey,
-  ShieldCheck,
-  Storefront,
-} from "@phosphor-icons/react";
+import { Eye, EyeSlash, LockKey, ShieldCheck, Storefront } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { ApiError, login, register } from "../api";
@@ -36,6 +27,7 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const registrationCodeError = mode === "register" && error?.includes("注册码") ? error : null;
 
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
@@ -73,52 +65,18 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
     <main className="auth-page">
       <section className="auth-visual" aria-label="平台业务介绍">
         <img src="/auth-business.webp" alt="" />
-        <div className="auth-visual-shade" />
-        <div className="auth-visual-brand">
-          <BrandMark size={38} />
+      </section>
+
+      <section className={`auth-panel ${mode === "register" ? "is-register" : ""}`}>
+        <div className="auth-product-brand">
+          <BrandMark size={36} />
           <div>
             <strong>上品台</strong>
             <span>Alibaba 国际站商品发布工作区</span>
           </div>
         </div>
-        <div className="auth-visual-copy">
-          <span className="auth-kicker">从素材到 Alibaba 草稿</span>
-          <h1>把跨境商品发布，变成一条清晰、可信的工作流。</h1>
-          <p>图片成组、AI 候选、类目规则、人工确认与草稿回读，都留在同一个店铺上下文中。</p>
-          <div className="auth-proof-list">
-            <span>
-              <Check weight="bold" /> 多店铺严格隔离
-            </span>
-            <span>
-              <Check weight="bold" /> 真实 Schema 校验
-            </span>
-            <span>
-              <Check weight="bold" /> 发布前人工门禁
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className="auth-panel">
-        <div className="auth-mobile-brand">
-          <BrandMark size={36} />
-          <div>
-            <strong>上品台</strong>
-            <span>跨境商品发布</span>
-          </div>
-        </div>
 
         <div className="auth-card">
-          <div className="auth-heading">
-            <span className="eyebrow">{mode === "login" ? "欢迎回来" : "创建客户工作区"}</span>
-            <h2>{mode === "login" ? "登录上品台" : "使用注册码开始"}</h2>
-            <p>
-              {mode === "login"
-                ? "进入你的独立工作区，继续管理店铺和上品批次。"
-                : "每个客户拥有独立工作区；注册码使用一次后自动失效。"}
-            </p>
-          </div>
-
           <div className="auth-tabs" role="tablist" aria-label="登录或注册">
             <button
               type="button"
@@ -140,6 +98,12 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
             </button>
           </div>
 
+          <p className="auth-mode-note">
+            {mode === "login"
+              ? "登录后继续管理独立工作区、店铺授权和上品批次。"
+              : "注册码仅供受邀客户使用，注册后自动创建独立工作区。"}
+          </p>
+
           {mode === "login" ? (
             <form className="auth-form" onSubmit={submitLogin}>
               <AuthField
@@ -157,34 +121,40 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
                 onChange={setPassword}
                 onToggle={() => setShowPassword((visible) => !visible)}
               />
-              {error ? <div className="auth-error">{error}</div> : null}
-              <button type="submit" className="auth-submit" disabled={submitting}>
-                <span>{submitting ? "正在登录…" : "进入工作区"}</span>
-                <ArrowRight size={19} />
+              {error ? (
+                <div className="auth-error" role="alert">
+                  {error}
+                </div>
+              ) : null}
+              <button
+                type="submit"
+                className="auth-submit"
+                disabled={submitting}
+                aria-busy={submitting}
+              >
+                <span>{submitting ? "正在登录…" : "登录并进入工作区"}</span>
               </button>
             </form>
           ) : (
             <form className="auth-form" onSubmit={submitRegistration}>
-              <div className="auth-form-grid">
-                <AuthField
-                  label="你的姓名"
-                  value={registration.display_name}
-                  autoComplete="name"
-                  placeholder="怎么称呼你"
-                  onChange={(value) =>
-                    setRegistration((current) => ({ ...current, display_name: value }))
-                  }
-                />
-                <AuthField
-                  label="工作区名称"
-                  value={registration.workspace_name}
-                  autoComplete="organization"
-                  placeholder="公司或团队名称"
-                  onChange={(value) =>
-                    setRegistration((current) => ({ ...current, workspace_name: value }))
-                  }
-                />
-              </div>
+              <AuthField
+                label="姓名"
+                value={registration.display_name}
+                autoComplete="name"
+                placeholder="请输入你的姓名"
+                onChange={(value) =>
+                  setRegistration((current) => ({ ...current, display_name: value }))
+                }
+              />
+              <AuthField
+                label="工作区名称"
+                value={registration.workspace_name}
+                autoComplete="organization"
+                placeholder="请输入公司或团队名称"
+                onChange={(value) =>
+                  setRegistration((current) => ({ ...current, workspace_name: value }))
+                }
+              />
               <AuthField
                 label="工作邮箱"
                 type="email"
@@ -205,39 +175,52 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
               />
               <label className="auth-field">
                 <span>注册码</span>
-                <div className="auth-input-with-icon">
-                  <Key size={18} />
-                  <input
-                    value={registration.registration_code}
-                    autoComplete="one-time-code"
-                    placeholder="输入管理员提供的注册码"
-                    onChange={(event) =>
-                      setRegistration((current) => ({
-                        ...current,
-                        registration_code: event.target.value,
-                      }))
-                    }
-                    required
-                  />
-                </div>
+                <input
+                  value={registration.registration_code}
+                  autoComplete="one-time-code"
+                  placeholder="请输入注册码"
+                  aria-invalid={Boolean(registrationCodeError)}
+                  aria-describedby="registration-code-help"
+                  onChange={(event) =>
+                    setRegistration((current) => ({
+                      ...current,
+                      registration_code: event.target.value,
+                    }))
+                  }
+                  required
+                />
+                <small
+                  id="registration-code-help"
+                  className={registrationCodeError ? "auth-field-error" : "auth-field-hint"}
+                >
+                  {registrationCodeError ?? "注册码仅在注册成功后核销，一码一次"}
+                </small>
               </label>
-              {error ? <div className="auth-error">{error}</div> : null}
-              <button type="submit" className="auth-submit" disabled={submitting}>
+              {error && !registrationCodeError ? (
+                <div className="auth-error" role="alert">
+                  {error}
+                </div>
+              ) : null}
+              <button
+                type="submit"
+                className="auth-submit"
+                disabled={submitting}
+                aria-busy={submitting}
+              >
                 <span>{submitting ? "正在创建…" : "创建独立工作区"}</span>
-                <ArrowRight size={19} />
               </button>
             </form>
           )}
 
           <div className="auth-trust">
             <span>
-              <ShieldCheck size={17} /> 密码安全哈希
+              <ShieldCheck size={16} /> 密码安全哈希
             </span>
             <span>
-              <LockKey size={17} /> Token 加密存储
+              <LockKey size={16} /> Token 加密存储
             </span>
             <span>
-              <Storefront size={17} /> 店铺数据隔离
+              <Storefront size={16} /> 店铺数据隔离
             </span>
           </div>
         </div>
