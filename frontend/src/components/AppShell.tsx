@@ -88,6 +88,7 @@ export function AppShell({
               key={view}
               className={`rail-item ${activeView === view ? "is-active" : ""}`}
               onClick={() => onNavigate(view)}
+              aria-current={activeView === view ? "page" : undefined}
               title={collapsed ? label : undefined}
             >
               <Icon size={20} weight={activeView === view ? "fill" : "regular"} />
@@ -153,6 +154,7 @@ export function AppShell({
             type="button"
             className={activeView === view ? "is-active" : ""}
             onClick={() => onNavigate(view)}
+            aria-current={activeView === view ? "page" : undefined}
           >
             <Icon size={21} weight={activeView === view ? "fill" : "regular"} />
             <span>{label}</span>

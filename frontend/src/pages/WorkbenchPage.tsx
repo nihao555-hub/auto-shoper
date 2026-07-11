@@ -550,7 +550,11 @@ export function WorkbenchPage({
   };
 
   return (
-    <div className={`page workbench-page ${inspectorOpen ? "has-inspector" : ""}`}>
+    <div
+      className={`page workbench-page ${
+        step === 2 && activeProduct && inspectorOpen ? "has-inspector" : ""
+      }`}
+    >
       <header className="page-header workbench-header refined-page-header">
         <div>
           <div className="page-context">

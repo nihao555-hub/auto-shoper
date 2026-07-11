@@ -202,17 +202,17 @@ export function OverviewPage({
         </aside>
       </div>
 
-      <section className="overview-panel recent-batches-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="panel-kicker">最近记录</span>
-            <h2>批次结果</h2>
+      {recentBatches.length ? (
+        <section className="overview-panel recent-batches-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">最近记录</span>
+              <h2>批次结果</h2>
+            </div>
+            <button type="button" className="text-button" onClick={onNavigateBatches}>
+              查看全部 <ArrowRight size={15} />
+            </button>
           </div>
-          <button type="button" className="text-button" onClick={onNavigateBatches}>
-            查看全部 <ArrowRight size={15} />
-          </button>
-        </div>
-        {recentBatches.length ? (
           <div className="recent-batch-list">
             {recentBatches.map((batch) => (
               <button type="button" key={batch.id} onClick={onNavigateBatches}>
@@ -233,10 +233,8 @@ export function OverviewPage({
               </button>
             ))}
           </div>
-        ) : (
-          <div className="recent-empty">完成的批次会显示在这里。</div>
-        )}
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }

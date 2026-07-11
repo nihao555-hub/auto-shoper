@@ -2,7 +2,7 @@ import "@fontsource-variable/manrope";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import "./styles.css";
+import "./app.css";
 
 const root = document.getElementById("root");
 
