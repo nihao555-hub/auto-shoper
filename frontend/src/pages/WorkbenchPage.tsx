@@ -1213,36 +1213,72 @@ function AiStep({
                   </span>
                 ) : null}
               </div>
-              <label className="field field-wide">
-                <span>英文标题</span>
-                <textarea
-                  rows={2}
-                  value={product.title}
-                  placeholder="等待 AI 生成"
-                  onChange={(event) => onChange({ ...product, title: event.target.value })}
-                />
-              </label>
-              <div className="ai-facts-row">
-                <div>
-                  <span>类目建议</span>
-                  <strong>{product.facts.categoryLabel || "等待分析"}</strong>
-                </div>
-                <div>
-                  <span>图片可见</span>
-                  <div className="trait-list">
-                    {product.visibleTraits.length ? (
-                      product.visibleTraits.map((trait) => <i key={trait}>{trait}</i>)
-                    ) : (
-                      <i>等待分析</i>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="keyword-row">
-                <span>关键词</span>
-                {product.keywords.map((keyword) => (
-                  <i key={keyword}>{keyword}</i>
-                ))}
+              <div className="ai-field-table-scroll">
+                <table className="ai-field-table">
+                  <thead>
+                    <tr>
+                      <th>字段</th>
+                      <th>AI 填写内容</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <th scope="row">英文标题</th>
+                      <td>
+                        <textarea
+                          rows={2}
+                          value={product.title}
+                          placeholder="等待 AI 生成"
+                          aria-label={`${product.reference} 英文标题`}
+                          onChange={(event) => onChange({ ...product, title: event.target.value })}
+                        />
+                      </td>
+                      <td>{aiFieldStatus(product, Boolean(product.title.trim()))}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">类目建议</th>
+                      <td>
+                        <span
+                          className={product.facts.categoryLabel ? "ai-field-text" : "ai-empty"}
+                        >
+                          {product.facts.categoryLabel || "等待 AI 分析"}
+                        </span>
+                      </td>
+                      <td>{aiFieldStatus(product, Boolean(product.facts.categoryLabel.trim()))}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">关键词</th>
+                      <td>
+                        <AiFieldTags values={product.keywords} emptyLabel="等待 AI 生成" />
+                      </td>
+                      <td>{aiFieldStatus(product, product.keywords.length > 0)}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">核心卖点</th>
+                      <td>
+                        <AiFieldList values={product.sellingPoints} emptyLabel="等待 AI 生成" />
+                      </td>
+                      <td>{aiFieldStatus(product, product.sellingPoints.length > 0)}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">商品描述</th>
+                      <td>
+                        <p className={product.description ? "ai-field-description" : "ai-empty"}>
+                          {product.description || "等待 AI 生成"}
+                        </p>
+                      </td>
+                      <td>{aiFieldStatus(product, Boolean(product.description.trim()))}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">图片可见属性</th>
+                      <td>
+                        <AiFieldTags values={product.visibleTraits} emptyLabel="等待 AI 分析" />
+                      </td>
+                      <td>{aiFieldStatus(product, product.visibleTraits.length > 0)}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
             <div className="ai-review-actions">
@@ -1274,6 +1310,58 @@ function AiStep({
         ))}
       </div>
     </div>
+  );
+}
+
+function AiFieldTags({ values, emptyLabel }: { values: string[]; emptyLabel: string }) {
+  if (!values.length) {
+    return <span className="ai-empty">{emptyLabel}</span>;
+  }
+  return (
+    <div className="ai-field-tags">
+      {values.map((value) => (
+        <i key={value}>{value}</i>
+      ))}
+    </div>
+  );
+}
+
+function AiFieldList({ values, emptyLabel }: { values: string[]; emptyLabel: string }) {
+  if (!values.length) {
+    return <span className="ai-empty">{emptyLabel}</span>;
+  }
+  return (
+    <ul className="ai-field-list">
+      {values.map((value) => (
+        <li key={value}>{value}</li>
+      ))}
+    </ul>
+  );
+}
+
+function aiFieldStatus(product: ProductRecord, hasValue: boolean) {
+  const label =
+    product.stage === "analyzing"
+      ? "生成中"
+      : hasValue
+        ? product.aiConfirmed
+          ? "已确认"
+          : "待确认"
+        : "待分析";
+  return (
+    <span
+      className={`ai-field-status ${
+        product.stage === "analyzing"
+          ? "is-working"
+          : hasValue
+            ? product.aiConfirmed
+              ? "is-confirmed"
+              : "is-ready"
+            : "is-empty"
+      }`}
+    >
+      {label}
+    </span>
   );
 }
 
