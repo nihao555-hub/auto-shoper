@@ -1,13 +1,13 @@
 :root {
   font-family: "Manrope Variable", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   color: #1e211d;
-  background: #f5f2ea;
+  background: #fff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --canvas: #f5f2ea;
-  --surface: #fffefa;
-  --surface-subtle: #faf8f2;
-  --surface-muted: #f0eee8;
+  --canvas: #fff;
+  --surface: #fff;
+  --surface-subtle: #fff;
+  --surface-muted: #fff;
   --ink: #1e211d;
   --ink-soft: #50544d;
   --muted: #73766e;
@@ -38,7 +38,7 @@
   min-height: 100dvh;
   grid-template-columns: minmax(0, 1.18fr) minmax(440px, 0.82fr);
   overflow: hidden;
-  background: #f7f4ef;
+  background: #fff;
 }
 
 .auth-visual {
@@ -161,7 +161,7 @@
   justify-content: center;
   padding: 32px clamp(32px, 5vw, 76px) 22px;
   overflow-y: auto;
-  background: radial-gradient(circle at 100% 0, rgba(237, 90, 55, 0.06), transparent 24rem), #f7f4ef;
+  background: #fff;
 }
 
 .auth-mobile-brand {
@@ -407,7 +407,7 @@
   flex-direction: column;
   gap: 14px;
   color: #4d4e49;
-  background: #f7f4ef;
+  background: #fff;
 }
 
 .auth-loading span {
@@ -897,8 +897,7 @@ body {
   min-height: 100dvh;
   margin: 0;
   overflow: hidden;
-  background: radial-gradient(circle at 88% 5%, rgba(237, 90, 55, 0.045), transparent 25rem),
-    var(--canvas);
+  background: #fff;
 }
 
 body.has-overlay {
@@ -1031,7 +1030,7 @@ table {
   padding: 14px 12px;
   overflow: hidden;
   border-right: 1px solid var(--line);
-  background: rgba(249, 250, 251, 0.94);
+  background: #fff;
 }
 
 .brand-block {
@@ -5333,7 +5332,7 @@ a:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #f7f6f3;
+  background: #fff;
 }
 
 .stores-page-content {
