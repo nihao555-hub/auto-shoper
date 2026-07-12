@@ -1224,7 +1224,8 @@ function AiStep({
                   <thead>
                     <tr>
                       <th>字段</th>
-                      <th>AI 填写内容</th>
+                      <th>内容</th>
+                      <th>来源</th>
                       <th>状态</th>
                     </tr>
                   </thead>
@@ -1240,6 +1241,9 @@ function AiStep({
                           onChange={(event) => onChange({ ...product, title: event.target.value })}
                         />
                       </td>
+                      <td>
+                        <AiFieldSource label="AI 生成" />
+                      </td>
                       <td>{aiFieldStatus(product, Boolean(product.title.trim()))}</td>
                     </tr>
                     <tr>
@@ -1251,6 +1255,9 @@ function AiStep({
                           {product.facts.categoryLabel || "等待 AI 分析"}
                         </span>
                       </td>
+                      <td>
+                        <AiFieldSource label="AI 建议" />
+                      </td>
                       <td>{aiFieldStatus(product, Boolean(product.facts.categoryLabel.trim()))}</td>
                     </tr>
                     <tr>
@@ -1258,12 +1265,18 @@ function AiStep({
                       <td>
                         <AiFieldTags values={product.keywords} emptyLabel="等待 AI 生成" />
                       </td>
+                      <td>
+                        <AiFieldSource label="AI 生成" />
+                      </td>
                       <td>{aiFieldStatus(product, product.keywords.length > 0)}</td>
                     </tr>
                     <tr>
                       <th scope="row">核心卖点</th>
                       <td>
                         <AiFieldList values={product.sellingPoints} emptyLabel="等待 AI 生成" />
+                      </td>
+                      <td>
+                        <AiFieldSource label="AI 生成" />
                       </td>
                       <td>{aiFieldStatus(product, product.sellingPoints.length > 0)}</td>
                     </tr>
@@ -1274,12 +1287,18 @@ function AiStep({
                           {product.description || "等待 AI 生成"}
                         </p>
                       </td>
+                      <td>
+                        <AiFieldSource label="AI 生成" />
+                      </td>
                       <td>{aiFieldStatus(product, Boolean(product.description.trim()))}</td>
                     </tr>
                     <tr>
                       <th scope="row">图片可见属性</th>
                       <td>
                         <AiFieldTags values={product.visibleTraits} emptyLabel="等待 AI 分析" />
+                      </td>
+                      <td>
+                        <AiFieldSource label="图片识别" />
                       </td>
                       <td>{aiFieldStatus(product, product.visibleTraits.length > 0)}</td>
                     </tr>
@@ -1343,6 +1362,10 @@ function AiFieldList({ values, emptyLabel }: { values: string[]; emptyLabel: str
       ))}
     </ul>
   );
+}
+
+function AiFieldSource({ label }: { label: string }) {
+  return <span className="ai-field-source">{label}</span>;
 }
 
 function aiFieldStatus(product: ProductRecord, hasValue: boolean) {

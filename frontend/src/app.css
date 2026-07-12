@@ -2372,7 +2372,7 @@ table {
 
 .ai-field-table {
   width: 100%;
-  min-width: 580px;
+  min-width: 660px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -2405,6 +2405,11 @@ table {
 .ai-field-table thead th:last-child,
 .ai-field-table tbody td:last-child {
   width: 70px;
+}
+
+.ai-field-table thead th:nth-last-child(2),
+.ai-field-table tbody td:nth-last-child(2) {
+  width: 76px;
 }
 
 .ai-field-table tbody th {
@@ -2502,6 +2507,17 @@ table {
 .ai-field-status.is-empty {
   color: var(--muted);
   background: var(--surface-muted);
+}
+
+.ai-field-source {
+  display: inline-flex;
+  width: max-content;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--blue);
+  background: var(--blue-soft);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .draft-source-checks {
