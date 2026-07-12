@@ -139,16 +139,11 @@ export function StoresPage({
                   </span>
                 </div>
                 <div>
-                  <dt>最后同步</dt>
+                  <dt>资料更新</dt>
                   <dd>{formatDateTime(activeStore.last_sync_at)}</dd>
-                  <span
-                    className={activeStore.sync_error ? "st-dot is-warning" : "st-dot is-success"}
-                  >
-                    {activeStore.sync_error ? "同步异常" : "同步正常"}
-                  </span>
                 </div>
                 <div>
-                  <dt>草稿就绪</dt>
+                  <dt>上品状态</dt>
                   <dd>
                     {activeStore.ready_to_create_draft ? (
                       <span className="st-check is-success">
@@ -156,14 +151,10 @@ export function StoresPage({
                       </span>
                     ) : (
                       <span className="st-check is-warning">
-                        <Warning size={15} weight="fill" /> 待验证
+                        <Warning size={15} weight="fill" /> 暂不可创建草稿
                       </span>
                     )}
                   </dd>
-                  <span className="st-check is-success">
-                    <CheckCircle size={15} weight="fill" /> 已验证权限{" "}
-                    {activeStore.permission_verified_count} 项
-                  </span>
                 </div>
               </dl>
               <button
@@ -274,17 +265,6 @@ function StoreCard({
   onReauthorize: () => void;
 }) {
   const days = remainingDays(store.expires_at);
-  const healthLabel = {
-    pending: "待验证",
-    healthy: "健康",
-    attention: "需要处理",
-    expired: "授权过期",
-  }[store.permission_health];
-  const healthy = store.permission_health === "healthy";
-  const productSynced = store.product_sync_state === "synced";
-  const photobankSynced = store.photobank_sync_state === "synced";
-  const groupTotal = store.product_group_count;
-
   const copyAccount = () => {
     const value = store.account ?? store.login_id ?? "";
     if (value) void navigator.clipboard?.writeText(value);
@@ -329,30 +309,11 @@ function StoreCard({
           </dd>
         </div>
         <div>
-          <dt>权限健康</dt>
-          <dd>
-            <span className={`st-check ${healthy ? "is-success" : "is-warning"}`}>
-              {healthy ? (
-                <CheckCircle size={15} weight="fill" />
-              ) : (
-                <Warning size={15} weight="fill" />
-              )}
-              {healthLabel}
-            </span>
-            <span className="st-muted">
-              已验证 {store.permission_verified_count} / {store.permission_total_count} 项
-            </span>
-          </dd>
-        </div>
-        <div>
           <dt>商品数量</dt>
           <dd>
             {store.product_count === null
               ? "待同步"
               : `${store.product_count.toLocaleString()} 个商品`}
-            <span className={`st-dot ${productSynced ? "is-success" : "is-warning"}`}>
-              {productSynced ? "同步正常" : "同步异常"}
-            </span>
           </dd>
         </div>
         <div>
@@ -361,34 +322,14 @@ function StoreCard({
             {store.photobank_group_count === null
               ? "待同步"
               : `${store.photobank_group_count} 个分组`}
-            <span className={`st-dot ${photobankSynced ? "is-success" : "is-warning"}`}>
-              {photobankSynced ? "同步正常" : "同步异常"}
-            </span>
           </dd>
         </div>
         <div>
-          <dt>分组商品</dt>
-          <dd>
-            {groupTotal === null ? (
-              <span className="st-muted">接口待开放</span>
-            ) : (
-              <span className={`st-check ${store.expired ? "is-warning" : "is-success"}`}>
-                {store.expired ? (
-                  <Warning size={15} weight="fill" />
-                ) : (
-                  <CheckCircle size={15} weight="fill" />
-                )}
-                可用 {groupTotal} / {groupTotal} 组
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>最后同步</dt>
+          <dt>资料更新</dt>
           <dd>{formatDateTime(store.last_sync_at)}</dd>
         </div>
         <div>
-          <dt>草稿就绪</dt>
+          <dt>上品状态</dt>
           <dd>
             {store.ready_to_create_draft ? (
               <span className="st-check is-success">
@@ -396,14 +337,9 @@ function StoreCard({
               </span>
             ) : (
               <span className="st-check is-danger">
-                <XCircle size={15} weight="fill" /> 已阻塞
+                <XCircle size={15} weight="fill" /> 暂不可创建草稿
               </span>
             )}
-            <span className="st-muted">
-              {store.ready_to_create_draft
-                ? `已验证权限 ${store.permission_verified_count} 项`
-                : (store.readiness_blockers[0] ?? store.sync_error ?? "待验证权限")}
-            </span>
           </dd>
         </div>
       </dl>
