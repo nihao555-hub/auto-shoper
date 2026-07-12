@@ -60,7 +60,6 @@ class AlibabaOAuthStore:
                 "state": state,
                 "view": "web",
                 "sp": "ICBU",
-                "force_login": "true",
             }
         )
         return f"{settings.alibaba_oauth_authorize_url}?{query}"
@@ -268,7 +267,6 @@ def create_workspace_authorization_url(
             "state": state,
             "view": "web",
             "sp": "ICBU",
-            "force_login": "true",
         }
     )
     return f"{settings.alibaba_oauth_authorize_url}?{query}"

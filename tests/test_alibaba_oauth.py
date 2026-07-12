@@ -1,12 +1,18 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 from backend.app.config import Settings
+from backend.app.database import Database
 from backend.app.services import alibaba_oauth as oauth_module
-from backend.app.services.alibaba_oauth import AlibabaOAuthError, AlibabaOAuthStore
+from backend.app.services.alibaba_oauth import (
+    AlibabaOAuthError,
+    AlibabaOAuthStore,
+    create_workspace_authorization_url,
+)
 
 
 def _oauth_settings() -> Settings:
@@ -122,6 +128,33 @@ def test_authorization_url_uses_icbu_server_flow() -> None:
     assert query["response_type"] == ["code"]
     assert query["sp"] == ["ICBU"]
     assert query["state"][0]
+    assert "force_login" not in query
+
+
+def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        database_path=str(tmp_path / "oauth.db"),
+        registration_codes="INVITE",
+        token_encryption_key="test-only-token-encryption-key",
+        alibaba_app_key="app-key",
+        alibaba_app_secret="app-secret",
+        alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
+    )
+    database = Database(settings)
+    user, _ = database.register(
+        email="owner@example.com",
+        password="strong-password",
+        display_name="Owner",
+        workspace_name="Example Trading",
+        registration_code="INVITE",
+    )
+
+    url = create_workspace_authorization_url(settings, database, user)
+    query = parse_qs(urlparse(url).query)
+
+    assert "force_login" not in query
+    assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)
 
 
 def test_authorization_requires_server_side_app_configuration() -> None:
