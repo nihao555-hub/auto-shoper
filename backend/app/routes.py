@@ -41,6 +41,7 @@ from backend.app.models import (
     ProductImageCandidate,
     ProductImageGenerationRequest,
     ProductImageGenerationResponse,
+    ProductImagePlanResponse,
     ProductValidationRequest,
     ProductValidationResult,
     SchemaBuildRequest,
@@ -57,6 +58,7 @@ from backend.app.services.field_policy import (
 )
 from backend.app.services.image_templates import (
     SLOT_TEMPLATES,
+    build_slot_plan,
     build_slot_prompt,
     list_prompt_templates,
     resolve_slots,
@@ -691,6 +693,28 @@ async def get_image_prompt_templates() -> list[ImagePromptTemplate]:
 
 
 @router.post(
+    "/products/{product_id}/image-plan",
+    response_model=ProductImagePlanResponse,
+)
+async def plan_product_images(
+    product_id: str,
+    request: ProductImageGenerationRequest,
+) -> ProductImagePlanResponse:
+    if product_id != request.product_id:
+        raise HTTPException(status_code=400, detail="商品 ID 与请求内容不一致")
+    slots = [
+        slot
+        for slot in resolve_slots(request.slots)
+        if slot not in set(request.existing_slots)
+    ]
+    return ProductImagePlanResponse(
+        product_id=product_id,
+        target_language=request.target_language,
+        slots=[build_slot_plan(SLOT_TEMPLATES[slot], request) for slot in slots],
+    )
+
+
+@router.post(
     "/products/{product_id}/generate-images",
     response_model=ProductImageGenerationResponse,
 )
@@ -710,10 +734,21 @@ async def generate_product_images(
     _validate_upload(reference, content)
     file_name = reference.filename or "reference-image"
     content_type = reference.content_type or "image/jpeg"
-    slots = resolve_slots(parsed.slots)
+    existing_slots = set(parsed.existing_slots)
+    slots = [slot for slot in resolve_slots(parsed.slots) if slot not in existing_slots]
 
     async def generate_slot(slot: ImageSlot) -> ProductImageCandidate:
         template = SLOT_TEMPLATES[slot]
+        plan = build_slot_plan(template, parsed)
+        if not plan.can_generate:
+            missing_labels = "、".join(item.label for item in plan.missing_user_inputs)
+            return ProductImageCandidate(
+                slot=slot,
+                label=template.label,
+                can_generate=False,
+                missing_user_inputs=plan.missing_user_inputs,
+                error=f"缺少生成所需信息：{missing_labels}，请先补齐后再生成。",
+            )
         try:
             result = await ai_client.edit_product_image(
                 content,

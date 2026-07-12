@@ -11,6 +11,7 @@ import type {
   ImageSlot,
   ListingFieldGroup,
   ProductImageGenerationResponse,
+  ProductImagePlanResponse,
   ProductRecord,
   RegisterPayload,
   StoreSettings,
@@ -133,46 +134,67 @@ export const analyzeProductImages = async (
 export const getImagePromptTemplates = async (): Promise<ImagePromptTemplate[]> =>
   parseResponse<ImagePromptTemplate[]>(await apiFetch(`${API_ROOT}/images/prompt-templates`));
 
+type ProductImageOptions = {
+  slots?: ImageSlot[];
+  existingSlots?: ImageSlot[];
+  userInputs?: Record<string, string>;
+  extraPrompt?: string;
+};
+
+const buildImageRequestPayload = (product: ProductRecord, options?: ProductImageOptions) => ({
+  product_id: product.id,
+  title: product.title,
+  category: product.facts.categoryLabel,
+  description: product.description,
+  keywords: product.keywords,
+  slots: options?.slots ?? [],
+  existing_slots: options?.existingSlots ?? [],
+  target_language: "en_US",
+  user_inputs: options?.userInputs ?? {},
+  extra_prompt: options?.extraPrompt ?? "",
+  facts: {
+    brand: product.facts.brand,
+    model: product.facts.model,
+    material: product.facts.material,
+    price: product.facts.price,
+    moq: product.facts.moq,
+    stock: product.facts.stock,
+    product_length: product.facts.productLength,
+    product_width: product.facts.productWidth,
+    product_height: product.facts.productHeight,
+    net_weight: product.facts.netWeight,
+    package_length: product.facts.packageLength,
+    package_width: product.facts.packageWidth,
+    package_height: product.facts.packageHeight,
+    gross_weight: product.facts.grossWeight,
+    units_per_carton: product.facts.unitsPerCarton,
+    lead_time: product.facts.leadTime,
+    origin: product.facts.origin,
+    hs_code: product.facts.hsCode,
+    certifications: product.facts.certifications,
+  },
+});
+
+export const planProductImages = async (
+  product: ProductRecord,
+  options?: ProductImageOptions,
+): Promise<ProductImagePlanResponse> =>
+  parseResponse<ProductImagePlanResponse>(
+    await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/image-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildImageRequestPayload(product, options)),
+    }),
+  );
+
 export const generateProductImages = async (
   product: ProductRecord,
   reference: File,
-  options?: { slots?: ImageSlot[]; extraPrompt?: string },
+  options?: ProductImageOptions,
 ): Promise<ProductImageGenerationResponse> => {
   const body = new FormData();
   body.append("reference", reference);
-  body.append(
-    "request",
-    JSON.stringify({
-      product_id: product.id,
-      title: product.title,
-      category: product.facts.categoryLabel,
-      description: product.description,
-      keywords: product.keywords,
-      slots: options?.slots ?? [],
-      extra_prompt: options?.extraPrompt ?? "",
-      facts: {
-        brand: product.facts.brand,
-        model: product.facts.model,
-        material: product.facts.material,
-        price: product.facts.price,
-        moq: product.facts.moq,
-        stock: product.facts.stock,
-        product_length: product.facts.productLength,
-        product_width: product.facts.productWidth,
-        product_height: product.facts.productHeight,
-        net_weight: product.facts.netWeight,
-        package_length: product.facts.packageLength,
-        package_width: product.facts.packageWidth,
-        package_height: product.facts.packageHeight,
-        gross_weight: product.facts.grossWeight,
-        units_per_carton: product.facts.unitsPerCarton,
-        lead_time: product.facts.leadTime,
-        origin: product.facts.origin,
-        hs_code: product.facts.hsCode,
-        certifications: product.facts.certifications,
-      },
-    }),
-  );
+  body.append("request", JSON.stringify(buildImageRequestPayload(product, options)));
   return parseResponse<ProductImageGenerationResponse>(
     await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {
       method: "POST",

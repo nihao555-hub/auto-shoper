@@ -152,6 +152,9 @@ class ProductImageGenerationRequest(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=20)
     facts: ProductImageFacts = Field(default_factory=ProductImageFacts)
     slots: list[ImageSlot] = Field(default_factory=list)
+    existing_slots: list[ImageSlot] = Field(default_factory=list)
+    target_language: Literal["en_US"] = "en_US"
+    user_inputs: dict[str, str] = Field(default_factory=dict)
     extra_prompt: str = Field(default="", max_length=2000)
 
 
@@ -163,6 +166,22 @@ class ImagePromptTemplate(BaseModel):
     instruction: str
 
 
+class ImageInputRequirement(BaseModel):
+    key: str
+    label: str
+    description: str
+    required: bool = True
+
+
+class ImageSlotPlan(BaseModel):
+    slot: ImageSlot
+    label: str
+    purpose: str
+    required: bool = False
+    can_generate: bool = True
+    missing_user_inputs: list[ImageInputRequirement] = Field(default_factory=list)
+
+
 class ProductImageCandidate(BaseModel):
     slot: ImageSlot
     label: str
@@ -170,11 +189,19 @@ class ProductImageCandidate(BaseModel):
     error: str | None = None
     requires_confirmation: bool = True
     source_image_preservation_required: bool = True
+    can_generate: bool = True
+    missing_user_inputs: list[ImageInputRequirement] = Field(default_factory=list)
 
 
 class ProductImageGenerationResponse(BaseModel):
     product_id: str
     candidates: list[ProductImageCandidate]
+
+
+class ProductImagePlanResponse(BaseModel):
+    product_id: str
+    target_language: Literal["en_US"] = "en_US"
+    slots: list[ImageSlotPlan]
 
 
 class AlibabaSchemaRequest(BaseModel):

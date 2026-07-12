@@ -1,6 +1,7 @@
 from backend.app.models import ProductImageFacts, ProductImageGenerationRequest
 from backend.app.services.image_templates import (
     SLOT_TEMPLATES,
+    build_slot_plan,
     build_slot_prompt,
     resolve_slots,
 )
@@ -56,7 +57,7 @@ def test_build_schema_guidance_handles_missing_schema() -> None:
 
 
 def test_resolve_slots_defaults_and_filters() -> None:
-    assert resolve_slots([]) == ["main", "detail", "scenario"]
+    assert resolve_slots([]) == ["main", "detail", "scenario", "specification", "packaging"]
     assert resolve_slots(["detail", "detail", "main"]) == ["detail", "main"]
 
 
@@ -74,4 +75,37 @@ def test_build_slot_prompt_includes_extra_direction() -> None:
     assert "white background" in prompt
     assert "Watercolor Paper Pad" in prompt
     assert "soft daylight" in prompt
-    assert "品牌=Acme" in prompt
+    assert "Brand: Acme" in prompt
+    assert "MAIN IMAGE" in prompt
+    assert "maximize qualified buyer interest" in prompt
+
+
+def test_slot_plan_requests_only_facts_needed_for_each_image_type() -> None:
+    request = ProductImageGenerationRequest(
+        product_id="p1",
+        title="Watercolor Paper Pad",
+        category="Paper",
+        description="",
+    )
+    main = build_slot_plan(SLOT_TEMPLATES["main"], request)
+    scenario = build_slot_plan(SLOT_TEMPLATES["scenario"], request)
+    specification = build_slot_plan(SLOT_TEMPLATES["specification"], request)
+    packaging = build_slot_plan(SLOT_TEMPLATES["packaging"], request)
+
+    assert main.can_generate is True
+    assert scenario.missing_user_inputs[0].key == "use_scenario"
+    assert specification.missing_user_inputs[0].key == "product_dimensions"
+    assert packaging.missing_user_inputs[0].key == "packaging_details"
+
+    ready_request = request.model_copy(
+        update={
+            "user_inputs": {
+                "use_scenario": "Artists painting in a studio",
+                "product_dimensions": "9 × 12 in",
+                "packaging_details": "12 pads per export carton",
+            }
+        }
+    )
+    assert build_slot_plan(SLOT_TEMPLATES["scenario"], ready_request).can_generate is True
+    assert build_slot_plan(SLOT_TEMPLATES["specification"], ready_request).can_generate is True
+    assert build_slot_plan(SLOT_TEMPLATES["packaging"], ready_request).can_generate is True

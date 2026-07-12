@@ -204,7 +204,9 @@ class AIClient:
         preservation_prompt = (
             "Preserve the exact product identity, shape, proportions, count, color, labels, "
             "logo, components, and visible construction from the reference image. Do not add "
-            "or remove product parts, accessories, claims, certification marks, or text. "
+            "or remove product parts, accessories, claims, or certification marks. Do not add "
+            "text unless the requested specification image explicitly supplies confirmed "
+            "measurement labels; preserve existing product text exactly as shown. "
             f"Only change the presentation as requested: {prompt}"
         )
         response = await self.client.post(

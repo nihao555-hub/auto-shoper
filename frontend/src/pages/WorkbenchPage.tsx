@@ -41,6 +41,7 @@ import {
   generateProductImages,
   getCategorySchema,
   getListingFieldMatrix,
+  planProductImages,
   publishBatch,
   uploadPhotoBankImage,
 } from "../api";
@@ -51,6 +52,8 @@ import type {
   DataMode,
   DraftField,
   ImageAnalysisResponse,
+  ImageSlot,
+  ImageSlotPlan,
   ListingFieldGroup,
   ProductImageCandidate,
   ProductRecord,
@@ -143,6 +146,10 @@ export function WorkbenchPage({
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
+  const [imagePlan, setImagePlan] = useState<ImageSlotPlan[]>([]);
+  const [imagePlanBusy, setImagePlanBusy] = useState(false);
+  const [providedImageInputs, setProvidedImageInputs] = useState<Record<string, string>>({});
+  const [addedImageSlots, setAddedImageSlots] = useState<ImageSlot[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
 
@@ -186,6 +193,9 @@ export function WorkbenchPage({
     if (previousActiveProductId.current !== activeProductId) {
       previousActiveProductId.current = activeProductId;
       setImageCandidates([]);
+      setImagePlan([]);
+      setProvidedImageInputs({});
+      setAddedImageSlots([]);
     }
   }, [activeProductId]);
 
@@ -445,7 +455,32 @@ export function WorkbenchPage({
     }
   };
 
-  const generateImagesForProduct = async () => {
+  const refreshImagePlan = async () => {
+    if (!activeProduct || activeProduct.isDemo) {
+      return;
+    }
+    setImagePlanBusy(true);
+    try {
+      const response = await planProductImages(activeProduct, {
+        existingSlots: addedImageSlots,
+        userInputs: providedImageInputs,
+      });
+      setImagePlan(response.slots);
+      if (!response.slots.length) {
+        notify("success", "商品图已补齐", "五类商品图均已加入当前商品图库。");
+      }
+    } catch (error) {
+      notify("error", "无法检查缺失图种", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setImagePlanBusy(false);
+    }
+  };
+
+  const updateImageInput = (key: string, value: string) => {
+    setProvidedImageInputs((current) => ({ ...current, [key]: value }));
+  };
+
+  const generateImagesForProduct = async (slots?: ImageSlot[]) => {
     if (!activeProduct || activeProduct.isDemo) {
       notify("info", "演示商品不调用生图", "切换到真实商品后再生成候选图片。");
       return;
@@ -455,18 +490,28 @@ export function WorkbenchPage({
       notify("warning", "缺少参考图", "生图采用图生图，需要先上传真实商品主图作为参考。");
       return;
     }
+    const requestedSlots =
+      slots ?? imagePlan.filter((slot) => slot.can_generate).map((slot) => slot.slot);
+    if (!requestedSlots.length) {
+      notify("warning", "暂无可生成图种", "请先补齐提示的信息，再重新检查缺失图种。");
+      return;
+    }
     setImageGenerationBusy(true);
     setImageCandidates([]);
     try {
-      const response = await generateProductImages(activeProduct, referenceFile);
+      const response = await generateProductImages(activeProduct, referenceFile, {
+        slots: requestedSlots,
+        existingSlots: addedImageSlots,
+        userInputs: providedImageInputs,
+      });
       setImageCandidates(response.candidates);
       const successCount = response.candidates.filter((candidate) => candidate.image_url).length;
       notify(
         successCount ? "success" : "error",
         successCount ? "候选图片已生成" : "生图未返回图片",
         successCount
-          ? `${successCount} 个图位返回候选，可逐个加入商品图库。`
-          : "请检查失败图位的原因后重试。",
+          ? `${successCount} 个图种返回候选，确认后可逐个加入图库。`
+          : "请检查失败图种的原因后重试。",
       );
     } catch (error) {
       notify("error", "生图请求失败", error instanceof Error ? error.message : "请稍后重试。");
@@ -494,6 +539,10 @@ export function WorkbenchPage({
         },
       ],
     });
+    setAddedImageSlots((current) =>
+      current.includes(candidate.slot) ? current : [...current, candidate.slot],
+    );
+    setImagePlan((current) => current.filter((slot) => slot.slot !== candidate.slot));
     notify("success", "已加入商品图库", `${candidate.label}可继续确认或设为主图。`);
   };
 
@@ -936,6 +985,9 @@ export function WorkbenchPage({
           <WbInspector
             product={activeProduct}
             imageCandidates={imageCandidates}
+            imagePlan={imagePlan}
+            imagePlanBusy={imagePlanBusy}
+            providedImageInputs={providedImageInputs}
             imageGenerationBusy={imageGenerationBusy}
             onClose={() => setInspectorOpen(false)}
             onSwitch={() => {
@@ -945,7 +997,9 @@ export function WorkbenchPage({
               }
             }}
             onChange={updateProduct}
-            onGenerateImages={() => void generateImagesForProduct()}
+            onRefreshImagePlan={() => void refreshImagePlan()}
+            onChangeImageInput={updateImageInput}
+            onGenerateImages={(slots) => void generateImagesForProduct(slots)}
             onAddGeneratedImage={addGeneratedImage}
           />
         ) : null}
@@ -1526,20 +1580,30 @@ function FactsStep({
 function WbInspector({
   product,
   imageCandidates,
+  imagePlan,
+  imagePlanBusy,
+  providedImageInputs,
   imageGenerationBusy,
   onClose,
   onSwitch,
   onChange,
+  onRefreshImagePlan,
+  onChangeImageInput,
   onGenerateImages,
   onAddGeneratedImage,
 }: {
   product: ProductRecord;
   imageCandidates: ProductImageCandidate[];
+  imagePlan: ImageSlotPlan[];
+  imagePlanBusy: boolean;
+  providedImageInputs: Record<string, string>;
   imageGenerationBusy: boolean;
   onClose: () => void;
   onSwitch: () => void;
   onChange: (product: ProductRecord) => void;
-  onGenerateImages: () => void;
+  onRefreshImagePlan: () => void;
+  onChangeImageInput: (key: string, value: string) => void;
+  onGenerateImages: (slots?: ImageSlot[]) => void;
   onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
 }) {
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
@@ -1570,28 +1634,93 @@ function WbInspector({
         <section className="wb-inspector-section wb-image-generation">
           <div className="wb-image-generation-heading">
             <div>
-              <h3>生图候选（图生图）</h3>
+              <h3>智能补齐商品图</h3>
               <p>
-                以商品主图为参考图生成主图 / 详情图 /
-                场景图，保留商品本体，候选需人工确认后加入图库。
+                检查缺失的主图、详情、场景、规格和包装图。每种图都使用独立提示词，以商机转化为目标，
+                但不会编造尺寸、包装、用途或认证信息。
               </p>
             </div>
             <button
               type="button"
               className="button button-secondary wb-image-generation-button"
-              onClick={onGenerateImages}
-              disabled={imageGenerationBusy || product.isDemo}
+              onClick={onRefreshImagePlan}
+              disabled={imagePlanBusy || imageGenerationBusy || product.isDemo}
             >
-              {imageGenerationBusy ? (
-                <CircleNotch size={15} className="spin" />
-              ) : (
-                <MagicWand size={15} />
-              )}
-              {imageGenerationBusy ? "生成中" : "按图位生成"}
+              {imagePlanBusy ? <CircleNotch size={15} className="spin" /> : <Sparkle size={15} />}
+              {imagePlanBusy ? "检查中" : "检查缺失图种"}
             </button>
           </div>
           {product.isDemo ? (
             <p className="wb-image-generation-empty">演示商品不调用真实生图服务。</p>
+          ) : null}
+          {!product.isDemo && !imagePlan.length && !imagePlanBusy ? (
+            <p className="wb-image-generation-empty">
+              点击“检查缺失图种”，系统会判断每种图片是否需要补充真实商品信息。
+            </p>
+          ) : null}
+          {imagePlan.length ? (
+            <div className="wb-image-plan">
+              <div className="wb-image-plan-summary">
+                <span>
+                  缺失 {imagePlan.length} 种 · 可生成{" "}
+                  {imagePlan.filter((slot) => slot.can_generate).length} 种
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary wb-image-generation-button"
+                  onClick={() => onGenerateImages()}
+                  disabled={imageGenerationBusy || !imagePlan.some((slot) => slot.can_generate)}
+                >
+                  {imageGenerationBusy ? (
+                    <CircleNotch size={15} className="spin" />
+                  ) : (
+                    <MagicWand size={15} />
+                  )}
+                  {imageGenerationBusy ? "生成中" : "生成全部就绪图种"}
+                </button>
+              </div>
+              {imagePlan.map((slot) => (
+                <article
+                  key={slot.slot}
+                  className={`wb-image-plan-item ${slot.can_generate ? "is-ready" : "is-blocked"}`}
+                >
+                  <div className="wb-image-plan-title">
+                    <div>
+                      <strong>{slot.label}</strong>
+                      <span>{slot.purpose}</span>
+                    </div>
+                    <small>{slot.can_generate ? "可生成" : "需要商品信息"}</small>
+                  </div>
+                  {slot.missing_user_inputs.map((requirement) => (
+                    <label key={requirement.key} className="wb-image-plan-input">
+                      <span>{requirement.label}</span>
+                      <input
+                        value={providedImageInputs[requirement.key] ?? ""}
+                        onChange={(event) =>
+                          onChangeImageInput(requirement.key, event.target.value)
+                        }
+                        placeholder={requirement.description}
+                      />
+                    </label>
+                  ))}
+                  <div className="wb-image-plan-actions">
+                    {slot.missing_user_inputs.length ? (
+                      <span>填写后点击“检查缺失图种”重新校验</span>
+                    ) : (
+                      <span>将使用商品标题、类目、已确认事实和参考图</span>
+                    )}
+                    <button
+                      type="button"
+                      className="wb-link"
+                      onClick={() => onGenerateImages([slot.slot])}
+                      disabled={!slot.can_generate || imageGenerationBusy}
+                    >
+                      生成此图
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
           ) : null}
           {imageCandidates.length ? (
             <div className="wb-image-candidate-list">

@@ -236,6 +236,22 @@ export type ImagePromptTemplate = {
   instruction: string;
 };
 
+export type ImageInputRequirement = {
+  key: string;
+  label: string;
+  description: string;
+  required: boolean;
+};
+
+export type ImageSlotPlan = {
+  slot: ImageSlot;
+  label: string;
+  purpose: string;
+  required: boolean;
+  can_generate: boolean;
+  missing_user_inputs: ImageInputRequirement[];
+};
+
 export type ProductImageCandidate = {
   slot: ImageSlot;
   label: string;
@@ -243,11 +259,19 @@ export type ProductImageCandidate = {
   error: string | null;
   requires_confirmation?: boolean;
   source_image_preservation_required?: boolean;
+  can_generate?: boolean;
+  missing_user_inputs?: ImageInputRequirement[];
 };
 
 export type ProductImageGenerationResponse = {
   product_id: string;
   candidates: ProductImageCandidate[];
+};
+
+export type ProductImagePlanResponse = {
+  product_id: string;
+  target_language: "en_US";
+  slots: ImageSlotPlan[];
 };
 
 export type BatchApiResult = {

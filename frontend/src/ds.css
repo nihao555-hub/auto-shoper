@@ -2464,6 +2464,112 @@ tr.is-failed .bt-store small {
   font-size: 11px;
 }
 
+.wb-image-plan {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wb-image-plan-summary,
+.wb-image-plan-title,
+.wb-image-plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wb-image-plan-summary {
+  color: var(--ds-text-2);
+  font-size: 11px;
+}
+
+.wb-image-plan-item {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--ds-border-soft);
+  border-radius: 7px;
+  background: var(--ds-surface-muted);
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.wb-image-plan-item.is-ready {
+  border-color: color-mix(in srgb, var(--ds-success) 28%, var(--ds-border-soft));
+}
+
+.wb-image-plan-item.is-blocked {
+  border-color: color-mix(in srgb, var(--ds-warning) 32%, var(--ds-border-soft));
+}
+
+.wb-image-plan-title {
+  align-items: flex-start;
+}
+
+.wb-image-plan-title > div {
+  display: grid;
+  gap: 2px;
+}
+
+.wb-image-plan-title strong {
+  color: var(--ds-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.wb-image-plan-title span,
+.wb-image-plan-actions span {
+  color: var(--ds-text-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.wb-image-plan-title small {
+  flex-shrink: 0;
+  color: var(--ds-warning);
+  font-size: 10px;
+}
+
+.wb-image-plan-item.is-ready .wb-image-plan-title small {
+  color: var(--ds-success);
+}
+
+.wb-image-plan-input {
+  display: grid;
+  gap: 4px;
+}
+
+.wb-image-plan-input > span {
+  color: var(--ds-text-2);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.wb-image-plan-input input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--ds-border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--ds-surface);
+  color: var(--ds-text);
+  font: inherit;
+  font-size: 11px;
+  box-sizing: border-box;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.wb-image-plan-input input:focus {
+  border-color: var(--ds-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-primary) 14%, transparent);
+}
+
+.wb-image-plan-actions .wb-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .wb-image-candidate-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -146,6 +146,30 @@ def test_generate_product_images_uses_reference_image_to_image() -> None:
         app.dependency_overrides.clear()
 
 
+def test_product_image_plan_skips_existing_slots_and_requests_missing_facts() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/products/p1/image-plan",
+        json={
+            "product_id": "p1",
+            "title": "Pad",
+            "category": "Paper",
+            "description": "",
+            "keywords": [],
+            "existing_slots": ["main"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_language"] == "en_US"
+    slots = {item["slot"]: item for item in body["slots"]}
+    assert "main" not in slots
+    assert slots["detail"]["can_generate"] is True
+    assert slots["scenario"]["missing_user_inputs"][0]["key"] == "use_scenario"
+    assert slots["specification"]["missing_user_inputs"][0]["key"] == "product_dimensions"
+    assert slots["packaging"]["missing_user_inputs"][0]["key"] == "packaging_details"
+
+
 def test_image_prompt_templates_lists_required_slots() -> None:
     client = TestClient(app)
     response = client.get("/api/v1/images/prompt-templates")
