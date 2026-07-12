@@ -466,8 +466,14 @@ export function WorkbenchPage({
       notify("info", "演示商品不调用生图", "切换到真实商品后再生成候选图片。");
       return;
     }
-    const referenceFile = getMainProductImage(activeProduct).sourceFile;
-    if (!referenceFile) {
+    const mainImage = getMainProductImage(activeProduct);
+    const referenceFiles = [
+      ...(mainImage.sourceFile ? [mainImage.sourceFile] : []),
+      ...activeProduct.images.flatMap((image) =>
+        image.id !== mainImage.id && image.sourceFile ? [image.sourceFile] : [],
+      ),
+    ];
+    if (!referenceFiles.length) {
       notify("warning", "缺少参考图", "生图采用图生图，需要先上传真实商品主图作为参考。");
       return;
     }
@@ -480,7 +486,7 @@ export function WorkbenchPage({
     setImageGenerationBusy(true);
     setImageCandidates([]);
     try {
-      const response = await generateProductImages(activeProduct, referenceFile, {
+      const response = await generateProductImages(activeProduct, referenceFiles, {
         slots: requestedSlots,
         existingSlots: addedImageSlots,
         userInputs: providedImageInputs,

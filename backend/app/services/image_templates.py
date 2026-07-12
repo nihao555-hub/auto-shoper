@@ -15,8 +15,8 @@ SLOT_TEMPLATES: dict[ImageSlot, ImagePromptTemplate] = {
         instruction=(
             "Create an Alibaba.com MAIN IMAGE designed to maximize qualified clicks: pure white "
             "background, one complete product centered and filling the frame, crisp edges, "
-            "balanced studio lighting, accurate color, and no props, added text, watermark, "
-            "border, badge, or decorative element."
+            "balanced studio lighting with soft daylight and a subtle contact shadow, accurate "
+            "color, and no props, added text, watermark, border, badge, or decorative element."
         ),
     ),
     "detail": ImagePromptTemplate(
@@ -26,8 +26,9 @@ SLOT_TEMPLATES: dict[ImageSlot, ImagePromptTemplate] = {
         required=True,
         instruction=(
             "Create an Alibaba.com DETAIL IMAGE designed to increase buyer confidence: use a "
-            "clean close-up composition to show only construction, texture, finish, components, "
-            "and workmanship that are visibly supported by the reference product."
+            "clean close-up composition on a neutral background to show only construction, "
+            "texture, finish, components, and workmanship that are visibly supported by the "
+            "reference product."
         ),
     ),
     "scenario": ImagePromptTemplate(
@@ -97,6 +98,53 @@ PACKAGING_REQUIREMENT = ImageInputRequirement(
     description="填写真实包装形式、包装尺寸或每箱装量；缺少时不生成包装图。",
 )
 
+# Format guidance shared by every slot so candidates stay listing-ready.
+_FORMAT_GUIDANCE = (
+    "Output a photorealistic, high-resolution square (1:1) image, sharp focus, "
+    "true-to-source colors, suitable for direct upload as an Alibaba.com listing photo."
+)
+
+# Quality guardrails (negative prompt) shared by every slot.
+_QUALITY_GUARDRAILS = (
+    "Avoid blur, noise, overexposure, distortion, duplicated products, a cropped or "
+    "cut-off subject, and any cartoon, illustration, or 3D-render look."
+)
+
+# Compliance guardrails shared by every slot: the model must never fabricate
+# information that could mislead buyers or violate Alibaba listing rules.
+_COMPLIANCE_GUARDRAILS = (
+    "Do not add or alter any text, watermark, logo, brand name, promotional badge, "
+    "sticker, border, frame, collage, or certification mark, and do not invent, add, "
+    "or remove product parts, accessories, packaging, or measurements."
+)
+
+# Per-slot fidelity: how strictly the product itself must match the reference and
+# what the model is allowed to change. Resolves the tension between "change nothing"
+# and slot goals like scenario/packaging that must change the surroundings.
+_SLOT_FIDELITY: dict[ImageSlot, str] = {
+    "main": (
+        "Fidelity: keep the product pixel-faithful to the reference; only the "
+        "background (pure white) and studio lighting may change."
+    ),
+    "detail": (
+        "Fidelity: keep the product pixel-faithful to the reference; only the camera "
+        "framing, crop, and lighting may change to emphasise a close-up."
+    ),
+    "scenario": (
+        "Fidelity: keep the product's identity, shape, proportions, color, materials, "
+        "and markings identical to the reference; only the surrounding environment, "
+        "props, and lighting may change."
+    ),
+    "specification": (
+        "Fidelity: keep the product pixel-faithful to the reference; you may add clean "
+        "dimension callouts only for measurements listed in the confirmed facts."
+    ),
+    "packaging": (
+        "Fidelity: keep the product's identity identical to the reference; you may add "
+        "a plain, realistic package only if it implies no unverified label or claim."
+    ),
+}
+
 
 def list_prompt_templates() -> list[ImagePromptTemplate]:
     return list(SLOT_TEMPLATES.values())
@@ -163,6 +211,7 @@ def _confirmed_facts(request: ProductImageGenerationRequest) -> list[str]:
     simple_facts = (
         ("Brand", request.facts.brand),
         ("Model", request.facts.model),
+        # Material also steers surface/texture rendering, so keep it explicit.
         ("Material", request.facts.material),
         ("Origin", request.facts.origin),
     )
@@ -201,17 +250,33 @@ def build_slot_prompt(
     request: ProductImageGenerationRequest,
 ) -> str:
     confirmed_facts = "; ".join(_confirmed_facts(request))
-    keywords = "、".join(request.keywords[:8])
+    keywords = "、".join(keyword.strip() for keyword in request.keywords[:8] if keyword.strip())
+    visible_traits = "; ".join(
+        trait.strip() for trait in request.visible_traits[:8] if trait.strip()
+    )
+
     parts = [
+        # 1. What this slot should produce.
         template.instruction,
+        # 2. Overall objective.
         "Primary objective: maximize qualified buyer interest and conversion while preserving "
         "the exact product identity and never inventing product, commercial, or compliance facts.",
-        f"Product title: {request.title or 'not supplied'}.",
-        f"Category: {request.category or 'not supplied'}.",
-        f"Product description: {request.description or 'not supplied'}.",
+        # 3. How strictly the product must match the reference for this slot.
+        _SLOT_FIDELITY[template.slot],
+        # 4. Structured, confirmed facts about the product.
+        f"Product title: {request.title.strip() or 'not supplied'}.",
+        f"Category: {request.category.strip() or 'not supplied'}.",
+        f"Product description: {request.description.strip() or 'not supplied'}.",
         f"Keywords: {keywords or 'not supplied'}.",
         f"Confirmed facts: {confirmed_facts or 'not supplied'}.",
     ]
+    # 5. Anchors from what the analysis actually observed on the source product.
+    if visible_traits:
+        parts.append(
+            "Preserve these traits observed on the reference product exactly as-is: "
+            f"{visible_traits}."
+        )
+    # 6. Slot-specific confirmed user inputs.
     if template.slot == "scenario":
         parts.append(
             f"Required use scenario: {request.user_inputs.get('use_scenario', '').strip()}."
@@ -224,11 +289,16 @@ def build_slot_prompt(
         packaging = request.user_inputs.get("packaging_details", "").strip()
         if packaging:
             parts.append(f"Confirmed packaging information supplied by the user: {packaging}.")
+    # 7. Optional freeform user direction.
+    if request.extra_prompt.strip():
+        parts.append(f"Additional direction: {request.extra_prompt.strip()}")
+    # 8. Text policy, then shared compliance + quality guardrails and format.
     parts.append(
         "Text policy: do not render invented marketing copy. Preserve text already printed on "
         "the reference product exactly as-is. Only the specification image may add labels for "
         f"confirmed measurements, and those labels must use {request.target_language} English."
     )
-    if request.extra_prompt.strip():
-        parts.append(f"Additional direction: {request.extra_prompt.strip()}")
+    parts.append(_COMPLIANCE_GUARDRAILS)
+    parts.append(_QUALITY_GUARDRAILS)
+    parts.append(_FORMAT_GUIDANCE)
     return " ".join(parts)

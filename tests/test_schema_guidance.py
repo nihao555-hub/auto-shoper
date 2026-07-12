@@ -78,6 +78,11 @@ def test_build_slot_prompt_includes_extra_direction() -> None:
     assert "Brand: Acme" in prompt
     assert "MAIN IMAGE" in prompt
     assert "maximize qualified buyer interest" in prompt
+    # Shared guardrails are always present.
+    assert "do not invent" in prompt
+    assert "Avoid blur" in prompt
+    # Main slot uses the strict pixel-faithful fidelity clause.
+    assert "pixel-faithful" in prompt
 
 
 def test_slot_plan_requests_only_facts_needed_for_each_image_type() -> None:
@@ -109,3 +114,68 @@ def test_slot_plan_requests_only_facts_needed_for_each_image_type() -> None:
     assert build_slot_plan(SLOT_TEMPLATES["scenario"], ready_request).can_generate is True
     assert build_slot_plan(SLOT_TEMPLATES["specification"], ready_request).can_generate is True
     assert build_slot_plan(SLOT_TEMPLATES["packaging"], ready_request).can_generate is True
+
+
+def test_build_slot_prompt_surfaces_confirmed_dimensions_only_when_complete() -> None:
+    complete = ProductImageGenerationRequest(
+        product_id="p1",
+        title="Paint Brush",
+        category="Art Supplies",
+        description="",
+        keywords=[],
+        facts=ProductImageFacts(
+            brand="Acme",
+            product_length="10",
+            product_width="2",
+            product_height="2",
+        ),
+    )
+    partial = ProductImageGenerationRequest(
+        product_id="p1",
+        title="Paint Brush",
+        category="Art Supplies",
+        description="",
+        keywords=[],
+        # Only one axis supplied -> must not emit a partial "× × cm" fragment.
+        facts=ProductImageFacts(brand="Acme", product_length="10"),
+    )
+    spec_complete = build_slot_prompt(SLOT_TEMPLATES["specification"], complete)
+    spec_partial = build_slot_prompt(SLOT_TEMPLATES["specification"], partial)
+    assert "Product dimensions: 10 × 2 × 2 cm" in spec_complete
+    assert "Product dimensions" not in spec_partial
+    assert "Confirmed facts: Brand: Acme." in spec_partial
+
+
+def test_build_slot_prompt_applies_per_slot_fidelity() -> None:
+    request = ProductImageGenerationRequest(
+        product_id="p1",
+        title="Paint Brush",
+        category="Art Supplies",
+        description="",
+        keywords=[],
+        facts=ProductImageFacts(brand="Acme"),
+    )
+    main_prompt = build_slot_prompt(SLOT_TEMPLATES["main"], request)
+    scenario_prompt = build_slot_prompt(SLOT_TEMPLATES["scenario"], request)
+    # Main image locks the whole product; only background/lighting may change.
+    assert "only the background" in main_prompt
+    # Scenario image intentionally allows the surroundings to change.
+    assert "only the surrounding environment" in scenario_prompt
+    # Both still carry the shared compliance guardrail.
+    assert "certification mark" in main_prompt
+    assert "certification mark" in scenario_prompt
+
+
+def test_build_slot_prompt_injects_visible_traits() -> None:
+    request = ProductImageGenerationRequest(
+        product_id="p1",
+        title="Paint Brush",
+        category="Art Supplies",
+        description="",
+        keywords=[],
+        facts=ProductImageFacts(brand="Acme"),
+        visible_traits=["red wooden handle", "  ", "three bristle tufts"],
+    )
+    prompt = build_slot_prompt(SLOT_TEMPLATES["main"], request)
+    assert "Preserve these traits observed on the reference product" in prompt
+    assert "red wooden handle; three bristle tufts" in prompt

@@ -150,9 +150,7 @@ async def test_product_image_edit_uses_reference_and_requires_confirmation() -> 
     client = AIClient(ai_settings(), httpx.MockTransport(handler))
     try:
         result = await client.edit_product_image(
-            b"image",
-            "brush.jpg",
-            "image/jpeg",
+            [(b"image", "brush.jpg", "image/jpeg")],
             "use a white studio background",
             "1024x1024",
             1,
@@ -161,3 +159,30 @@ async def test_product_image_edit_uses_reference_and_requires_confirmation() -> 
         await client.close()
     assert result["requires_confirmation"] is True
     assert result["source_image_preservation_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_product_image_edit_sends_multiple_references() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = (await request.aread()).decode(errors="ignore")
+        assert request.url.path == "/v1/images/edits"
+        # Multiple references use the repeated image[] field.
+        assert 'name="image[]"; filename="front.jpg"' in body
+        assert 'name="image[]"; filename="side.jpg"' in body
+        assert "The first image is the primary reference" in body
+        return httpx.Response(200, json={"data": [{"url": "https://example.test/edit.png"}]})
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.edit_product_image(
+            [
+                (b"front", "front.jpg", "image/jpeg"),
+                (b"side", "side.jpg", "image/jpeg"),
+            ],
+            "use a white studio background",
+            "1024x1024",
+            1,
+        )
+    finally:
+        await client.close()
+    assert result["requires_confirmation"] is True

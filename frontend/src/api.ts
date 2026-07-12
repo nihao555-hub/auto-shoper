@@ -147,6 +147,7 @@ const buildImageRequestPayload = (product: ProductRecord, options?: ProductImage
   category: product.facts.categoryLabel,
   description: product.description,
   keywords: product.keywords,
+  visible_traits: product.visibleTraits,
   slots: options?.slots ?? [],
   existing_slots: options?.existingSlots ?? [],
   target_language: "en_US",
@@ -189,11 +190,13 @@ export const planProductImages = async (
 
 export const generateProductImages = async (
   product: ProductRecord,
-  reference: File,
+  references: File[],
   options?: ProductImageOptions,
 ): Promise<ProductImageGenerationResponse> => {
   const body = new FormData();
-  body.append("reference", reference);
+  for (const reference of references) {
+    body.append("references", reference);
+  }
   body.append("request", JSON.stringify(buildImageRequestPayload(product, options)));
   return parseResponse<ProductImageGenerationResponse>(
     await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {

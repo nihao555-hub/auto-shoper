@@ -57,14 +57,13 @@ class FakeAIClient:
 
     async def edit_product_image(
         self,
-        image_bytes: bytes,
-        file_name: str,
-        content_type: str,
+        references: list[tuple[bytes, str, str]],
         prompt: str,
         size: str,
         count: int,
     ) -> dict[str, object]:
         self.edit_prompts.append(prompt)
+        self.received_reference_count = len(references)
         return {
             "data": [{"url": "https://example.test/generated.png"}],
             "requires_confirmation": True,
@@ -128,7 +127,10 @@ def test_generate_product_images_uses_reference_image_to_image() -> None:
         client = TestClient(app)
         response = client.post(
             "/api/v1/products/p1/generate-images",
-            files=[("reference", ("main.jpg", b"main", "image/jpeg"))],
+            files=[
+                ("references", ("main.jpg", b"main", "image/jpeg")),
+                ("references", ("detail.png", b"detail", "image/png")),
+            ],
             data={
                 "request": (
                     '{"product_id":"p1","title":"Pad","category":"Paper",'
@@ -142,6 +144,58 @@ def test_generate_product_images_uses_reference_image_to_image() -> None:
         assert slots == ["main", "detail"]
         assert all(candidate["requires_confirmation"] for candidate in body["candidates"])
         assert len(fake_ai.edit_prompts) == 2
+        # Every slot receives the full set of reference images.
+        assert fake_ai.received_reference_count == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_product_images_accepts_single_reference_field() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    fake_ai.edit_prompts = []
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/p1/generate-images",
+            files=[("reference", ("main.jpg", b"main", "image/jpeg"))],
+            data={
+                "request": (
+                    '{"product_id":"p1","title":"Pad","category":"Paper",'
+                    '"description":"","keywords":[],"slots":["main"]}'
+                )
+            },
+        )
+        assert response.status_code == 200
+        assert fake_ai.received_reference_count == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_product_images_falls_back_to_primary_when_multi_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    fake_ai.edit_prompts = []
+    single_ref_settings = Settings(_env_file=None, image_multi_reference=False)
+    monkeypatch.setattr("backend.app.routes.get_settings", lambda: single_ref_settings)
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/p1/generate-images",
+            files=[
+                ("references", ("main.jpg", b"main", "image/jpeg")),
+                ("references", ("detail.png", b"detail", "image/png")),
+            ],
+            data={
+                "request": (
+                    '{"product_id":"p1","title":"Pad","category":"Paper",'
+                    '"description":"","keywords":[],"slots":["main"]}'
+                )
+            },
+        )
+        assert response.status_code == 200
+        # Two references uploaded, but only the primary one reaches the model.
+        assert fake_ai.received_reference_count == 1
     finally:
         app.dependency_overrides.clear()
 

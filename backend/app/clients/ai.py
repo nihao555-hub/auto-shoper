@@ -194,21 +194,35 @@ class AIClient:
 
     async def edit_product_image(
         self,
-        image_bytes: bytes,
-        file_name: str,
-        content_type: str,
+        references: list[tuple[bytes, str, str]],
         prompt: str,
         size: str,
         count: int,
     ) -> dict[str, Any]:
+        if not references:
+            raise AIProviderError("at least one reference image is required")
+        reference_note = (
+            "The first image is the primary reference; the remaining images show the same "
+            "product from other angles or details. Treat them as one product. "
+            if len(references) > 1
+            else ""
+        )
         preservation_prompt = (
             "Preserve the exact product identity, shape, proportions, count, color, labels, "
-            "logo, components, and visible construction from the reference image. Do not add "
+            "logo, components, and visible construction from the reference image(s). Do not add "
             "or remove product parts, accessories, claims, or certification marks. Do not add "
             "text unless the requested specification image explicitly supplies confirmed "
             "measurement labels; preserve existing product text exactly as shown. "
+            f"{reference_note}"
             f"Only change the presentation as requested: {prompt}"
         )
+        # A single reference keeps the plain "image" field so behaviour is unchanged;
+        # multiple references use the OpenAI-compatible repeated "image[]" field.
+        field_name = "image" if len(references) == 1 else "image[]"
+        files = [
+            (field_name, (file_name, image_bytes, content_type))
+            for image_bytes, file_name, content_type in references
+        ]
         response = await self.client.post(
             "/images/edits",
             data={
@@ -217,7 +231,7 @@ class AIClient:
                 "size": size,
                 "n": str(count),
             },
-            files={"image": (file_name, image_bytes, content_type)},
+            files=files,
         )
         if response.is_error:
             raise AIProviderError(self._provider_error(response))

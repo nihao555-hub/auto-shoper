@@ -151,6 +151,10 @@ class ProductImageGenerationRequest(BaseModel):
     description: str = Field(max_length=4000)
     keywords: list[str] = Field(default_factory=list, max_length=20)
     facts: ProductImageFacts = Field(default_factory=ProductImageFacts)
+    # Visible traits the image analysis observed on the source product (e.g. color,
+    # shape, visible components). Used as identity anchors so the model preserves what
+    # the reference image actually shows instead of improvising.
+    visible_traits: list[str] = Field(default_factory=list, max_length=20)
     slots: list[ImageSlot] = Field(default_factory=list)
     existing_slots: list[ImageSlot] = Field(default_factory=list)
     target_language: Literal["en_US"] = "en_US"

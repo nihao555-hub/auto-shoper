@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     text_model: str = "gemini-3.1-flash-lite"
     image_provider: str = "grsai"
     image_model: str = "gpt-image-2"
+    # When True, all reference images are sent to the image edit endpoint for better
+    # product consistency. Disable if the image provider does not support multiple
+    # reference images; generation then falls back to the primary image only.
+    image_multi_reference: bool = True
     database_backend: Literal["sqlite", "oceanbase"] = "sqlite"
     database_path: str = "data/auto-shoper.db"
     oceanbase_host: str | None = None

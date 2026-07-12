@@ -721,8 +721,9 @@ async def plan_product_images(
 async def generate_product_images(
     product_id: str,
     ai_client: Annotated[AIClient, Depends(get_ai_client)],
-    reference: Annotated[UploadFile, File(...)],
     request: Annotated[str, Form(...)],
+    references: Annotated[list[UploadFile] | None, File()] = None,
+    reference: Annotated[UploadFile | None, File()] = None,
 ) -> ProductImageGenerationResponse:
     try:
         parsed = ProductImageGenerationRequest.model_validate_json(request)
@@ -730,10 +731,30 @@ async def generate_product_images(
         raise HTTPException(status_code=422, detail="request 不是有效的生图参数") from exc
     if product_id != parsed.product_id:
         raise HTTPException(status_code=400, detail="商品 ID 与请求内容不一致")
-    content = await reference.read()
-    _validate_upload(reference, content)
-    file_name = reference.filename or "reference-image"
-    content_type = reference.content_type or "image/jpeg"
+    uploads = references or ([reference] if reference else [])
+    if not uploads:
+        raise HTTPException(status_code=422, detail="至少需要一张参考图")
+    if len(uploads) > get_settings().max_product_images:
+        raise HTTPException(
+            status_code=422,
+            detail=f"参考图最多 {get_settings().max_product_images} 张",
+        )
+    # Fall back to the primary reference only when multi-reference is disabled or the
+    # provider is not expected to support multiple reference images.
+    if not get_settings().image_multi_reference:
+        uploads = uploads[:1]
+    reference_payloads: list[tuple[bytes, str, str]] = []
+    for upload in uploads:
+        content = await upload.read()
+        _validate_upload(upload, content)
+        reference_payloads.append(
+            (
+                content,
+                upload.filename or "reference-image",
+                upload.content_type or "image/jpeg",
+            )
+        )
+    # Skip slots the merchant already has, so generation only fills the gaps.
     existing_slots = set(parsed.existing_slots)
     slots = [slot for slot in resolve_slots(parsed.slots) if slot not in existing_slots]
 
@@ -751,9 +772,7 @@ async def generate_product_images(
             )
         try:
             result = await ai_client.edit_product_image(
-                content,
-                file_name,
-                content_type,
+                reference_payloads,
                 build_slot_prompt(template, parsed),
                 "1024x1024",
                 1,
@@ -789,9 +808,7 @@ async def generate_image_from_product(
     _validate_upload(image, content)
     try:
         return await ai_client.edit_product_image(
-            content,
-            image.filename or "product-image",
-            image.content_type or "image/jpeg",
+            [(content, image.filename or "product-image", image.content_type or "image/jpeg")],
             prompt,
             size,
             count,
