@@ -1,12 +1,4 @@
-import {
-  CheckCircle,
-  FileText,
-  ShieldCheck,
-  Storefront,
-  Truck,
-  Warning,
-  X,
-} from "@phosphor-icons/react";
+import { FileText, ShieldCheck, Storefront, Truck, Warning, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { getMissingStoreTemplateFields } from "../data";
 import type { StoreSettings } from "../types";
@@ -100,9 +92,7 @@ export function SettingsDrawer({
       >
         <header className="drawer-header">
           <div>
-            <span className="eyebrow">客户工作区</span>
             <h2 id="settings-title">商家资产与批次偏好</h2>
-            <p>维护可复用的真实资料；店铺连接与切换请前往“店铺授权”。</p>
           </div>
           <div className="drawer-header-actions">
             {onSyncFromStore ? (
@@ -126,11 +116,7 @@ export function SettingsDrawer({
         {missingRequired.length ? (
           <div className="settings-required-banner" role="status">
             <Warning size={18} weight="fill" />
-            <p>
-              批量上品前需完成通用模板，还差：
-              {missingRequired.map((field) => field.label).join("、")}
-              。可先“从店铺同步”，剩余项手动填写。
-            </p>
+            <p>待补齐：{missingRequired.map((field) => field.label).join("、")}</p>
           </div>
         ) : null}
 
@@ -152,10 +138,7 @@ export function SettingsDrawer({
           <div className="settings-content">
             {section === "trade" ? (
               <>
-                <SettingsHeading
-                  title="本批次上次选择"
-                  description="仅帮助下次填写；创建批次时仍需明确确认目标店铺与资源。"
-                />
+                <SettingsHeading title="本批次上次选择" />
                 <div className="form-grid">
                   <SelectField
                     label="币种"
@@ -180,10 +163,7 @@ export function SettingsDrawer({
                     onChange={(value) => update("photoBankGroupLabel", value)}
                   />
                 </div>
-                <SettingsHeading
-                  title="允许带出商家资产"
-                  description="仅复用已确认的商家资料，商品事实仍需逐商品确认。"
-                />
+                <SettingsHeading title="允许带出商家资产" />
                 <div className="toggle-list">
                   <ToggleRow
                     label="公司介绍"
@@ -216,10 +196,7 @@ export function SettingsDrawer({
 
             {section === "logistics" ? (
               <>
-                <SettingsHeading
-                  title="仓储与物流"
-                  description="只复用真实存在的仓库、库存地点和运费模板。"
-                />
+                <SettingsHeading title="仓储与物流" />
                 <div className="form-grid">
                   <TextField
                     label="仓库"
@@ -247,10 +224,7 @@ export function SettingsDrawer({
 
             {section === "content" ? (
               <>
-                <SettingsHeading
-                  title="内容模板"
-                  description="AI 只能润色这里保存的真实店铺信息。"
-                />
+                <SettingsHeading title="内容模板" />
                 <TextAreaField
                   label="公司介绍"
                   value={draft.companyProfile}
@@ -280,10 +254,7 @@ export function SettingsDrawer({
 
             {section === "credentials" ? (
               <>
-                <SettingsHeading
-                  title="品牌与资质库"
-                  description="商品只需选择已验证且适用的资质，不重复上传。"
-                />
+                <SettingsHeading title="品牌与资质库" />
                 <div className="form-grid">
                   <TextField
                     label="常用品牌"
@@ -300,8 +271,7 @@ export function SettingsDrawer({
                 </div>
                 <div className="empty-credential">
                   <ShieldCheck size={30} />
-                  <strong>资质文件由后端业务系统管理</strong>
-                  <p>第一版只展示已验证资质，不在当前前端保存敏感文件。</p>
+                  <strong>暂无资质文件</strong>
                 </div>
               </>
             ) : null}
@@ -314,10 +284,6 @@ export function SettingsDrawer({
         </div>
 
         <footer className="drawer-footer">
-          <div className="settings-progress">
-            <CheckCircle size={20} weight="fill" />
-            <span>按当前工作区与店铺独立保存</span>
-          </div>
           <div className="drawer-actions">
             <button type="button" className="button button-secondary" onClick={onClose}>
               取消
@@ -332,11 +298,10 @@ export function SettingsDrawer({
   );
 }
 
-function SettingsHeading({ title, description }: { title: string; description: string }) {
+function SettingsHeading({ title }: { title: string }) {
   return (
     <div className="settings-heading">
       <h3>{title}</h3>
-      <p>{description}</p>
     </div>
   );
 }

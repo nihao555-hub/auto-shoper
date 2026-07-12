@@ -81,7 +81,6 @@ export function OverviewPage({
       <header className="ds-page-header">
         <div>
           <h1>上品运营总览</h1>
-          <p className="ds-page-subtitle">在这里查看当前上品批次的整体进度，快速完成上品流程。</p>
         </div>
         <button type="button" className="ds-button-primary" onClick={onNavigateWorkbench}>
           新建上品批次

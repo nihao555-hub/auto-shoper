@@ -1,4 +1,4 @@
-import { Eye, EyeSlash, LockKey, ShieldCheck, Storefront } from "@phosphor-icons/react";
+import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { ApiError, login, register } from "../api";
@@ -206,21 +206,9 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
               </button>
             </form>
           )}
-
-          <div className="auth-trust">
-            <span>
-              <ShieldCheck size={16} /> 密码安全哈希
-            </span>
-            <span>
-              <LockKey size={16} /> Token 加密存储
-            </span>
-            <span>
-              <Storefront size={16} /> 店铺数据隔离
-            </span>
-          </div>
         </div>
 
-        <p className="auth-footer">仅向受邀客户开放 · 登录即表示你同意平台安全规范</p>
+        <p className="auth-footer">仅向受邀客户开放</p>
       </section>
     </main>
   );

@@ -32,6 +32,8 @@ def _extract_count(payload: object) -> int | None:
             "total",
             "total_count",
             "totalCount",
+            "total_item",
+            "totalItem",
             "total_size",
             "totalSize",
             "count",
@@ -73,6 +75,7 @@ def _merchant_assets_payload(assets: MerchantAssets | None) -> dict[str, str]:
 def _store_payload(
     store: StoreConnection,
     assets: MerchantAssets | None = None,
+    template_defaults: dict[str, str] | None = None,
 ) -> dict[str, object]:
     permission_values = list(store.permissions.values())
     verified = sum(value == "verified" for value in permission_values)
@@ -120,6 +123,7 @@ def _store_payload(
         "readiness_blockers": blockers,
         "sync_error": store.sync_error,
         "merchant_assets": _merchant_assets_payload(assets),
+        "template_defaults": template_defaults or {},
     }
 
 
@@ -141,15 +145,36 @@ def _first_text(payload: object, keys: set[str]) -> str:
     return ""
 
 
+def _first_scalar(payload: object, keys: set[str]) -> str:
+    if isinstance(payload, Mapping):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, int | float):
+                return str(value)
+        for value in payload.values():
+            result = _first_scalar(value, keys)
+            if result:
+                return result
+    elif isinstance(payload, list):
+        for value in payload:
+            result = _first_scalar(value, keys)
+            if result:
+                return result
+    return ""
+
+
 def _first_product_id(payload: object) -> str:
+    official_id = _first_scalar(payload, {"product_id", "productId"})
+    if official_id:
+        return official_id
     if isinstance(payload, Mapping):
         products = payload.get("products")
-        if isinstance(products, list):
-            for product in products:
-                if isinstance(product, Mapping):
-                    value = product.get("id")
-                    if isinstance(value, int | str) and str(value).strip():
-                        return str(value)
+        if products is not None:
+            fallback_id = _first_scalar(products, {"id"})
+            if fallback_id:
+                return fallback_id
         for value in payload.values():
             result = _first_product_id(value)
             if result:
@@ -162,10 +187,33 @@ def _first_product_id(payload: object) -> str:
     return ""
 
 
-async def _fetch_merchant_assets(
+def _first_named_record(
+    payload: object,
+    *,
+    id_keys: set[str],
+    name_keys: set[str],
+) -> tuple[str, str]:
+    if isinstance(payload, Mapping):
+        record_id = _first_scalar(payload, id_keys)
+        record_name = _first_text(payload, name_keys)
+        if record_id and record_name:
+            return record_id, record_name
+        for value in payload.values():
+            result = _first_named_record(value, id_keys=id_keys, name_keys=name_keys)
+            if all(result):
+                return result
+    elif isinstance(payload, list):
+        for value in payload:
+            result = _first_named_record(value, id_keys=id_keys, name_keys=name_keys)
+            if all(result):
+                return result
+    return "", ""
+
+
+async def _fetch_product_payloads(
     client: AlibabaClient,
     product_payload: object,
-) -> dict[str, str]:
+) -> list[object]:
     payloads: list[object] = [product_payload]
     product_id = _first_product_id(product_payload)
     if product_id:
@@ -176,6 +224,10 @@ async def _fetch_merchant_assets(
                     {"product_get_request": {"productId": product_id}},
                 )
             )
+    return payloads
+
+
+def _merchant_assets_from_payloads(payloads: list[object]) -> dict[str, str]:
     return {
         "company_profile": _first_text(
             payloads,
@@ -236,11 +288,76 @@ async def _fetch_merchant_assets(
     }
 
 
+def _template_defaults(
+    product_payloads: list[object],
+    photobank_payload: object | None,
+    merchant_assets: dict[str, str],
+) -> dict[str, str]:
+    product_group_id, product_group_label = _first_named_record(
+        product_payloads,
+        id_keys={"group_id", "groupId", "product_group_id", "productGroupId"},
+        name_keys={"group_name", "groupName", "product_group_name", "productGroupName"},
+    )
+    photo_group_id, photo_group_label = _first_named_record(
+        photobank_payload,
+        id_keys={"id", "group_id", "groupId"},
+        name_keys={"name", "group_name", "groupName"},
+    )
+    values = {
+        "currency": _first_scalar(
+            product_payloads,
+            {"currency", "currency_code", "currencyCode"},
+        ),
+        "priceUnit": _first_scalar(
+            product_payloads,
+            {"price_unit", "priceUnit", "unit", "unit_name", "unitName"},
+        ),
+        "productGroupId": product_group_id,
+        "productGroupLabel": product_group_label,
+        "photoBankGroupId": photo_group_id,
+        "photoBankGroupLabel": photo_group_label,
+        "warehouseId": _first_scalar(
+            product_payloads,
+            {"warehouse_id", "warehouseId"},
+        ),
+        "warehouseLabel": _first_text(
+            product_payloads,
+            {"warehouse_name", "warehouseName"},
+        ),
+        "shippingTemplateId": _first_scalar(
+            product_payloads,
+            {
+                "shipping_template_id",
+                "shippingTemplateId",
+                "freight_template_id",
+                "freightTemplateId",
+            },
+        ),
+        "shippingTemplateLabel": _first_text(
+            product_payloads,
+            {
+                "shipping_template_name",
+                "shippingTemplateName",
+                "freight_template_name",
+                "freightTemplateName",
+            },
+        ),
+        "inventoryCode": _first_scalar(
+            product_payloads,
+            {"inventory_code", "inventoryCode", "warehouse_code", "warehouseCode"},
+        ),
+        "companyProfile": merchant_assets["company_profile"],
+        "brand": merchant_assets["brand"],
+        "origin": merchant_assets["origin"],
+    }
+    return {key: value for key, value in values.items() if value}
+
+
 async def _sync_store(
     database: Database,
     settings: Settings,
     store: StoreConnection,
-) -> StoreConnection:
+) -> tuple[StoreConnection, dict[str, str]]:
     client_settings = settings.model_copy(update={"alibaba_access_token": store.access_token})
     client = AlibabaClient(client_settings)
     permissions = dict(store.permissions)
@@ -255,6 +372,8 @@ async def _sync_store(
         "origin": "",
         "brand": "",
     }
+    product_payloads: list[object] = []
+    photobank_payload: object | None = None
     product_state = "failed"
     photobank_state = "failed"
     try:
@@ -265,7 +384,8 @@ async def _sync_store(
         product_count = _extract_count(product_payload)
         product_state = "synced"
         permissions["product_read"] = "verified"
-        merchant_assets = await _fetch_merchant_assets(client, product_payload)
+        product_payloads = await _fetch_product_payloads(client, product_payload)
+        merchant_assets = _merchant_assets_from_payloads(product_payloads)
     except AlibabaAPIError as exc:
         permissions["product_read"] = "failed"
         errors.append(f"商品同步：{exc}")
@@ -287,7 +407,7 @@ async def _sync_store(
         store_connection_id=store.id,
         **merchant_assets,
     )
-    return database.update_store_summary(
+    synced_store = database.update_store_summary(
         workspace_id=store.workspace_id,
         store_id=store.id,
         product_count=product_count,
@@ -296,6 +416,11 @@ async def _sync_store(
         photobank_sync_state=photobank_state,
         permissions=permissions,
         sync_error="；".join(errors) if errors else None,
+    )
+    return synced_store, _template_defaults(
+        product_payloads,
+        photobank_payload,
+        merchant_assets,
     )
 
 
@@ -350,12 +475,13 @@ async def sync_store(
     if store.expired:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="店铺授权已过期")
     try:
-        synced = await _sync_store(database, settings, store)
+        synced, template_defaults = await _sync_store(database, settings, store)
     except AlibabaAPIError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return _store_payload(
         synced,
         database.get_merchant_assets(user.workspace_id, synced.id),
+        template_defaults,
     )
 
 

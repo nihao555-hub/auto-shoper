@@ -24,15 +24,7 @@ import {
   X,
   XCircle,
 } from "@phosphor-icons/react";
-import {
-  type ChangeEvent,
-  type DragEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ChangeEvent, type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeProductImages,
   createDraftBatch,
@@ -40,7 +32,6 @@ import {
   findSchemaData,
   generateProductImages,
   getCategorySchema,
-  getListingFieldMatrix,
   planProductImages,
   publishBatch,
   uploadPhotoBankImage,
@@ -54,7 +45,6 @@ import type {
   ImageAnalysisResponse,
   ImageSlot,
   ImageSlotPlan,
-  ListingFieldGroup,
   ProductImageCandidate,
   ProductRecord,
   StoreSettings,
@@ -82,19 +72,19 @@ const describeAiFailure = (message: string | undefined): string => {
   const raw = message ?? "";
   const lower = raw.toLowerCase();
   if (lower.includes("insufficient credits") || lower.includes("insufficient_quota")) {
-    return "AI 服务账户余额不足，请在服务后台充值后重试。";
+    return "AI 服务额度不足，请联系管理员。";
   }
   if (lower.includes("not register") || lower.includes("model_not_found")) {
-    return "配置的模型未在该 AI 账户注册，请检查后端模型名或联系管理员。";
+    return "AI 服务暂不可用，请联系管理员。";
   }
   if (lower.includes("is not configured") || lower.includes("api_key")) {
-    return "后端未配置 AI 服务凭据（OPENAI_API_KEY），请联系管理员。";
+    return "AI 服务尚未开通，请联系管理员。";
   }
   if (lower.includes("invalid structured response") || lower.includes("invalid response")) {
-    return "AI 返回的结构不合法，请重试；若持续失败请联系管理员。";
+    return "AI 返回异常，请重试。";
   }
   if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("403")) {
-    return "AI 服务凭据无效或无权限，请检查后端 key。";
+    return "AI 服务暂不可用，请联系管理员。";
   }
   return raw || "AI 分析失败，请重试。";
 };
@@ -141,7 +131,6 @@ export function WorkbenchPage({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [fieldGroups, setFieldGroups] = useState<ListingFieldGroup[]>([]);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
@@ -173,12 +162,6 @@ export function WorkbenchPage({
     onOpenSettings();
     return true;
   };
-
-  useEffect(() => {
-    getListingFieldMatrix()
-      .then(setFieldGroups)
-      .catch(() => setFieldGroups([]));
-  }, []);
 
   useEffect(() => {
     if (!products.some((product) => product.id === activeProductId)) {
@@ -318,8 +301,8 @@ export function WorkbenchPage({
     if (!product.isDemo && (!backendConnected || !capabilities?.model_credentials_configured)) {
       notify(
         "error",
-        !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
-        !backendConnected ? "请稍后重试或联系管理员。" : "智能生成服务尚未开通。",
+        !backendConnected ? "服务暂不可用" : "AI 服务尚未开通",
+        "请稍后重试或联系管理员。",
       );
       return { success: false as const, error: "AI 服务尚未配置" };
     }
@@ -383,10 +366,8 @@ export function WorkbenchPage({
     if (dataMode === "live" && (!backendConnected || !capabilities?.model_credentials_configured)) {
       notify(
         "error",
-        !backendConnected ? "后端服务未连接" : "AI 服务尚未配置",
-        !backendConnected
-          ? "请稍后重试或联系管理员。"
-          : "未检测到 AI 服务凭据，请联系管理员在后端配置 OPENAI_API_KEY。",
+        !backendConnected ? "服务暂不可用" : "AI 服务尚未开通",
+        "请稍后重试或联系管理员。",
       );
       return;
     }
@@ -560,7 +541,7 @@ export function WorkbenchPage({
     if (failures) {
       notify("warning", `${failures} 个商品仍需补充资料`, "打开商品详情可直接定位缺失项。");
     } else {
-      notify("success", "全部商品通过前端预检", "下一步将获取实时 Alibaba Schema。");
+      notify("success", "全部商品校验通过", "可以继续创建草稿。");
     }
   };
 
@@ -578,8 +559,8 @@ export function WorkbenchPage({
     ) {
       notify(
         "error",
-        !backendConnected ? "后端服务未连接" : "Alibaba 店铺尚未授权",
-        !backendConnected ? "请稍后重试或联系管理员。" : "请先在设置中连接真实店铺。",
+        !backendConnected ? "服务暂不可用" : "Alibaba 店铺尚未连接",
+        !backendConnected ? "请稍后重试或联系管理员。" : "请先前往店铺授权。",
       );
       return;
     }
@@ -636,7 +617,7 @@ export function WorkbenchPage({
           const payload = await getCategorySchema(product.facts.categoryId);
           const schemaData = findSchemaData(payload);
           if (!schemaData) {
-            throw new Error(`${product.reference} 未从 Alibaba 响应中找到 Schema`);
+            throw new Error(`${product.reference} 未获取到平台类目规则`);
           }
           return { ...product, images, schemaData };
         }),
@@ -830,8 +811,6 @@ export function WorkbenchPage({
     `可建草稿 ${draftReadyCount}`,
     `待发布 ${publishedProducts.length}`,
   ];
-  const backendHealthy = dataMode === "live" && backendConnected && failedCount === 0;
-
   return (
     <div
       className={`wb-page ${step === 2 && activeProduct && inspectorOpen ? "has-inspector" : ""}`}
@@ -844,23 +823,6 @@ export function WorkbenchPage({
           </span>
           <span>
             批次 ID：<strong>{batchId}</strong>
-          </span>
-          <span>
-            数据模式：<strong>AI 候选 + 用户补齐</strong>
-          </span>
-          <span>
-            后台状态：
-            {backendHealthy ? (
-              <strong className="wb-health is-ok">
-                <CheckCircle size={14} weight="fill" />
-                运行正常
-              </strong>
-            ) : (
-              <strong className="wb-health is-warn">
-                <Warning size={14} weight="fill" />
-                部分异常
-              </strong>
-            )}
           </span>
         </div>
         <div className="wb-topbar-tools">
@@ -900,11 +862,7 @@ export function WorkbenchPage({
               <Warning size={20} weight="fill" />
               <div className="wb-template-gate-copy">
                 <strong>批量上品前请先完成通用模板</strong>
-                <p>
-                  以下全店通用字段尚未填写：
-                  {missingTemplateFields.map((field) => field.label).join("、")}
-                  。可先从店铺同步，剩余项在设置中手动填写。
-                </p>
+                <p>待补齐：{missingTemplateFields.map((field) => field.label).join("、")}</p>
               </div>
               <button type="button" className="button button-dark" onClick={onOpenSettings}>
                 完善通用模板
@@ -920,7 +878,6 @@ export function WorkbenchPage({
               onPickFiles={() => fileInputRef.current?.click()}
               onRemove={removeProduct}
               onMainImageChange={setMainImage}
-              fieldGroups={fieldGroups}
             />
           ) : null}
 
@@ -1096,7 +1053,6 @@ function UploadStep({
   onPickFiles,
   onRemove,
   onMainImageChange,
-  fieldGroups,
 }: {
   products: ProductRecord[];
   dragActive: boolean;
@@ -1105,15 +1061,12 @@ function UploadStep({
   onPickFiles: () => void;
   onRemove: (id: string) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
-  fieldGroups: ListingFieldGroup[];
 }) {
   return (
     <div className="step-page upload-step">
       <div className="step-heading">
         <div>
-          <span className="eyebrow">开始一个批次</span>
           <h2>一组图片，建立一个商品</h2>
-          <p>第一张默认为主图，AI 会综合识别主图、细节、规格和包装信息。</p>
         </div>
         <span className="quiet-stat">最多 100 个商品 / 批次</span>
       </div>
@@ -1185,41 +1138,6 @@ function UploadStep({
           </div>
         </div>
       ) : null}
-
-      <div className="policy-summary">
-        <PolicyColumn
-          title="AI 会完成"
-          icon={<Sparkle size={20} />}
-          items={
-            fieldGroups
-              .find((group) => group.key === "product_ai_assisted")
-              ?.fields.slice(0, 5)
-              .map((field) => field.label) ?? [
-              "类目建议",
-              "英文标题与关键词",
-              "卖点和详情文案",
-              "可见颜色与外形",
-              "白底图和场景图",
-            ]
-          }
-        />
-        <PolicyColumn
-          title="用户或 ERP 提供"
-          icon={<CheckSquare size={20} />}
-          items={
-            fieldGroups
-              .find((group) => group.key === "product_trusted_facts")
-              ?.fields.slice(0, 5)
-              .map((field) => field.label) ?? [
-              "最终类目和品牌型号",
-              "价格、MOQ 与库存",
-              "材质、尺寸和重量",
-              "包装与交期",
-              "认证、HS Code 与授权",
-            ]
-          }
-        />
-      </div>
     </div>
   );
 }
@@ -1246,9 +1164,7 @@ function AiStep({
     <div className="step-page ai-step">
       <div className="step-heading">
         <div>
-          <span className="eyebrow">AI 内容候选</span>
-          <h2>先确认商品身份，再继续</h2>
-          <p>看不清的事实会留空，AI 不会推断价格、材质、库存或认证。</p>
+          <h2>确认商品内容</h2>
         </div>
         <button
           type="button"
@@ -1416,8 +1332,8 @@ function FactsStep({
             onChange={(event) => setSourceFilter(event.target.value as SourceFilter)}
           >
             <option value="all">全部来源状态</option>
-            <option value="user_confirmed">user_confirmed</option>
-            <option value="ai_candidate">ai_candidate</option>
+            <option value="user_confirmed">已确认</option>
+            <option value="ai_candidate">AI 候选</option>
           </select>
         </label>
         <label className="wb-select">
@@ -1530,7 +1446,7 @@ function FactsStep({
                     <span
                       className={`wb-source ${product.aiConfirmed ? "is-confirmed" : "is-candidate"}`}
                     >
-                      {product.aiConfirmed ? "user_confirmed" : "ai_candidate"}
+                      {product.aiConfirmed ? "已确认" : "AI 候选"}
                     </span>
                   </td>
                   <td>
@@ -1611,7 +1527,7 @@ function WbInspector({
   };
   const sourceBadge = (confirmed: boolean) => (
     <span className={`wb-source ${confirmed ? "is-confirmed" : "is-candidate"}`}>
-      {confirmed ? "user_confirmed" : "ai_candidate"}
+      {confirmed ? "已确认" : "AI 候选"}
     </span>
   );
   const complianceNote = product.facts.certifications[0] ?? "";
@@ -1633,13 +1549,7 @@ function WbInspector({
       <div className="wb-inspector-scroll">
         <section className="wb-inspector-section wb-image-generation">
           <div className="wb-image-generation-heading">
-            <div>
-              <h3>智能补齐商品图</h3>
-              <p>
-                检查缺失的主图、详情、场景、规格和包装图。每种图都使用独立提示词，以商机转化为目标，
-                但不会编造尺寸、包装、用途或认证信息。
-              </p>
-            </div>
+            <h3>智能补齐商品图</h3>
             <button
               type="button"
               className="button button-secondary wb-image-generation-button"
@@ -1651,12 +1561,7 @@ function WbInspector({
             </button>
           </div>
           {product.isDemo ? (
-            <p className="wb-image-generation-empty">演示商品不调用真实生图服务。</p>
-          ) : null}
-          {!product.isDemo && !imagePlan.length && !imagePlanBusy ? (
-            <p className="wb-image-generation-empty">
-              点击“检查缺失图种”，系统会判断每种图片是否需要补充真实商品信息。
-            </p>
+            <p className="wb-image-generation-empty">演示商品无法生成图片。</p>
           ) : null}
           {imagePlan.length ? (
             <div className="wb-image-plan">
@@ -1704,11 +1609,6 @@ function WbInspector({
                     </label>
                   ))}
                   <div className="wb-image-plan-actions">
-                    {slot.missing_user_inputs.length ? (
-                      <span>填写后点击“检查缺失图种”重新校验</span>
-                    ) : (
-                      <span>将使用商品标题、类目、已确认事实和参考图</span>
-                    )}
                     <button
                       type="button"
                       className="wb-link"
@@ -1973,9 +1873,7 @@ function DraftStep({
     <div className="step-page draft-step">
       <div className="step-heading">
         <div>
-          <span className="eyebrow">安全草稿</span>
-          <h2>实时 Schema 校验后逐商品建草稿</h2>
-          <p>失败商品会单独返回原因，不阻止同批次其他商品。</p>
+          <h2>逐商品校验并创建草稿</h2>
         </div>
         <button
           type="button"
@@ -1995,7 +1893,6 @@ function DraftStep({
             {ready.length}
             <small> / {scopedProducts.length}</small>
           </strong>
-          <p>只有来源和 Schema 校验同时通过的商品会写入。</p>
         </div>
         <div className="draft-checks">
           <CheckLine
@@ -2011,7 +1908,7 @@ function DraftStep({
             passed={scopedProducts.every((p) => p.facts.grossWeight)}
           />
           <CheckLine
-            label="实时 Alibaba Schema"
+            label="平台类目规则"
             passed={scopedProducts.every((p) => p.isDemo || Boolean(p.schemaData))}
             pendingLabel="创建草稿时获取"
           />
@@ -2290,33 +2187,6 @@ function PublishDialog({
           </button>
         </div>
       </section>
-    </div>
-  );
-}
-
-function PolicyColumn({
-  title,
-  icon,
-  items,
-}: {
-  title: string;
-  icon: ReactNode;
-  items: string[];
-}) {
-  return (
-    <div>
-      <h3>
-        {icon}
-        {title}
-      </h3>
-      <ul>
-        {items.map((item) => (
-          <li key={item}>
-            <Check size={15} />
-            {item}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

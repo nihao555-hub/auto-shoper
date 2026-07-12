@@ -2,10 +2,8 @@ import {
   ArrowsClockwise,
   CheckCircle,
   Copy,
-  Info,
   MagnifyingGlass,
   Plus,
-  SealWarning,
   ShieldWarning,
   Warning,
   XCircle,
@@ -91,9 +89,6 @@ export function StoresPage({
       <header className="ds-page-header">
         <div>
           <h1>店铺授权</h1>
-          <p className="ds-page-subtitle">
-            每个客户工作区可连接并切换多个 Alibaba 店铺，批量任务保持不变。
-          </p>
         </div>
         <button
           type="button"
@@ -102,28 +97,20 @@ export function StoresPage({
           disabled={!authorizationEnabled}
         >
           <Plus size={16} weight="bold" />
-          {authorizationEnabled ? "添加 Alibaba 店铺" : "等待平台配置"}
+          {authorizationEnabled ? "添加 Alibaba 店铺" : "暂不可用"}
         </button>
       </header>
-
-      <section className="st-security" aria-label="安全说明">
-        <SealWarning size={18} weight="fill" />
-        <p>
-          安全说明：采用 OAuth 官方授权，Token 仅在后端加密存储，
-          <strong>按工作区隔离</strong>，响应中不返回任何 Token。
-        </p>
-      </section>
 
       {capabilities?.alibaba_oauth_configuration_error ? (
         <section className="st-config-error" aria-label="配置错误">
           <ShieldWarning size={18} />
-          {capabilities.alibaba_oauth_configuration_error}
+          店铺授权服务暂不可用
         </section>
       ) : null}
 
       <section className="st-current" aria-label="当前使用店铺">
         <header className="st-current-heading">
-          <h2>当前使用店铺（将用于新建任务）</h2>
+          <h2>当前店铺</h2>
           <span className="st-tag is-current">当前店铺</span>
         </header>
         {activeStore ? (
@@ -187,10 +174,6 @@ export function StoresPage({
                 店铺设置
               </button>
             </div>
-            <p className="st-current-note">
-              <Info size={15} weight="fill" />
-              切换店铺仅影响新建任务的目标店铺，不会重新绑定或影响已有批次。
-            </p>
           </>
         ) : (
           <div className="st-current-empty">

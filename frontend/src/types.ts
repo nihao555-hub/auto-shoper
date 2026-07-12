@@ -170,6 +170,7 @@ export type AlibabaConnectedStore = {
   readiness_blockers: string[];
   sync_error: string | null;
   merchant_assets: MerchantAssets;
+  template_defaults?: Partial<StoreSettings>;
 };
 
 export type MerchantAssets = {

@@ -332,14 +332,10 @@ export default function App() {
       } else {
         window.location.assign(response.authorization_url);
       }
-    } catch (error) {
+    } catch {
       popup?.close();
       oauthPopup.current = null;
-      notify(
-        "error",
-        "无法开始店铺授权",
-        error instanceof ApiError ? error.message : "请检查后端服务和 OAuth 配置。",
-      );
+      notify("error", "无法开始店铺授权", "授权服务暂不可用，请稍后重试。");
     }
   };
 
@@ -349,14 +345,14 @@ export default function App() {
     }
     if (dataMode === "demo") {
       setDemoStoreId(storeId);
-      notify("success", "已切换 Alibaba 店铺", "演示模式：新批次将绑定到该示例店铺。");
+      notify("success", "已切换 Alibaba 店铺", "新批次将使用该示例店铺。");
       return;
     }
     try {
       await activateAlibabaStore(storeId);
       setActiveStoreId(storeId);
       await refreshWorkspace();
-      notify("success", "已切换 Alibaba 店铺", "新批次与 API 请求将绑定到该店铺。");
+      notify("success", "已切换 Alibaba 店铺", "新批次将使用该店铺。");
     } catch (error) {
       notify("error", "无法切换店铺", error instanceof ApiError ? error.message : undefined);
     }
@@ -364,14 +360,40 @@ export default function App() {
 
   const syncStore = async (storeId: string) => {
     if (dataMode === "demo") {
-      notify("success", "店铺摘要已同步", "演示模式：未调用真实 Alibaba 接口。");
+      notify("success", "店铺摘要已同步", "当前为演示数据。");
       return;
     }
     setSettingsSyncing(true);
     try {
-      await syncAlibabaStore(storeId);
+      const syncedStore = await syncAlibabaStore(storeId);
+      const imported = Object.entries(syncedStore.template_defaults ?? {}).filter(
+        ([key, value]) =>
+          typeof value === "string" &&
+          value.trim() &&
+          typeof settings[key as keyof StoreSettings] === "string" &&
+          !(settings[key as keyof StoreSettings] as string).trim(),
+      ) as Array<[keyof StoreSettings, string]>;
+      if (imported.length) {
+        const nextSettings = { ...settings };
+        for (const [key, value] of imported) {
+          Object.assign(nextSettings, { [key]: value });
+        }
+        setSettings(nextSettings);
+        if (user) {
+          window.localStorage.setItem(
+            settingsStorageKey(user.workspace_id, storeId),
+            JSON.stringify(nextSettings),
+          );
+        }
+      }
       await refreshWorkspace();
-      notify("success", "店铺摘要已同步", "已回填可从店铺获取的通用模板字段。");
+      notify(
+        "success",
+        "店铺摘要已同步",
+        imported.length
+          ? `已自动填充 ${imported.length} 个模板字段。`
+          : "未找到可自动填充的模板字段。",
+      );
     } catch (error) {
       notify("error", "店铺摘要同步失败", error instanceof ApiError ? error.message : undefined);
     } finally {
@@ -408,7 +430,7 @@ export default function App() {
     notify(
       "info",
       mode === "demo" ? "已进入演示空间" : "已切回真实工作区",
-      mode === "demo" ? "演示操作不会调用真实 Alibaba 账户。" : "示例数据已隐藏。",
+      mode === "demo" ? "演示操作不会影响真实店铺。" : "示例数据已隐藏。",
     );
   };
 
