@@ -83,6 +83,7 @@ async def test_exchange_code_uses_gop_gateway_and_stores_multiple_merchants(
     body = captured[0].content.decode()
     assert "method=%2Fauth%2Ftoken%2Fcreate" in body
     assert "code=code-a" in body
+    assert "partner_id=iop-sdk-python-20250910" in body
 
     status = store.status(settings)
     assert status["user_id"] == "222"

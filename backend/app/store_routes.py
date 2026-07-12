@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Annotated
@@ -24,6 +25,7 @@ from backend.app.services.alibaba_oauth import (
 from backend.app.services.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/alibaba", tags=["alibaba-store-connections"])
+logger = logging.getLogger(__name__)
 
 
 def _extract_count(payload: object) -> int | None:
@@ -576,7 +578,8 @@ async def oauth_callback(
         store = await exchange_workspace_code(code, state, settings, database)
         if not store.expired:
             await _sync_store(database, settings, store)
-    except (AlibabaOAuthError, AlibabaAPIError):
+    except (AlibabaOAuthError, AlibabaAPIError) as exc:
+        logger.warning("Alibaba OAuth callback failed: %s", exc)
         return RedirectResponse(
             _callback_url(
                 settings.alibaba_oauth_error_url,

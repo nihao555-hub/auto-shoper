@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from backend.app.clients.alibaba import AlibabaClient
+from backend.app.clients.alibaba import IOP_SDK_PARTNER_ID, AlibabaClient
 from backend.app.config import Settings, get_settings
 from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
@@ -93,7 +93,7 @@ class AlibabaOAuthStore:
             "method": operation,
             "sign_method": "sha256",
             "simplify": "true",
-            "partner_id": "auto-shoper",
+            "partner_id": IOP_SDK_PARTNER_ID,
             "timestamp": str(int(time.time() * 1000)),
         }
         params.update({key: str(value) for key, value in extra.items()})

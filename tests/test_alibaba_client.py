@@ -37,7 +37,9 @@ async def test_call_serializes_json_and_does_not_send_secret() -> None:
             in body
         )
         assert "secret" not in body
-        assert request.headers["X-Protocol"] == "GOP"
+        assert "partner_id=iop-sdk-python-20250910" in body
+        assert "simplify=true" in body
+        assert "X-Protocol" not in request.headers
         return httpx.Response(200, json={"success": True, "result": {"draftId": "1"}})
 
     client = AlibabaClient(alibaba_settings(), httpx.MockTransport(handler))

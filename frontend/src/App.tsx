@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   activateAlibabaStore,
@@ -88,22 +88,7 @@ const formatTimestamp = () =>
 const createBatchId = () =>
   `B${new Date().toISOString().slice(2, 10).replaceAll("-", "")}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 
-type AlibabaOAuthMessage = {
-  type: "alibaba-oauth-result";
-  result: "connected" | "error";
-  reason: string | null;
-};
-
-const isAlibabaOAuthMessage = (value: unknown): value is AlibabaOAuthMessage => {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const message = value as Partial<AlibabaOAuthMessage>;
-  return (
-    message.type === "alibaba-oauth-result" &&
-    (message.result === "connected" || message.result === "error")
-  );
-};
+type AlibabaOAuthResult = "connected" | "error";
 
 const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord | null => {
   if (!products.length) {
@@ -163,8 +148,6 @@ export default function App() {
   const [activeStoreId, setActiveStoreId] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const oauthPopup = useRef<Window | null>(null);
-
   const [demoStoreId, setDemoStoreId] = useState<string>(demoActiveStoreId);
 
   const products = dataMode === "demo" ? demoProducts : liveProducts;
@@ -254,7 +237,7 @@ export default function App() {
   }, []);
 
   const handleAlibabaOAuthResult = useCallback(
-    (result: AlibabaOAuthMessage["result"], reason: string | null) => {
+    (result: AlibabaOAuthResult, reason: string | null) => {
       if (result === "connected") {
         notify("success", "Alibaba 店铺已连接", "已刷新商家授权状态。");
         refreshWorkspace();
@@ -270,19 +253,6 @@ export default function App() {
   );
 
   useEffect(() => {
-    const onMessage = (event: MessageEvent<unknown>) => {
-      if (event.origin !== window.location.origin || !isAlibabaOAuthMessage(event.data)) {
-        return;
-      }
-      oauthPopup.current?.close();
-      oauthPopup.current = null;
-      handleAlibabaOAuthResult(event.data.result, event.data.reason);
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [handleAlibabaOAuthResult]);
-
-  useEffect(() => {
     const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
     const oauthResult = params.get("alibaba");
     if (!oauthResult) {
@@ -290,16 +260,6 @@ export default function App() {
     }
     const result = oauthResult === "connected" ? "connected" : "error";
     const reason = params.get("reason");
-    if (window.opener && !window.opener.closed) {
-      const message: AlibabaOAuthMessage = {
-        type: "alibaba-oauth-result",
-        result,
-        reason,
-      };
-      window.opener.postMessage(message, window.location.origin);
-      window.close();
-      return;
-    }
     handleAlibabaOAuthResult(result, reason);
     window.history.replaceState(null, "", `${window.location.pathname}#/overview`);
   }, [handleAlibabaOAuthResult]);
@@ -318,23 +278,10 @@ export default function App() {
   };
 
   const authorizeAlibaba = async () => {
-    const popup = window.open(
-      "",
-      "auto-shoper-alibaba-oauth",
-      "popup=yes,width=560,height=720,menubar=no,toolbar=no,location=yes,status=no",
-    );
-    oauthPopup.current = popup;
     try {
       const response = await startAlibabaOAuth();
-      if (popup && !popup.closed) {
-        popup.location.replace(response.authorization_url);
-        popup.focus();
-      } else {
-        window.location.assign(response.authorization_url);
-      }
+      window.location.assign(response.authorization_url);
     } catch {
-      popup?.close();
-      oauthPopup.current = null;
       notify("error", "无法开始店铺授权", "授权服务暂不可用，请稍后重试。");
     }
   };

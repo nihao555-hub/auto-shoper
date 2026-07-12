@@ -8,6 +8,8 @@ import httpx
 
 from backend.app.config import Settings
 
+IOP_SDK_PARTNER_ID = "iop-sdk-python-20250910"
+
 
 class AlibabaConfigurationError(RuntimeError):
     pass
@@ -54,9 +56,11 @@ class AlibabaClient:
         url = self.settings.alibaba_api_base_url.rstrip("/")
         if self.settings.alibaba_append_operation_to_url:
             url += operation
-        headers = {"X-Protocol": "GOP"}
-        if not files:
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        headers = (
+            {}
+            if files
+            else {"Content-Type": "application/x-www-form-urlencoded"}
+        )
         response = await self.client.post(url, data=params, files=files, headers=headers)
         try:
             data = response.json()
@@ -85,7 +89,9 @@ class AlibabaClient:
             "format": "json",
             "method": operation,
             "access_token": self.settings.alibaba_access_token or "",
+            "partner_id": IOP_SDK_PARTNER_ID,
             "sign_method": "sha256",
+            "simplify": "true",
             "timestamp": str(int(time.time() * 1000)),
         }
 
