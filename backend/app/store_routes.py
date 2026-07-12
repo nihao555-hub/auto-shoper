@@ -5,7 +5,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.alibaba import AlibabaAPIError, AlibabaClient
@@ -462,6 +462,17 @@ def activate_store(
         store,
         database.get_merchant_assets(user.workspace_id, store.id),
     )
+
+
+@router.delete("/stores/{store_id}", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_store(
+    store_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> Response:
+    if not database.disconnect_store(user.workspace_id, store_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="店铺不存在")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/stores/{store_id}/sync")

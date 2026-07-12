@@ -100,6 +100,15 @@ export const syncAlibabaStore = async (storeId: string): Promise<AlibabaConnecte
     await apiFetch(`${API_ROOT}/alibaba/stores/${storeId}/sync`, { method: "POST" }),
   );
 
+export const disconnectAlibabaStore = async (storeId: string): Promise<void> => {
+  const response = await apiFetch(`${API_ROOT}/alibaba/stores/${encodeURIComponent(storeId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    await parseResponse(response);
+  }
+};
+
 export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }> =>
   parseResponse<{ authorization_url: string }>(
     await apiFetch(`${API_ROOT}/alibaba/oauth/authorize`, { method: "POST" }),

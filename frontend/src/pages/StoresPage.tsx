@@ -2,13 +2,15 @@ import {
   ArrowsClockwise,
   CheckCircle,
   Copy,
+  LinkBreak,
   MagnifyingGlass,
   Plus,
   ShieldWarning,
   Warning,
+  X,
   XCircle,
 } from "@phosphor-icons/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AlibabaConnectedStore, CapabilityResponse } from "../types";
 
 type StoresPageProps = {
@@ -18,6 +20,8 @@ type StoresPageProps = {
   onAuthorize: () => void;
   onSwitchStore: (storeId: string) => void;
   onSyncStore: (storeId: string) => void;
+  onDisconnectStore: (storeId: string) => Promise<boolean>;
+  disconnectEnabled: boolean;
 };
 
 type StatusFilter = "all" | "current" | "idle" | "expired";
@@ -64,10 +68,14 @@ export function StoresPage({
   onAuthorize,
   onSwitchStore,
   onSyncStore,
+  onDisconnectStore,
+  disconnectEnabled,
 }: StoresPageProps) {
   const authorizationEnabled = capabilities?.alibaba_oauth_configured === true;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [keyword, setKeyword] = useState("");
+  const [disconnectTarget, setDisconnectTarget] = useState<AlibabaConnectedStore | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const activeStore = stores.find((store) => store.id === activeStoreId) ?? null;
 
@@ -234,6 +242,8 @@ export function StoresPage({
                 onActivate={() => onSwitchStore(store.id)}
                 onSync={() => onSyncStore(store.id)}
                 onReauthorize={onAuthorize}
+                onDisconnect={() => setDisconnectTarget(store)}
+                disconnectEnabled={disconnectEnabled}
               />
             ))}
           </div>
@@ -245,6 +255,21 @@ export function StoresPage({
           </div>
         )}
       </section>
+      {disconnectTarget ? (
+        <DisconnectStoreDialog
+          store={disconnectTarget}
+          busy={disconnecting}
+          onClose={() => {
+            if (!disconnecting) setDisconnectTarget(null);
+          }}
+          onConfirm={async () => {
+            setDisconnecting(true);
+            const disconnected = await onDisconnectStore(disconnectTarget.id);
+            setDisconnecting(false);
+            if (disconnected) setDisconnectTarget(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -256,6 +281,8 @@ function StoreCard({
   onActivate,
   onSync,
   onReauthorize,
+  onDisconnect,
+  disconnectEnabled,
 }: {
   index: number;
   store: AlibabaConnectedStore;
@@ -263,6 +290,8 @@ function StoreCard({
   onActivate: () => void;
   onSync: () => void;
   onReauthorize: () => void;
+  onDisconnect: () => void;
+  disconnectEnabled: boolean;
 }) {
   const days = remainingDays(store.expires_at);
   const copyAccount = () => {
@@ -369,7 +398,81 @@ function StoreCard({
             </button>
           </>
         )}
+        <button
+          type="button"
+          className="ds-button-danger"
+          onClick={onDisconnect}
+          disabled={!disconnectEnabled}
+          title={disconnectEnabled ? undefined : "演示模式不会改动真实店铺"}
+        >
+          <LinkBreak size={14} />
+          解绑店铺
+        </button>
       </footer>
     </article>
+  );
+}
+
+function DisconnectStoreDialog({
+  store,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  store: AlibabaConnectedStore;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [busy, onClose]);
+
+  return (
+    <div className="modal-layer" role="presentation" onMouseDown={onClose}>
+      <section
+        className="st-disconnect-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="disconnect-store-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="st-dialog-close"
+          aria-label="关闭解绑确认"
+          onClick={onClose}
+          disabled={busy}
+        >
+          <X size={18} />
+        </button>
+        <div className="st-disconnect-icon">
+          <LinkBreak size={24} />
+        </div>
+        <h2 id="disconnect-store-title">确认解绑 {storeName(store)}？</h2>
+        <p>
+          这会从上品台移除该店铺的本地授权令牌和已同步商家资料，不会删除 Alibaba
+          店铺。再次使用时需要重新授权。
+        </p>
+        <div className="st-disconnect-actions">
+          <button type="button" className="ds-button-secondary" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="ds-button-danger-solid"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            <LinkBreak size={15} />
+            {busy ? "正在解绑…" : "确认解绑"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }

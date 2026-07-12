@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   activateAlibabaStore,
+  disconnectAlibabaStore,
   getAlibabaStores,
   getCapabilities,
   getCurrentUser,
@@ -348,6 +349,25 @@ export default function App() {
     }
   };
 
+  const disconnectStore = async (storeId: string): Promise<boolean> => {
+    if (dataMode === "demo") {
+      notify("info", "演示店铺不会被解绑", "请切换到真实工作区后再操作。");
+      return false;
+    }
+    try {
+      await disconnectAlibabaStore(storeId);
+      if (user) {
+        window.localStorage.removeItem(settingsStorageKey(user.workspace_id, storeId));
+      }
+      await refreshWorkspace();
+      notify("success", "店铺已解绑", "本地授权令牌已移除，可随时重新授权。");
+      return true;
+    } catch (error) {
+      notify("error", "无法解绑店铺", error instanceof ApiError ? error.message : undefined);
+      return false;
+    }
+  };
+
   const signOut = async () => {
     try {
       await logout();
@@ -439,6 +459,8 @@ export default function App() {
           onAuthorize={() => void authorizeAlibaba()}
           onSwitchStore={(storeId) => void switchStore(storeId)}
           onSyncStore={(storeId) => void syncStore(storeId)}
+          onDisconnectStore={disconnectStore}
+          disconnectEnabled={dataMode === "live"}
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
