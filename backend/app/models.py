@@ -64,6 +64,7 @@ class FieldInputMode(StrEnum):
 
 class DraftField(BaseModel):
     value: Any | None = None
+    display_value_zh: Any | None = None
     source: FieldSource
     confidence: float | None = Field(default=None, ge=0, le=1)
     requires_confirmation: bool = False

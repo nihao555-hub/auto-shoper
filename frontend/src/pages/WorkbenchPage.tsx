@@ -1224,22 +1224,33 @@ function AiStep({
                   <thead>
                     <tr>
                       <th>字段</th>
-                      <th>内容</th>
+                      <th>中文说明 / 发布内容</th>
                       <th>来源</th>
                       <th>状态</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <th scope="row">英文标题</th>
+                      <th scope="row">商品标题</th>
                       <td>
-                        <textarea
-                          rows={2}
-                          value={product.title}
-                          placeholder="等待 AI 生成"
-                          aria-label={`${product.reference} 英文标题`}
-                          onChange={(event) => onChange({ ...product, title: event.target.value })}
-                        />
+                        <div className="ai-field-bilingual">
+                          <AiLocalizedValue
+                            value={product.titleZh}
+                            emptyLabel="等待 AI 生成中文说明"
+                          />
+                          <label className="ai-field-publish">
+                            <span>发布英文</span>
+                            <textarea
+                              rows={2}
+                              value={product.title}
+                              placeholder="等待 AI 生成"
+                              aria-label={`${product.reference} 英文标题`}
+                              onChange={(event) =>
+                                onChange({ ...product, title: event.target.value })
+                              }
+                            />
+                          </label>
+                        </div>
                       </td>
                       <td>
                         <AiFieldSource label="AI 生成" />
@@ -1249,11 +1260,12 @@ function AiStep({
                     <tr>
                       <th scope="row">类目建议</th>
                       <td>
-                        <span
-                          className={product.facts.categoryLabel ? "ai-field-text" : "ai-empty"}
-                        >
-                          {product.facts.categoryLabel || "等待 AI 分析"}
-                        </span>
+                        <AiLocalizedPair
+                          localized={product.facts.categoryLabelZh}
+                          publication={product.facts.categoryLabel}
+                          publicationLabel="Alibaba 英文类目建议"
+                          emptyLabel="等待 AI 分析"
+                        />
                       </td>
                       <td>
                         <AiFieldSource label="AI 建议" />
@@ -1263,7 +1275,12 @@ function AiStep({
                     <tr>
                       <th scope="row">关键词</th>
                       <td>
-                        <AiFieldTags values={product.keywords} emptyLabel="等待 AI 生成" />
+                        <AiLocalizedTags
+                          localized={product.keywordsZh}
+                          publication={product.keywords}
+                          publicationLabel="发布英文"
+                          emptyLabel="等待 AI 生成"
+                        />
                       </td>
                       <td>
                         <AiFieldSource label="AI 生成" />
@@ -1273,7 +1290,12 @@ function AiStep({
                     <tr>
                       <th scope="row">核心卖点</th>
                       <td>
-                        <AiFieldList values={product.sellingPoints} emptyLabel="等待 AI 生成" />
+                        <AiLocalizedList
+                          localized={product.sellingPointsZh}
+                          publication={product.sellingPoints}
+                          publicationLabel="发布英文"
+                          emptyLabel="等待 AI 生成"
+                        />
                       </td>
                       <td>
                         <AiFieldSource label="AI 生成" />
@@ -1283,9 +1305,12 @@ function AiStep({
                     <tr>
                       <th scope="row">商品描述</th>
                       <td>
-                        <p className={product.description ? "ai-field-description" : "ai-empty"}>
-                          {product.description || "等待 AI 生成"}
-                        </p>
+                        <AiLocalizedPair
+                          localized={product.descriptionZh}
+                          publication={product.description}
+                          publicationLabel="发布英文"
+                          emptyLabel="等待 AI 生成"
+                        />
                       </td>
                       <td>
                         <AiFieldSource label="AI 生成" />
@@ -1295,7 +1320,12 @@ function AiStep({
                     <tr>
                       <th scope="row">图片可见属性</th>
                       <td>
-                        <AiFieldTags values={product.visibleTraits} emptyLabel="等待 AI 分析" />
+                        <AiLocalizedTags
+                          localized={product.visibleTraitsZh}
+                          publication={product.visibleTraits}
+                          publicationLabel="图片识别原文"
+                          emptyLabel="等待 AI 分析"
+                        />
                       </td>
                       <td>
                         <AiFieldSource label="图片识别" />
@@ -1347,6 +1377,89 @@ function AiFieldTags({ values, emptyLabel }: { values: string[]; emptyLabel: str
       {values.map((value) => (
         <i key={value}>{value}</i>
       ))}
+    </div>
+  );
+}
+
+function AiLocalizedValue({ value, emptyLabel }: { value?: string; emptyLabel: string }) {
+  return (
+    <div className="ai-field-localized">
+      <span>中文说明</span>
+      <p className={value ? "ai-field-description" : "ai-empty"}>{value || emptyLabel}</p>
+    </div>
+  );
+}
+
+function AiLocalizedPair({
+  localized,
+  publication,
+  publicationLabel,
+  emptyLabel,
+}: {
+  localized?: string;
+  publication: string;
+  publicationLabel: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="ai-field-bilingual">
+      <AiLocalizedValue value={localized} emptyLabel={emptyLabel} />
+      <div className="ai-field-publication">
+        <span>{publicationLabel}</span>
+        <p className={publication ? "ai-field-description" : "ai-empty"}>
+          {publication || emptyLabel}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AiLocalizedTags({
+  localized = [],
+  publication,
+  publicationLabel,
+  emptyLabel,
+}: {
+  localized?: string[];
+  publication: string[];
+  publicationLabel: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="ai-field-bilingual">
+      <div className="ai-field-localized">
+        <span>中文说明</span>
+        <AiFieldTags values={localized} emptyLabel={emptyLabel} />
+      </div>
+      <div className="ai-field-publication">
+        <span>{publicationLabel}</span>
+        <AiFieldTags values={publication} emptyLabel={emptyLabel} />
+      </div>
+    </div>
+  );
+}
+
+function AiLocalizedList({
+  localized = [],
+  publication,
+  publicationLabel,
+  emptyLabel,
+}: {
+  localized?: string[];
+  publication: string[];
+  publicationLabel: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="ai-field-bilingual">
+      <div className="ai-field-localized">
+        <span>中文说明</span>
+        <AiFieldList values={localized} emptyLabel={emptyLabel} />
+      </div>
+      <div className="ai-field-publication">
+        <span>{publicationLabel}</span>
+        <AiFieldList values={publication} emptyLabel={emptyLabel} />
+      </div>
     </div>
   );
 }
@@ -2393,19 +2506,37 @@ function applyAnalysis(product: ProductRecord, response: ImageAnalysisResponse):
   const generated = response.generated_fields;
   const observed = response.observed_fields;
   const title = getFieldString(generated, ["title", "subject", "english_title"]) || product.title;
+  const titleZh =
+    getFieldDisplayString(generated, ["title", "subject", "english_title"]) || product.titleZh;
   const description =
     getFieldString(generated, ["description", "detail", "product_description"]) ||
     product.description;
+  const descriptionZh =
+    getFieldDisplayString(generated, ["description", "detail", "product_description"]) ||
+    product.descriptionZh;
   const keywords = getFieldList(generated, ["keywords", "keyword"]) || product.keywords;
+  const keywordsZh = getFieldDisplayList(generated, ["keywords", "keyword"]) || product.keywordsZh;
   const sellingPoints =
     getFieldList(generated, ["selling_points", "sellingPoints", "highlights"]) ||
     product.sellingPoints;
+  const sellingPointsZh =
+    getFieldDisplayList(generated, ["selling_points", "sellingPoints", "highlights"]) ||
+    product.sellingPointsZh;
   const visibleTraits = Object.values(observed)
     .map((field) => normalizeFieldValue(field))
     .flatMap((value) => (Array.isArray(value) ? value.map(String) : [String(value)]))
     .filter(Boolean)
     .slice(0, 5);
+  const translatedVisibleTraits = Object.values(observed)
+    .map((field) => normalizeDisplayValue(field))
+    .flatMap((value) => (Array.isArray(value) ? value.map(String) : [String(value)]))
+    .filter(Boolean)
+    .slice(0, 5);
+  const visibleTraitsZh = translatedVisibleTraits.length
+    ? translatedVisibleTraits
+    : product.visibleTraitsZh;
   const category = normalizeFieldValue(response.category_suggestions[0]);
+  const categoryZh = normalizeDisplayValue(response.category_suggestions[0]);
   const categoryLabel =
     typeof category === "string"
       ? category
@@ -2420,19 +2551,35 @@ function applyAnalysis(product: ProductRecord, response: ImageAnalysisResponse):
   return {
     ...product,
     title,
+    titleZh,
     description,
+    descriptionZh,
     keywords,
+    keywordsZh,
     sellingPoints,
+    sellingPointsZh,
     visibleTraits,
+    visibleTraitsZh,
     aiConfirmed: false,
     stage: "ai_ready",
     facts: {
       ...product.facts,
       categoryId,
       categoryLabel,
+      categoryLabelZh: typeof categoryZh === "string" ? categoryZh : product.facts.categoryLabelZh,
     },
     errors: [...response.warnings, "AI 内容尚未确认"],
   };
+}
+
+function getFieldDisplayString(fields: Record<string, DraftField>, keys: string[]): string {
+  for (const key of keys) {
+    const value = normalizeDisplayValue(fields[key]);
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return "";
 }
 
 function getFieldString(fields: Record<string, DraftField>, keys: string[]): string {
@@ -2444,6 +2591,22 @@ function getFieldString(fields: Record<string, DraftField>, keys: string[]): str
     }
   }
   return "";
+}
+
+function getFieldDisplayList(fields: Record<string, DraftField>, keys: string[]): string[] | null {
+  for (const key of keys) {
+    const value = normalizeDisplayValue(fields[key]);
+    if (Array.isArray(value)) {
+      return value.map(String).filter(Boolean);
+    }
+    if (typeof value === "string" && value) {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+  return null;
 }
 
 function getFieldList(fields: Record<string, DraftField>, keys: string[]): string[] | null {
@@ -2461,6 +2624,10 @@ function getFieldList(fields: Record<string, DraftField>, keys: string[]): strin
     }
   }
   return null;
+}
+
+function normalizeDisplayValue(field?: DraftField): unknown {
+  return field?.display_value_zh;
 }
 
 function normalizeFieldValue(field?: DraftField): unknown {

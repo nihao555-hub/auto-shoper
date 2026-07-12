@@ -40,6 +40,7 @@ export type ProductStage =
 
 export type DraftField = {
   value: unknown;
+  display_value_zh?: unknown;
   source: FieldSource;
   confidence?: number;
   requires_confirmation?: boolean;
@@ -49,6 +50,7 @@ export type DraftField = {
 export type ProductFacts = {
   categoryId: string;
   categoryLabel: string;
+  categoryLabelZh?: string;
   brand: string;
   model: string;
   material: string;
@@ -84,10 +86,15 @@ export type ProductRecord = {
   images: ProductImage[];
   mainImageId: string;
   title: string;
+  titleZh?: string;
   keywords: string[];
+  keywordsZh?: string[];
   sellingPoints: string[];
+  sellingPointsZh?: string[];
   description: string;
+  descriptionZh?: string;
   visibleTraits: string[];
+  visibleTraitsZh?: string[];
   aiConfirmed: boolean;
   stage: ProductStage;
   facts: ProductFacts;

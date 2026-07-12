@@ -16,6 +16,7 @@ class AIProviderError(RuntimeError):
 
 class _ProviderField(BaseModel):
     value: str | list[str]
+    display_value_zh: str | list[str] | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     evidence: str | None = None
 
@@ -73,11 +74,18 @@ class AIClient:
             "Never infer price, material, dimensions, weight, certification, origin, stock, "
             "lead time, MOQ, SKU, production capacity, or logistics. If text or a visual fact "
             "is unclear, omit it. Generated copy must only use visible or supplied facts. "
+            "Keep publication-ready generated values and category suggestions in English. For "
+            "every observed field, generated field, and category suggestion, also return a clear "
+            "Simplified Chinese seller-facing translation in display_value_zh. "
             "Use this shape: {"
-            '"observed_fields":{"color":{"value":"...","confidence":0.0,"evidence":"..."}},'
-            '"generated_fields":{"title":{"value":"..."},"keywords":{"value":["..."]},'
-            '"selling_points":{"value":["..."]},"description":{"value":"..."}},'
-            '"category_suggestions":[{"value":"...","confidence":0.0,"evidence":"..."}],'
+            '"observed_fields":{"color":{"value":"...","display_value_zh":"...",'
+            '"confidence":0.0,"evidence":"..."}},'
+            '"generated_fields":{"title":{"value":"...","display_value_zh":"..."},'
+            '"keywords":{"value":["..."],"display_value_zh":["..."]},'
+            '"selling_points":{"value":["..."],"display_value_zh":["..."]},'
+            '"description":{"value":"...","display_value_zh":"..."}},'
+            '"category_suggestions":[{"value":"...","display_value_zh":"...",'
+            '"confidence":0.0,"evidence":"..."}],'
             '"warnings":["..."]}. Return no more than three keywords. '
             f"Known facts: {facts}. Category hint: {category_hint or 'none'}."
         )
@@ -130,6 +138,7 @@ class AIClient:
         observed = {
             name: DraftField(
                 value=item.value,
+                display_value_zh=item.display_value_zh,
                 source=FieldSource.IMAGE_EXTRACTED,
                 confidence=item.confidence,
                 requires_confirmation=True,
@@ -141,6 +150,7 @@ class AIClient:
         generated = {
             name: DraftField(
                 value=item.value,
+                display_value_zh=item.display_value_zh,
                 source=FieldSource.AI_GENERATED,
                 requires_confirmation=True,
             )
@@ -150,6 +160,7 @@ class AIClient:
         suggestions = [
             DraftField(
                 value=item.value,
+                display_value_zh=item.display_value_zh,
                 source=FieldSource.AI_GENERATED,
                 confidence=item.confidence,
                 requires_confirmation=True,

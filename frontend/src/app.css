@@ -2436,6 +2436,31 @@ table {
   outline: 2px solid var(--brand-soft);
 }
 
+.ai-field-bilingual {
+  display: grid;
+  gap: 9px;
+}
+
+.ai-field-localized,
+.ai-field-publication,
+.ai-field-publish {
+  display: grid;
+  gap: 5px;
+}
+
+.ai-field-localized > span,
+.ai-field-publication > span,
+.ai-field-publish > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ai-field-localized {
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
 .ai-field-text,
 .ai-field-description {
   color: var(--ink);
