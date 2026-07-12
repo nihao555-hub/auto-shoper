@@ -119,7 +119,7 @@ def test_authorization_url_uses_icbu_server_flow() -> None:
 
     assert (
         f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == "https://openapi-auth.alibaba.com/oauth/authorize"
+        == "https://oauth.alibaba.com/authorize"
     )
     assert query["client_id"] == ["app-key"]
     assert query["redirect_uri"] == [
