@@ -1,0 +1,21 @@
+Using the supplied “上品台” design-system board as the strict visual reference, create the authenticated desktop “批量上品” workbench at 1536 × 1024.
+
+Layout:
+- Same left navigation with “批量上品” active.
+- Persistent top context: selected Alibaba store, batch ID, data mode, backend status.
+- Five-step restrained stepper: 1 上传图片, 2 确认 AI 候选, 3 补齐事实, 4 创建草稿, 5 回读发布. Step 3 is active.
+- Main area 68%: dense product table with image, product title, category, SKU, price, MOQ, source state, validation state. One selected row and one inline error row.
+- Right inspector 32%: selected product fields grouped into 基础信息, SKU 与价格, 包装物流, 合规资料. Labels above inputs, source labels beside field labels, no nested cards.
+- Bottom fixed action bar: real counts for 已确认, 缺失事实, 可建草稿, and primary “校验并继续”.
+- Use realistic content for paint brush products, not generic placeholders.
+- Show AI content only as a muted violet source label; orange remains reserved for current step and primary action.
+
+Add an annotation lane with Chinese callouts:
+1. “前端：AI 候选确认后必须改写来源为 user_confirmed”
+2. “设计：商品行不是卡片，使用连续表格”
+3. “前端：价格、库存、SKU、尺寸、认证禁止 AI 猜测”
+4. “设计：检查器分组靠分隔线，不嵌套卡片”
+5. “前端：单条失败不阻塞整批”
+6. “前端：底栏统计与主操作始终可见”
+
+All Chinese must be legible and correctly spelled.

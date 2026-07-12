@@ -1,0 +1,21 @@
+Using the supplied “上品台” design-system board as the strict visual reference, create the authenticated desktop “运营总览” page at 1536 × 1024.
+
+Product frame:
+- 216px restrained left navigation: 总览, 批量上品, 批次记录, 店铺授权; 店铺授权 is a first-class item. Bottom area has 商家资产 and the signed-in customer.
+- Main canvas uses a wide editorial header, not a card.
+- Header: “上品运营总览”, short explanatory sentence, one action “新建上品批次”.
+- A slim store-context bar shows the current Alibaba store and an explicit “切换店铺” text action.
+- Three flat metrics separated by vertical hairlines: 当前批次, 可用草稿, 需要处理.
+- Main left area: current batch progress as a large number, horizontal progress rule, and three stage rows.
+- Main right area: “开始下一步” checklist with 店铺授权, 选择图片分组, 补齐商品事实, 创建草稿.
+- Bottom: recent batches as a compact list/table, not cards.
+- Use realistic uneven data such as 18 products, 11 drafts, 2 blocked.
+
+Add a 180px annotation lane on the right with Chinese callouts:
+1. “前端：店铺上下文固定显示，避免误发”
+2. “设计：指标用分隔线，不做三张卡片”
+3. “前端：空状态与真实状态共用同一网格”
+4. “设计：信息层级靠字号与留白，不靠阴影”
+5. “前端：所有进度从真实批次状态计算”
+
+All Chinese must be legible and correctly spelled.

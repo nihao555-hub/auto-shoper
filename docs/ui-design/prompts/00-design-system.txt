@@ -1,0 +1,15 @@
+Create a landscape UI design system board for 上品台, a Chinese B2B merchant operations product for Alibaba store authorization and batch product publishing.
+
+Style: calm editorial utilitarian minimalism. Warm bone background, white surfaces, charcoal text, fine warm gray borders, and Alibaba orange used only for active navigation and primary actions. Use geometric sans typography, tabular numerals, a four pixel spacing grid, crisp small radii, and almost no shadows. No gradients, glass effects, neon, oversized cards, decorative charts, floating shapes, or excessive pills.
+
+Show a component library with color tokens, typography scale, spacing scale, dark and orange buttons, form states, a 216 pixel navigation rail, a dense table with 64 pixel rows, status labels, store authorization summary, five stage batch stepper, empty state, warning, toast, drawer, dialog, and responsive notes.
+
+Add these legible Chinese annotations:
+前端 所有状态色由语义 Token 驱动
+设计 只在关键动作使用橙色
+前端 表格行高 64 数字启用 tabular nums
+设计 容器圆角不超过 10px
+前端 焦点环不可移除
+设计 避免嵌套卡片与装饰性阴影
+
+This is the canonical visual reference for all later page mockups.

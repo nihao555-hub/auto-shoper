@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-shoper"
+version = "0.1.0"
+description = "Backend services for Alibaba.com listing automation and AI image generation"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography==44.0.3",
+    "fastapi==0.115.12",
+    "httpx==0.28.1",
+    "pydantic-settings==2.8.1",
+    "PyMySQL==1.2.0",
+    "python-multipart==0.0.20",
+    "uvicorn[standard]==0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy==1.15.0",
+    "pytest==8.3.5",
+    "pytest-asyncio==0.25.3",
+    "respx==0.22.0",
+    "ruff==0.11.0",
+    "types-PyMySQL==1.1.0.20260518",
+]
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["backend"]

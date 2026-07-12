@@ -1,0 +1,32 @@
+Using the supplied “上品台” design-system board as the strict visual reference, create the authenticated desktop “店铺授权” page at 1536 × 1024.
+
+This is the most important page in this round.
+
+Layout:
+- Same 216px left navigation with “店铺授权” active.
+- Header: title “店铺授权”, explanation that each customer workspace can connect and switch multiple Alibaba stores, and one orange action “添加 Alibaba 店铺”.
+- Under the header, a plain security note: OAuth official popup, encrypted token storage, workspace isolation.
+- Main content is a dense store directory, not oversized cards.
+- Top active-store summary row includes account identity, “当前店铺”, token expiry, last synchronization, and draft readiness.
+- Below, a two-column directory of connected stores. Each store panel must show:
+  account/login identifier,
+  authorization expiry,
+  permission health with verified count,
+  product count and sync status,
+  Photo Bank group count and sync status,
+  product-group availability,
+  last sync time,
+  “可创建草稿 / 待验证 / 已阻塞”,
+  actions “同步摘要”, “切换到此店”, or “重新授权”.
+- Show one healthy active store, one healthy inactive store, and one expired store.
+- Clearly communicate that switching the active store does not rebind existing batches.
+
+Add a 180px annotation lane on the right with Chinese callouts:
+1. “前端：每次 OAuth state 绑定 user + workspace，且一次性使用”
+2. “前端：Token 只在后端加密存储，响应不可返回”
+3. “设计：健康度、同步、草稿就绪分三层表达”
+4. “前端：切店后刷新所有店铺级查询”
+5. “设计：过期店铺弱化，不用整卡大红”
+6. “前端：批次始终锁定创建时的 store_connection_id”
+
+All Chinese must be legible and correctly spelled.
