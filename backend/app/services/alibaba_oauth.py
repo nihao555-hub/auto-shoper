@@ -33,9 +33,9 @@ def _authorization_query(settings: Settings, state: str) -> str:
         "client_id": settings.alibaba_app_key,
         "redirect_uri": settings.alibaba_oauth_redirect_uri,
         "state": state,
-        "sp": "icbu",
     }
     if authorize_host == LEGACY_AUTH_HOST:
+        params["sp"] = "icbu"
         params["view"] = "web"
     return urlencode(params)
 
