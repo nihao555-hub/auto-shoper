@@ -3119,7 +3119,7 @@ function PreviewStep({
 
   const exportResults = () => {
     const header = ["商品ID", "货号", "标题", "店铺", "状态", "错误信息"];
-    const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const escapeCsvValue = (value: string) => `"${value.replaceAll('"', '""')}"`;
     const lines = rows.map((product) =>
       [
         product.draftProductId ?? "",
@@ -3135,12 +3135,15 @@ function PreviewStep({
               : "草稿待发布",
         product.errors.join("；"),
       ]
-        .map(escape)
+        .map(escapeCsvValue)
         .join(","),
     );
-    const blob = new Blob([`\uFEFF${[header.map(escape).join(","), ...lines].join("\n")}`], {
-      type: "text/csv;charset=utf-8",
-    });
+    const blob = new Blob(
+      [`\uFEFF${[header.map(escapeCsvValue).join(","), ...lines].join("\n")}`],
+      {
+        type: "text/csv;charset=utf-8",
+      },
+    );
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
