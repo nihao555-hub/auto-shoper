@@ -346,6 +346,16 @@ export function WorkbenchPage({
       replaceProduct(product.id, (current) =>
         applyAnalysis(schemaData ? { ...current, schemaData } : current, response),
       );
+      const scenario = getFieldString(response.generated_fields, [
+        "use_scenario",
+        "useScenario",
+        "usage_scenario",
+      ]);
+      if (scenario) {
+        setProvidedImageInputs((current) =>
+          current.use_scenario?.trim() ? current : { ...current, use_scenario: scenario },
+        );
+      }
       return { success: true as const };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 分析失败";
@@ -739,6 +749,50 @@ export function WorkbenchPage({
     );
   };
 
+  const bulkFillFacts = (
+    values: Partial<Pick<ProductRecord["facts"], "price" | "moq" | "stock" | "grossWeight">>,
+  ) => {
+    const entries = Object.entries(values).filter(([, value]) => String(value ?? "").trim());
+    if (!entries.length) {
+      notify("warning", "请先填写要批量套用的值");
+      return;
+    }
+    const targetIds = new Set(
+      (selected.size ? products.filter((product) => selected.has(product.id)) : products).map(
+        (product) => product.id,
+      ),
+    );
+    let filled = 0;
+    onProductsChange(
+      products.map((product) => {
+        if (!targetIds.has(product.id)) {
+          return product;
+        }
+        const facts = { ...product.facts };
+        let changed = false;
+        for (const [key, value] of entries) {
+          const factKey = key as keyof ProductRecord["facts"];
+          if (!String(facts[factKey] ?? "").trim()) {
+            (facts as Record<string, unknown>)[factKey] = String(value).trim();
+            changed = true;
+          }
+        }
+        if (!changed) {
+          return product;
+        }
+        filled += 1;
+        const next = { ...product, facts };
+        const errors = getProductErrors(next);
+        return { ...next, errors, stage: errors.length ? next.stage : "ready" };
+      }),
+    );
+    notify(
+      filled ? "success" : "info",
+      filled ? `已批量填充 ${filled} 个商品的空缺字段` : "没有需要填充的空缺字段",
+      "只填充空缺项，不覆盖已填写的值；请逐个核对后再创建草稿。",
+    );
+  };
+
   const toggleSelected = (id: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -914,6 +968,8 @@ export function WorkbenchPage({
                 setInspectorOpen(true);
               }}
               onOpenSettings={onOpenSettings}
+              onBulkFill={bulkFillFacts}
+              selectedCount={selected.size}
             />
           ) : null}
 
@@ -1528,6 +1584,8 @@ function FactsStep({
   onToggleAll,
   onOpenProduct,
   onOpenSettings,
+  onBulkFill,
+  selectedCount,
 }: {
   products: ProductRecord[];
   allProducts: ProductRecord[];
@@ -1539,9 +1597,19 @@ function FactsStep({
   onToggleAll: () => void;
   onOpenProduct: (id: string) => void;
   onOpenSettings: () => void;
+  onBulkFill: (
+    values: Partial<Pick<ProductRecord["facts"], "price" | "moq" | "stock" | "grossWeight">>,
+  ) => void;
+  selectedCount: number;
 }) {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [checkFilter, setCheckFilter] = useState<CheckFilter>("all");
+  const [bulkValues, setBulkValues] = useState({
+    price: "",
+    moq: "",
+    stock: "",
+    grossWeight: "",
+  });
   const visibleProducts = products.filter((product) => {
     if (sourceFilter !== "all") {
       const source = product.aiConfirmed ? "user_confirmed" : "ai_candidate";
@@ -1598,6 +1666,49 @@ function FactsStep({
           aria-label="批量默认配置"
         >
           <GearSix size={17} />
+        </button>
+      </div>
+
+      <div className="wb-bulk-fill">
+        <strong>批量填充交易信息</strong>
+        <small>
+          {selectedCount ? `套用到选中的 ${selectedCount} 个商品` : "未勾选时套用到全部商品"}
+          ，只填空缺、不覆盖已填写的值
+        </small>
+        <label>
+          <span>价格（USD）</span>
+          <input
+            value={bulkValues.price}
+            onChange={(event) => setBulkValues({ ...bulkValues, price: event.target.value })}
+            placeholder="如 2.35"
+          />
+        </label>
+        <label>
+          <span>MOQ</span>
+          <input
+            value={bulkValues.moq}
+            onChange={(event) => setBulkValues({ ...bulkValues, moq: event.target.value })}
+            placeholder="如 500"
+          />
+        </label>
+        <label>
+          <span>库存</span>
+          <input
+            value={bulkValues.stock}
+            onChange={(event) => setBulkValues({ ...bulkValues, stock: event.target.value })}
+            placeholder="如 10000"
+          />
+        </label>
+        <label>
+          <span>包装毛重（kg）</span>
+          <input
+            value={bulkValues.grossWeight}
+            onChange={(event) => setBulkValues({ ...bulkValues, grossWeight: event.target.value })}
+            placeholder="如 12.5"
+          />
+        </label>
+        <button type="button" className="button button-dark" onClick={() => onBulkFill(bulkValues)}>
+          批量填充空缺
         </button>
       </div>
 

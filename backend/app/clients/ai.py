@@ -83,10 +83,14 @@ class AIClient:
             '"generated_fields":{"title":{"value":"...","display_value_zh":"..."},'
             '"keywords":{"value":["..."],"display_value_zh":["..."]},'
             '"selling_points":{"value":["..."],"display_value_zh":["..."]},'
-            '"description":{"value":"...","display_value_zh":"..."}},'
+            '"description":{"value":"...","display_value_zh":"..."},'
+            '"use_scenario":{"value":"...","display_value_zh":"..."}},'
             '"category_suggestions":[{"value":"...","display_value_zh":"...",'
             '"confidence":0.0,"evidence":"..."}],'
             '"warnings":["..."]}. Return no more than three keywords. '
+            "use_scenario must describe one realistic buyer use scenario in a short English "
+            "phrase grounded only in the visible product type, without inventing performance "
+            "or commercial claims. "
             f"Known facts: {facts}. Category hint: {category_hint or 'none'}."
         )
         if field_guidance:
