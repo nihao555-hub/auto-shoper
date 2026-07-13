@@ -302,7 +302,8 @@ export function WorkbenchPage({
   );
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
-    (product) => product.stage === "drafted",
+    (product) =>
+      product.stage === "drafted" || (product.stage === "error" && Boolean(product.draftProductId)),
   );
   const completedSteps = [
     products.length > 0,
@@ -724,8 +725,8 @@ export function WorkbenchPage({
     }
   };
 
-  const createDrafts = async () => {
-    const targets = getActionProducts(products, selected).filter(
+  const createDrafts = async (targetSelection = selected) => {
+    const targets = getActionProducts(products, targetSelection).filter(
       (product) => getProductErrors(product).length === 0,
     );
     if (!targets.length) {
@@ -843,7 +844,9 @@ export function WorkbenchPage({
 
   const confirmPublish = async () => {
     const targets = getActionProducts(products, selected).filter(
-      (product) => product.stage === "drafted",
+      (product) =>
+        product.stage === "drafted" ||
+        (product.stage === "error" && Boolean(product.draftProductId)),
     );
     if (!publishConfirmed || !targets.length) {
       return;
@@ -879,6 +882,9 @@ export function WorkbenchPage({
             ...product,
             stage: result.success ? "published" : "error",
             errors: result.success ? [] : [result.error ?? "正式发布失败"],
+            draftProductId:
+              (result.success ? getProductId(result.response) : undefined) ??
+              product.draftProductId,
           };
         }),
       );
@@ -1181,7 +1187,12 @@ export function WorkbenchPage({
               }}
               onRetry={(id) => {
                 setSelected(new Set([id]));
-                void createDrafts();
+                const product = products.find((item) => item.id === id);
+                if (product?.draftProductId) {
+                  setPublishDialogOpen(true);
+                } else {
+                  void createDrafts(new Set([id]));
+                }
               }}
               onFix={(id) => {
                 setActiveProductId(id);
