@@ -120,7 +120,7 @@ def test_new_platform_authorization_url_uses_canonical_seller_flow() -> None:
 
     assert (
         f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == "https://openapi-api.alibaba.com/oauth/authorize"
+        == "https://openapi-auth.alibaba.com/oauth/authorize"
     )
     assert query["client_id"] == ["app-key"]
     assert query["redirect_uri"] == [
