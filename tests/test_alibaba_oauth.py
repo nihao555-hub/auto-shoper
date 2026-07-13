@@ -129,7 +129,7 @@ def test_new_platform_authorization_url_uses_canonical_seller_flow() -> None:
     assert query["response_type"] == ["code"]
     assert query["state"][0]
     assert query["sp"] == ["icbu"]
-    assert query["force_auth"] == ["true"]
+    assert "force_auth" not in query
     assert "view" not in query
     assert "force_login" not in query
 
@@ -174,7 +174,7 @@ def test_workspace_authorization_url_uses_one_time_state_without_force_login(
     query = parse_qs(urlparse(url).query)
 
     assert "force_login" not in query
-    assert query["force_auth"] == ["true"]
+    assert "force_auth" not in query
     assert query["sp"] == ["icbu"]
     assert "view" not in query
     assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)

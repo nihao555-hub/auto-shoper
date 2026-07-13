@@ -18,11 +18,6 @@ from backend.app.database import AuthenticatedUser, Database, StoreConnection
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
 LEGACY_AUTH_HOST = "oauth.alibaba.com"
-GOP_AUTH_HOSTS = {
-    "open-api.alibaba.com",
-    "openapi-api.alibaba.com",
-    "openapi-auth.alibaba.com",
-}
 
 
 class AlibabaOAuthError(RuntimeError):
@@ -42,8 +37,6 @@ def _authorization_query(settings: Settings, state: str) -> str:
     }
     if authorize_host == LEGACY_AUTH_HOST:
         params["view"] = "web"
-    elif authorize_host in GOP_AUTH_HOSTS:
-        params["force_auth"] = "true"
     return urlencode(params)
 
 
