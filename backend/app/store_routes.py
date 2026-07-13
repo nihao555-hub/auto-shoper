@@ -23,6 +23,7 @@ from backend.app.services.alibaba_oauth import (
     exchange_workspace_code,
 )
 from backend.app.services.auth import get_current_user
+from backend.app.services.oauth_diagnostics import mask, recent_events, record_event
 
 router = APIRouter(prefix="/api/v1/alibaba", tags=["alibaba-store-connections"])
 logger = logging.getLogger(__name__)
@@ -540,10 +541,17 @@ def oauth_authorize(
     try:
         authorization_url = create_workspace_authorization_url(settings, database, user)
     except AlibabaOAuthError as exc:
+        record_event("authorize_failed", workspace_id=user.workspace_id, error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    record_event(
+        "authorize_url_created",
+        workspace_id=user.workspace_id,
+        authorization_url=authorization_url,
+    )
+    logger.info("Alibaba OAuth authorize URL created for workspace %s", user.workspace_id)
     return {"authorization_url": authorization_url}
 
 
@@ -560,6 +568,13 @@ def _callback_url(base: str, *, result: str, reason: str | None = None) -> str:
     return f"{base}{separator}{urlencode(values)}"
 
 
+@router.get("/oauth/debug")
+def oauth_debug(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> dict[str, object]:
+    return {"events": recent_events()}
+
+
 @router.get("/oauth/callback")
 async def oauth_callback(
     settings: Annotated[Settings, Depends(get_settings)],
@@ -567,6 +582,18 @@ async def oauth_callback(
     state: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
+    record_event(
+        "callback_received",
+        code=mask(code),
+        state=mask(state, keep=12),
+        error=error,
+    )
+    logger.info(
+        "Alibaba OAuth callback received: code=%s state=%s error=%s",
+        mask(code),
+        mask(state, keep=12),
+        error,
+    )
     if error:
         reason = (
             "denied"
@@ -591,6 +618,7 @@ async def oauth_callback(
             await _sync_store(database, settings, store)
     except (AlibabaOAuthError, AlibabaAPIError) as exc:
         logger.warning("Alibaba OAuth callback failed: %s", exc)
+        record_event("token_exchange_failed", error=str(exc))
         return RedirectResponse(
             _callback_url(
                 settings.alibaba_oauth_error_url,
@@ -598,4 +626,10 @@ async def oauth_callback(
                 reason="token_exchange_failed",
             )
         )
+    record_event(
+        "store_connected",
+        store_id=store.id,
+        provider_user_id=store.provider_user_id,
+        account=store.account,
+    )
     return RedirectResponse(_callback_url(settings.alibaba_oauth_success_url, result="connected"))
