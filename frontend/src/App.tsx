@@ -453,6 +453,12 @@ export default function App() {
     );
   };
 
+  const resetDemo = () => {
+    setDemoProducts(cloneDemoProducts());
+    setBatchId(createBatchId());
+    notify("info", "演示流程已重置", "已回到第 1 步，不会写入真实 Alibaba 店铺。");
+  };
+
   const updateProducts = (nextProducts: ProductRecord[]) => {
     if (dataMode === "demo" && nextProducts.some((product) => !product.isDemo)) {
       setLiveProducts(nextProducts.filter((product) => !product.isDemo));
@@ -526,6 +532,7 @@ export default function App() {
           settings={settings}
           onProductsChange={updateProducts}
           onDataModeChange={changeDataMode}
+          onResetDemo={resetDemo}
           onOpenSettings={() => setSettingsOpen(true)}
           notify={notify}
         />

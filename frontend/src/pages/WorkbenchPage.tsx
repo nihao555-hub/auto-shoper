@@ -1,4 +1,5 @@
 import {
+  ArrowCounterClockwise,
   ArrowRight,
   Bell,
   CaretLeft,
@@ -78,6 +79,7 @@ type WorkbenchPageProps = {
   settings: StoreSettings;
   onProductsChange: (products: ProductRecord[]) => void;
   onDataModeChange: (mode: DataMode) => void;
+  onResetDemo: () => void;
   onOpenSettings: () => void;
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
@@ -152,24 +154,16 @@ export function WorkbenchPage({
   settings,
   onProductsChange,
   onDataModeChange,
+  onResetDemo,
   onOpenSettings,
   notify,
 }: WorkbenchPageProps) {
-  const initialStep = (() => {
-    if (products.length === 0) {
-      return 0;
-    }
-    if (dataMode === "demo") {
-      return 1;
-    }
-    return products.some((product) => !product.aiConfirmed) ? 1 : 2;
-  })();
-  const [step, setStep] = useState(initialStep);
-  const [maxUnlockedStep, setMaxUnlockedStep] = useState(initialStep);
+  const [step, setStep] = useState(0);
+  const [maxUnlockedStep, setMaxUnlockedStep] = useState(0);
   const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(() =>
-    products[0] ? new Set([products[0].id]) : new Set(),
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(products.map((product) => product.id)),
   );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -335,20 +329,42 @@ export function WorkbenchPage({
     (product) =>
       product.stage === "drafted" || (product.stage === "error" && Boolean(product.draftProductId)),
   );
-  const selectedProducts = getActionProducts(products, selected);
-  const selectedProductsReady =
-    selectedProducts.length > 0 &&
-    selectedProducts.every(
-      (product) => product.aiConfirmed && getProductErrors(product).length === 0,
+  const analysisComplete =
+    products.length > 0 &&
+    products.every(
+      (product) =>
+        product.stage !== "uploaded" &&
+        product.stage !== "analyzing" &&
+        Boolean(product.title.trim() || product.aiConfirmed),
     );
+  const aiReviewComplete = analysisComplete && products.every((product) => product.aiConfirmed);
+  const allProductsReady =
+    aiReviewComplete && products.every((product) => getProductErrors(product).length === 0);
   const completedSteps = [
-    products.length > 0,
-    products.length > 0 && products.every((product) => product.aiConfirmed),
-    selectedProductsReady,
+    analysisComplete,
+    aiReviewComplete,
+    allProductsReady,
     draftedProducts.length > 0,
     publishedProducts.length > 0,
   ];
-  const unlockedSteps = stepLabels.map((_, index) => index <= maxUnlockedStep);
+  const unlockedSteps = [
+    true,
+    maxUnlockedStep >= 1 && analysisComplete,
+    maxUnlockedStep >= 2 && aiReviewComplete,
+    maxUnlockedStep >= 3 && allProductsReady,
+    maxUnlockedStep >= 4 && draftedProducts.length > 0,
+  ];
+  const maxAccessibleStep = unlockedSteps.reduce(
+    (highest, unlocked, index) => (unlocked ? index : highest),
+    0,
+  );
+
+  useEffect(() => {
+    if (step > maxAccessibleStep) {
+      setStep(maxAccessibleStep);
+      setInspectorOpen(false);
+    }
+  }, [maxAccessibleStep, step]);
 
   const updateProduct = (nextProduct: ProductRecord) => {
     onProductsChange(
@@ -397,8 +413,12 @@ export function WorkbenchPage({
       onDataModeChange("live");
     }
     onProductsChange(nextProducts);
+    setSelected((current) =>
+      shouldReplaceDemo ? new Set([newProduct.id]) : new Set([...current, newProduct.id]),
+    );
     setActiveProductId(newProduct.id);
     setStep(0);
+    setMaxUnlockedStep(0);
     setInspectorOpen(false);
     notify(
       "success",
@@ -480,10 +500,16 @@ export function WorkbenchPage({
       };
       const shouldReplaceDemo = dataMode === "demo";
       onProductsChange(shouldReplaceDemo ? [newProduct] : [...products, newProduct]);
+      setSelected((current) =>
+        shouldReplaceDemo ? new Set([newProduct.id]) : new Set([...current, newProduct.id]),
+      );
       if (shouldReplaceDemo) {
         onDataModeChange("live");
       }
       setActiveProductId(newProduct.id);
+      setStep(0);
+      setMaxUnlockedStep(0);
+      setInspectorOpen(false);
       setPhotoSelection([]);
       const missingFiles = images.filter((image) => !image.sourceFile).length;
       notify(
@@ -589,14 +615,14 @@ export function WorkbenchPage({
         .map(analyzeOne),
     );
     setBusy(false);
-    setMaxUnlockedStep((current) => Math.max(current, 1));
-    setStep(1);
     const failures = results.filter((result) => !result.success);
     if (!results.length) {
       notify("info", "没有需要分析的商品", "所有商品都已完成 AI 分析。");
       return;
     }
     if (!failures.length) {
+      setMaxUnlockedStep((current) => Math.max(current, 1));
+      setStep(1);
       notify("success", "AI 分析已完成", "请确认标题、类目建议和图片可见属性。");
       return;
     }
@@ -1026,6 +1052,11 @@ export function WorkbenchPage({
       }
     }
     onProductsChange(products.filter((item) => item.id !== id));
+    setSelected((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
   };
 
   const setMainImage = (productId: string, imageId: string) => {
@@ -1095,8 +1126,8 @@ export function WorkbenchPage({
       return;
     }
     if (step === 2) {
-      if (!selectedProductsReady) {
-        notify("warning", "所选商品资料尚未完整", "补齐必填事实后才能进入创建草稿。");
+      if (!allProductsReady) {
+        notify("warning", "仍有商品资料尚未完整", "全部商品补齐 API 必填事实后才能创建草稿。");
         return;
       }
       validateAll();
@@ -1142,8 +1173,28 @@ export function WorkbenchPage({
           <span>
             批次 ID：<strong>{batchId}</strong>
           </span>
+          {dataMode === "demo" ? (
+            <span className="wb-demo-badge">隔离演示 · 不写入真实店铺</span>
+          ) : null}
         </div>
         <div className="wb-topbar-tools">
+          {dataMode === "demo" ? (
+            <button
+              type="button"
+              className="wb-demo-reset"
+              onClick={() => {
+                onResetDemo();
+                setStep(0);
+                setMaxUnlockedStep(0);
+                setSelected(new Set(products.map((product) => product.id)));
+                setInspectorOpen(false);
+                setPublishDialogOpen(false);
+              }}
+            >
+              <ArrowCounterClockwise size={16} />
+              重置演示
+            </button>
+          ) : null}
           <button type="button" className="wb-bell" aria-label="通知">
             <Bell size={19} />
             <i>12</i>
@@ -1174,7 +1225,9 @@ export function WorkbenchPage({
                 disabled={!unlockedSteps[index]}
                 title={!unlockedSteps[index] ? "请先完成上一步" : undefined}
               >
-                <span className="wb-step-number">{index + 1}</span>
+                <span className="wb-step-number">
+                  {completedSteps[index] && index < step ? <Check size={13} /> : index + 1}
+                </span>
                 <span className="wb-step-copy">
                   <strong>{label}</strong>
                   <small>{unlockedSteps[index] ? stepCaptions[index] : "先完成上一步"}</small>
@@ -1378,7 +1431,7 @@ export function WorkbenchPage({
                 busy ||
                 !products.length ||
                 (step === 1 && aiPending > 0) ||
-                (step === 2 && !selectedProductsReady)
+                (step === 2 && !allProductsReady)
               }
             >
               {busy ? <CircleNotch size={17} className="spin" /> : null}
@@ -1517,29 +1570,6 @@ function UploadStep({
         )}
       </div>
 
-      {sourceTab === "local" ? (
-        <div
-          className={`upload-dropzone ${dragActive ? "is-active" : ""}`}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            onDragActive(true);
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={() => onDragActive(false)}
-          onDrop={onDrop}
-        >
-          <div className="upload-icon">
-            <CloudArrowUp size={30} />
-          </div>
-          <h3>拖入同一个商品的全部图片</h3>
-          <p>多张图片只建立一个商品，支持 JPG、PNG、WebP，单张不超过 10 MB。</p>
-          <button type="button" className="button button-dark" onClick={onPickFiles}>
-            <Plus size={18} />
-            选择商品图片
-          </button>
-        </div>
-      ) : null}
-
       {sourceTab === "photobank" && photoBankAvailable ? (
         <div className="photobank-panel">
           <div className="photobank-panel-head">
@@ -1595,18 +1625,42 @@ function UploadStep({
         </div>
       ) : null}
 
-      {products.length ? (
+      {sourceTab === "local" || products.length ? (
         <div className="uploaded-products">
           <div className="section-bar">
             <div>
-              <h3>已加入 {products.length} 个商品</h3>
-              <p>拖动排序会成为批次处理顺序。</p>
+              <h3>{products.length ? `已加入 ${products.length} 个商品` : "添加第一个商品"}</h3>
+              <p>每次选择的一组图片会建立为一个商品，第一张默认为主图。</p>
             </div>
-            <button type="button" className="text-button" onClick={onPickFiles}>
-              继续添加
-            </button>
+            {products.length ? (
+              <button type="button" className="text-button" onClick={onPickFiles}>
+                继续添加
+              </button>
+            ) : null}
           </div>
           <div className="upload-grid">
+            {sourceTab === "local" ? (
+              <div
+                className={`upload-dropzone ${dragActive ? "is-active" : ""}`}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  onDragActive(true);
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => onDragActive(false)}
+                onDrop={onDrop}
+              >
+                <div className="upload-icon">
+                  <CloudArrowUp size={26} />
+                </div>
+                <h3>上传一组商品图</h3>
+                <p>拖入或选择 JPG、PNG、WebP，单张不超过 10 MB。</p>
+                <button type="button" className="button button-dark" onClick={onPickFiles}>
+                  <Plus size={17} />
+                  选择图片
+                </button>
+              </div>
+            ) : null}
             {products.map((product, index) => (
               <article key={product.id} className="upload-card">
                 <span className="upload-order">{String(index + 1).padStart(2, "0")}</span>
@@ -2428,16 +2482,16 @@ function WbInspector({
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
     onChange({ ...product, facts: { ...product.facts, [key]: value } });
   };
-  const setSchemaField = (field: SchemaFieldGuidance, value: string) => {
+  const setSchemaField = (field: SchemaFieldGuidance, value: unknown) => {
     const factKey = schemaFactKey(field);
-    const schemaValue = field.type === "multiCheck" ? (value ? [value] : []) : value;
+    const factValue = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
     onChange({
       ...product,
-      facts: factKey ? { ...product.facts, [factKey]: value } : product.facts,
+      facts: factKey ? { ...product.facts, [factKey]: factValue } : product.facts,
       schemaFields: {
         ...product.schemaFields,
         [field.field]: {
-          value: schemaValue,
+          value,
           source: "user_provided",
         },
       },
@@ -2676,24 +2730,64 @@ function WbInspector({
                     : typeof value === "string"
                       ? value
                       : "";
+                  const controlValues = Array.isArray(value)
+                    ? value.map((item) => String(item))
+                    : controlValue
+                      ? [controlValue]
+                      : [];
                   const inputId = `schema-${product.id}-${index}`;
                   return (
                     <div
                       key={field.field}
                       className={`wb-schema-field ${hasSchemaValue(value) ? "is-complete" : ""}`}
                     >
-                      <label htmlFor={inputId}>
-                        {schemaFieldLabel(field)}
+                      <div className="wb-schema-field-heading" id={`${inputId}-label`}>
+                        <span>
+                          {schemaFieldLabel(field)}
+                          <i>API 必填</i>
+                          <i className={field.manual_fact ? "is-trusted" : "is-assisted"}>
+                            {field.manual_fact ? "可信来源" : "可人工补充"}
+                          </i>
+                        </span>
                         <small>
                           {field.tip ||
                             (hasSchemaValue(value)
                               ? "已填写，可继续修改"
                               : "此字段由当前商品类目规则要求")}
                         </small>
-                      </label>
-                      {field.options.length ? (
+                      </div>
+                      {field.options.length && field.type === "multiCheck" ? (
+                        <div
+                          className="wb-schema-options"
+                          id={inputId}
+                          role="group"
+                          aria-labelledby={`${inputId}-label`}
+                        >
+                          {field.options.map((option) => {
+                            const checked = controlValues.includes(option.value);
+                            return (
+                              <label key={option.value}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setSchemaField(
+                                      field,
+                                      checked
+                                        ? controlValues.filter((item) => item !== option.value)
+                                        : [...controlValues, option.value],
+                                    )
+                                  }
+                                />
+                                <span>{option.display_name || option.value}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : field.options.length ? (
                         <select
                           id={inputId}
+                          aria-labelledby={`${inputId}-label`}
                           value={controlValue}
                           onChange={(event) => setSchemaField(field, event.target.value)}
                         >
@@ -2704,9 +2798,28 @@ function WbInspector({
                             </option>
                           ))}
                         </select>
+                      ) : field.type === "multiInput" ? (
+                        <textarea
+                          id={inputId}
+                          aria-labelledby={`${inputId}-label`}
+                          rows={3}
+                          value={controlValues.join("\n")}
+                          maxLength={field.max_length}
+                          onChange={(event) =>
+                            setSchemaField(
+                              field,
+                              event.target.value
+                                .split("\n")
+                                .map((item) => item.trim())
+                                .filter(Boolean),
+                            )
+                          }
+                          placeholder="每行填写一个值"
+                        />
                       ) : (
                         <input
                           id={inputId}
+                          aria-labelledby={`${inputId}-label`}
                           value={controlValue}
                           maxLength={field.max_length}
                           onChange={(event) => setSchemaField(field, event.target.value)}
