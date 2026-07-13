@@ -2042,6 +2042,15 @@ tr.is-failed .bt-store small {
   background: var(--ds-surface-muted);
 }
 
+.wb-step:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.wb-step:disabled:hover {
+  background: none;
+}
+
 .wb-step.is-active {
   background: var(--ds-brand-soft);
 }
@@ -2093,6 +2102,50 @@ tr.is-failed .bt-store small {
   font-size: 10.5px;
   color: var(--ds-text-3);
   white-space: nowrap;
+}
+
+.wb-step-lock {
+  margin-left: auto;
+  color: var(--ds-text-3);
+  flex-shrink: 0;
+}
+
+.wb-step-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid #eaded5;
+  border-radius: 8px;
+  background: #fff8f4;
+  flex-shrink: 0;
+}
+
+.wb-step-guide > span {
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--ds-brand);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wb-step-guide div {
+  min-width: 0;
+}
+
+.wb-step-guide strong {
+  display: block;
+  color: var(--ds-text);
+  font-size: 12.5px;
+}
+
+.wb-step-guide p {
+  margin-top: 2px;
+  color: var(--ds-text-3);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .wb-facts {

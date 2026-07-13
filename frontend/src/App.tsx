@@ -516,6 +516,7 @@ export default function App() {
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
+          key={dataMode}
           batchId={batchId}
           activeStore={visibleStores.find((store) => store.id === visibleActiveStoreId) ?? null}
           capabilities={capabilities}

@@ -12,6 +12,7 @@ import {
   Funnel,
   GearSix,
   Image,
+  LockSimple,
   MagicWand,
   MagnifyingGlass,
   Plus,
@@ -80,6 +81,28 @@ type WorkbenchPageProps = {
 };
 
 const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
+const stepGuides = [
+  {
+    title: "先准备商品图片",
+    detail: "每组图片对应一个商品，第一张默认为主图。完成后使用底部主按钮继续。",
+  },
+  {
+    title: "只确认 AI 生成内容",
+    detail: "逐个核对标题、类目和卖点；全部确认后才能进入可信资料填写。",
+  },
+  {
+    title: "只补充可信事实",
+    detail: "为勾选商品补齐价格、MOQ、库存、材质和包装信息，不会覆盖已有值。",
+  },
+  {
+    title: "只创建已校验商品的草稿",
+    detail: "先查看校验结果，再为已选且通过校验的商品创建草稿。",
+  },
+  {
+    title: "最后回读并发布",
+    detail: "核对商品 ID、店铺、价格和状态；正式发布前还需要再次确认。",
+  },
+];
 
 // 把后端/AI 供应商返回的错误信息翻译成用户可读的中文提示，区分"未配置/余额不足/模型未注册/结构非法"等。
 const describeAiFailure = (message: string | undefined): string => {
@@ -126,21 +149,21 @@ export function WorkbenchPage({
   onOpenSettings,
   notify,
 }: WorkbenchPageProps) {
-  const [step, setStep] = useState(() => {
+  const initialStep = (() => {
     if (products.length === 0) {
       return 0;
     }
     if (dataMode === "demo") {
-      return 2;
+      return 1;
     }
     return products.some((product) => !product.aiConfirmed) ? 1 : 2;
-  });
-  const [activeProductId, setActiveProductId] = useState(
-    () => (dataMode === "demo" ? products[2]?.id : undefined) ?? products[0]?.id ?? "",
-  );
-  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1080);
+  })();
+  const [step, setStep] = useState(initialStep);
+  const [maxUnlockedStep, setMaxUnlockedStep] = useState(initialStep);
+  const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() =>
-    dataMode === "demo" && products[2] ? new Set([products[2].id]) : new Set(),
+    products[0] ? new Set([products[0].id]) : new Set(),
   );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -193,6 +216,7 @@ export function WorkbenchPage({
     }
     if (products.length === 0) {
       setStep(0);
+      setMaxUnlockedStep(0);
     }
   }, [activeProductId, products]);
 
@@ -305,13 +329,20 @@ export function WorkbenchPage({
     (product) =>
       product.stage === "drafted" || (product.stage === "error" && Boolean(product.draftProductId)),
   );
+  const selectedProducts = getActionProducts(products, selected);
+  const selectedProductsReady =
+    selectedProducts.length > 0 &&
+    selectedProducts.every(
+      (product) => product.aiConfirmed && getProductErrors(product).length === 0,
+    );
   const completedSteps = [
     products.length > 0,
     products.length > 0 && products.every((product) => product.aiConfirmed),
-    products.length > 0 && products.every((product) => getProductErrors(product).length === 0),
+    selectedProductsReady,
     draftedProducts.length > 0,
     publishedProducts.length > 0,
   ];
+  const unlockedSteps = stepLabels.map((_, index) => index <= maxUnlockedStep);
 
   const updateProduct = (nextProduct: ProductRecord) => {
     onProductsChange(
@@ -551,6 +582,7 @@ export function WorkbenchPage({
         .map(analyzeOne),
     );
     setBusy(false);
+    setMaxUnlockedStep((current) => Math.max(current, 1));
     setStep(1);
     const failures = results.filter((result) => !result.success);
     if (!results.length) {
@@ -769,6 +801,7 @@ export function WorkbenchPage({
         );
         notify("success", `已创建 ${targets.length} 个演示草稿`, "没有联系或改动真实账户。");
         setActiveProductId(targets[0].id);
+        setMaxUnlockedStep(4);
         setStep(4);
         return;
       }
@@ -832,8 +865,9 @@ export function WorkbenchPage({
         if (product) {
           setActiveProductId(product.id);
         }
+        setMaxUnlockedStep(4);
+        setStep(4);
       }
-      setStep(4);
     } catch (error) {
       markProducts(targets, "error", error instanceof Error ? error.message : "草稿创建失败");
       notify("error", "草稿创建失败", error instanceof Error ? error.message : undefined);
@@ -1006,12 +1040,22 @@ export function WorkbenchPage({
       void analyzeAll();
       return;
     }
-    if (step === 1 && aiPending > 0) {
-      notify("warning", "还有 AI 内容未确认", "确认后才能进入可信资料填写。");
+    if (step === 1) {
+      if (aiPending > 0) {
+        notify("warning", "还有 AI 内容未确认", "确认后才能进入可信资料填写。");
+        return;
+      }
+      setMaxUnlockedStep((current) => Math.max(current, 2));
+      setStep(2);
       return;
     }
     if (step === 2) {
+      if (!selectedProductsReady) {
+        notify("warning", "所选商品资料尚未完整", "补齐必填事实后才能进入创建草稿。");
+        return;
+      }
       validateAll();
+      setMaxUnlockedStep((current) => Math.max(current, 3));
       setStep(3);
       return;
     }
@@ -1076,16 +1120,31 @@ export function WorkbenchPage({
                 className={`wb-step ${step === index ? "is-active" : ""} ${
                   completedSteps[index] ? "is-complete" : ""
                 }`}
-                onClick={() => setStep(index)}
+                onClick={() => {
+                  setStep(index);
+                  if (index !== 2) {
+                    setInspectorOpen(false);
+                  }
+                }}
+                disabled={!unlockedSteps[index]}
+                title={!unlockedSteps[index] ? "请先完成上一步" : undefined}
               >
                 <span className="wb-step-number">{index + 1}</span>
                 <span className="wb-step-copy">
                   <strong>{label}</strong>
-                  <small>{stepCaptions[index]}</small>
+                  <small>{unlockedSteps[index] ? stepCaptions[index] : "先完成上一步"}</small>
                 </span>
+                {!unlockedSteps[index] ? <LockSimple className="wb-step-lock" size={13} /> : null}
               </button>
             ))}
           </nav>
+          <div className="wb-step-guide">
+            <span>第 {step + 1} 步</span>
+            <div>
+              <strong>{stepGuides[step].title}</strong>
+              <p>{stepGuides[step].detail}</p>
+            </div>
+          </div>
           {!templateComplete ? (
             <div className="wb-template-gate" role="alert">
               <Warning size={20} weight="fill" />
@@ -1265,23 +1324,32 @@ export function WorkbenchPage({
         </div>
         <div className="wb-footer-actions">
           <span className="wb-footer-total">共 {products.length} 条</span>
-          <button
-            type="button"
-            className="wb-button-primary"
-            onClick={goNext}
-            disabled={busy || !products.length || (step === 4 && publishTargets.length === 0)}
-          >
-            {busy ? <CircleNotch size={17} className="spin" /> : null}
-            {actionLabel(step, aiPending)}
-          </button>
-          <button
-            type="button"
-            className="wb-button-secondary"
-            onClick={saveInspector}
-            disabled={busy || !activeProduct}
-          >
-            保存草稿
-          </button>
+          {step < 3 ? (
+            <button
+              type="button"
+              className="wb-button-primary"
+              onClick={goNext}
+              disabled={
+                busy ||
+                !products.length ||
+                (step === 1 && aiPending > 0) ||
+                (step === 2 && !selectedProductsReady)
+              }
+            >
+              {busy ? <CircleNotch size={17} className="spin" /> : null}
+              {actionLabel(step, aiPending)}
+            </button>
+          ) : null}
+          {step === 2 && inspectorOpen ? (
+            <button
+              type="button"
+              className="wb-button-secondary"
+              onClick={saveInspector}
+              disabled={busy || !activeProduct}
+            >
+              保存当前商品
+            </button>
+          ) : null}
         </div>
       </footer>
 
@@ -3441,10 +3509,10 @@ function actionLabel(step: number, aiPending: number) {
     return "下一步：AI 分析";
   }
   if (step === 1) {
-    return aiPending ? `确认剩余 ${aiPending} 项` : "进入资料填写";
+    return aiPending ? `请先确认剩余 ${aiPending} 项` : "下一步：补齐可信事实";
   }
   if (step === 2) {
-    return "校验并继续";
+    return "下一步：创建草稿";
   }
   if (step === 3) {
     return "校验并创建草稿";
