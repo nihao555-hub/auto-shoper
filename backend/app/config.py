@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     alibaba_append_operation_to_url: bool = False
     alibaba_timeout_seconds: float = 30
     alibaba_oauth_authorize_url: str = Field(
-        default="https://openapi-auth.alibaba.com/oauth/authorize",
+        default="https://openapi-api.alibaba.com/oauth/authorize",
         validation_alias=AliasChoices(
             "ALIBABA_OAUTH_AUTHORIZE_URL",
             "ALIBABA_AUTHORIZE_URL",

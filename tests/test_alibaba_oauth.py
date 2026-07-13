@@ -107,7 +107,7 @@ async def test_exchange_code_raises_on_provider_error(
         await store.exchange_code("bad-code", state, settings)
 
 
-def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
+def test_new_platform_authorization_url_uses_canonical_seller_flow() -> None:
     settings = Settings(
         _env_file=None,
         alibaba_app_key="app-key",
@@ -116,18 +116,11 @@ def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
     )
     url = AlibabaOAuthStore().create_authorization_url(settings)
     parsed = urlparse(url)
-    login_query = parse_qs(parsed.query)
-    authorization_url = urlparse(login_query["return_url"][0])
-    query = parse_qs(authorization_url.query)
+    query = parse_qs(parsed.query)
 
     assert (
         f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == "https://passport.alibaba.com/icbu_login.htm"
-    )
-    assert login_query["from"] == ["orange"]
-    assert (
-        f"{authorization_url.scheme}://{authorization_url.netloc}{authorization_url.path}"
-        == "https://openapi-auth.alibaba.com/oauth/authorize"
+        == "https://openapi-api.alibaba.com/oauth/authorize"
     )
     assert query["client_id"] == ["app-key"]
     assert query["redirect_uri"] == [
@@ -136,6 +129,7 @@ def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
     assert query["response_type"] == ["code"]
     assert query["state"][0]
     assert query["sp"] == ["icbu"]
+    assert query["force_auth"] == ["true"]
     assert "view" not in query
     assert "force_login" not in query
 
@@ -155,7 +149,9 @@ def test_legacy_authorization_url_keeps_icbu_server_parameters() -> None:
     assert query["view"] == ["web"]
 
 
-def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Path) -> None:
+def test_workspace_authorization_url_uses_one_time_state_without_force_login(
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         _env_file=None,
         database_path=str(tmp_path / "oauth.db"),
@@ -175,10 +171,10 @@ def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Pat
     )
 
     url = create_workspace_authorization_url(settings, database, user)
-    login_query = parse_qs(urlparse(url).query)
-    query = parse_qs(urlparse(login_query["return_url"][0]).query)
+    query = parse_qs(urlparse(url).query)
 
     assert "force_login" not in query
+    assert query["force_auth"] == ["true"]
     assert query["sp"] == ["icbu"]
     assert "view" not in query
     assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)
@@ -244,8 +240,7 @@ def test_signed_state_survives_store_recreation_and_rejects_tampering() -> None:
         alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
     )
     authorization_url = AlibabaOAuthStore(clock=lambda: now).create_authorization_url(settings)
-    login_query = parse_qs(urlparse(authorization_url).query)
-    state = parse_qs(urlparse(login_query["return_url"][0]).query)["state"][0]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
     recreated_store = AlibabaOAuthStore(clock=lambda: now + timedelta(minutes=1))
 
     recreated_store._validate_state(state, settings)
@@ -262,8 +257,7 @@ def test_signed_state_expires_after_ten_minutes() -> None:
         alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
     )
     authorization_url = AlibabaOAuthStore(clock=lambda: now).create_authorization_url(settings)
-    login_query = parse_qs(urlparse(authorization_url).query)
-    state = parse_qs(urlparse(login_query["return_url"][0]).query)["state"][0]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
 
     with pytest.raises(AlibabaOAuthError):
         AlibabaOAuthStore(clock=lambda: now + timedelta(minutes=11))._validate_state(

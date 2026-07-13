@@ -17,8 +17,12 @@ from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
-ALIBABA_LOGIN_URL = "https://passport.alibaba.com/icbu_login.htm"
-NEW_PLATFORM_AUTH_HOST = "openapi-auth.alibaba.com"
+LEGACY_AUTH_HOST = "oauth.alibaba.com"
+GOP_AUTH_HOSTS = {
+    "open-api.alibaba.com",
+    "openapi-api.alibaba.com",
+    "openapi-auth.alibaba.com",
+}
 
 
 class AlibabaOAuthError(RuntimeError):
@@ -26,6 +30,9 @@ class AlibabaOAuthError(RuntimeError):
 
 
 def _authorization_query(settings: Settings, state: str) -> str:
+    authorize_host = (
+        urlparse(settings.alibaba_oauth_authorize_url).hostname or ""
+    ).lower()
     params = {
         "response_type": "code",
         "client_id": settings.alibaba_app_key,
@@ -33,21 +40,15 @@ def _authorization_query(settings: Settings, state: str) -> str:
         "state": state,
         "sp": "icbu",
     }
-    if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
-        "oauth.alibaba.com"
-    ):
+    if authorize_host == LEGACY_AUTH_HOST:
         params["view"] = "web"
+    elif authorize_host in GOP_AUTH_HOSTS:
+        params["force_auth"] = "true"
     return urlencode(params)
 
 
 def _authorization_url(settings: Settings, state: str) -> str:
     query = _authorization_query(settings, state)
-    if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
-        NEW_PLATFORM_AUTH_HOST
-    ):
-        authorization_url = f"{settings.alibaba_oauth_authorize_url}?{query}"
-        login_query = urlencode({"from": "orange", "return_url": authorization_url})
-        return f"{ALIBABA_LOGIN_URL}?{login_query}"
     return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
 
