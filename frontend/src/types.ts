@@ -78,6 +78,7 @@ export type ProductImage = {
   name: string;
   sourceFile?: File;
   photoBankUrl?: string;
+  source?: "upload" | "photobank" | "generated";
 };
 
 export type ProductRecord = {

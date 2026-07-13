@@ -24,14 +24,28 @@ import {
   X,
   XCircle,
 } from "@phosphor-icons/react";
-import { type ChangeEvent, type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type ChangeEvent,
+  type DragEvent,
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  type PhotoBankGroup,
+  type PhotoBankImage,
   analyzeProductImages,
   createDraftBatch,
+  findPhotoBankGroups,
+  findPhotoBankImages,
   findPhotoBankUrl,
   findSchemaData,
   generateProductImages,
   getCategorySchema,
+  listPhotoBankGroups,
+  listPhotoBankImages,
   planProductImages,
   publishBatch,
   uploadPhotoBankImage,
@@ -139,6 +153,16 @@ export function WorkbenchPage({
   const [imagePlanBusy, setImagePlanBusy] = useState(false);
   const [providedImageInputs, setProvidedImageInputs] = useState<Record<string, string>>({});
   const [addedImageSlots, setAddedImageSlots] = useState<ImageSlot[]>([]);
+  const [photoGroups, setPhotoGroups] = useState<PhotoBankGroup[]>([]);
+  const [photoGroupId, setPhotoGroupId] = useState("");
+  const [photoImages, setPhotoImages] = useState<PhotoBankImage[]>([]);
+  const [photoBankLoading, setPhotoBankLoading] = useState(false);
+  const [photoBankError, setPhotoBankError] = useState("");
+  const [photoSelection, setPhotoSelection] = useState<string[]>([]);
+  const photoBankAvailable =
+    dataMode === "live" &&
+    backendConnected &&
+    Boolean(capabilities?.alibaba_credentials_configured);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
 
@@ -192,6 +216,66 @@ export function WorkbenchPage({
       document.body.style.overflow = previousOverflow;
     };
   }, [publishDialogOpen]);
+
+  useEffect(() => {
+    if (step !== 0 || !photoBankAvailable || photoGroups.length) {
+      return;
+    }
+    let cancelled = false;
+    setPhotoBankLoading(true);
+    setPhotoBankError("");
+    listPhotoBankGroups()
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const groups = findPhotoBankGroups(payload);
+        setPhotoGroups(groups);
+        setPhotoGroupId((current) => current || groups[0]?.id || "");
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPhotoBankError(error instanceof Error ? error.message : "图片银行分组加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPhotoBankLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, photoBankAvailable, photoGroups.length]);
+
+  useEffect(() => {
+    if (!photoGroupId || !photoBankAvailable) {
+      return;
+    }
+    let cancelled = false;
+    setPhotoBankLoading(true);
+    setPhotoBankError("");
+    setPhotoSelection([]);
+    listPhotoBankImages(photoGroupId)
+      .then((payload) => {
+        if (!cancelled) {
+          setPhotoImages(findPhotoBankImages(payload));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPhotoBankError(error instanceof Error ? error.message : "图片银行图片加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPhotoBankLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [photoGroupId, photoBankAvailable]);
 
   const activeProduct =
     products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
@@ -251,6 +335,7 @@ export function WorkbenchPage({
       url: URL.createObjectURL(file),
       name: file.name,
       sourceFile: file,
+      source: "upload" as const,
     }));
     const newProduct: ProductRecord = {
       id: `uploaded-${now}`,
@@ -295,6 +380,83 @@ export function WorkbenchPage({
     event.preventDefault();
     setDragActive(false);
     handleFiles(event.dataTransfer.files);
+  };
+
+  const togglePhotoSelection = (imageId: string) => {
+    setPhotoSelection((current) =>
+      current.includes(imageId) ? current.filter((id) => id !== imageId) : [...current, imageId],
+    );
+  };
+
+  const createProductFromPhotoBank = async () => {
+    const chosen = photoSelection.flatMap((id) => {
+      const image = photoImages.find((item) => item.id === id);
+      return image ? [image] : [];
+    });
+    if (!chosen.length) {
+      notify("warning", "请先在图片银行中选择图片");
+      return;
+    }
+    setBusy(true);
+    try {
+      const now = Date.now();
+      const images = await Promise.all(
+        chosen.map(async (image, index) => {
+          let sourceFile: File | undefined;
+          try {
+            const response = await fetch(image.url);
+            if (response.ok) {
+              const blob = await response.blob();
+              sourceFile = new File([blob], image.name || `photobank-${index}.jpg`, {
+                type: blob.type || "image/jpeg",
+              });
+            }
+          } catch {
+            sourceFile = undefined;
+          }
+          return {
+            id: `photobank-${now}-${index}`,
+            url: image.url,
+            name: image.name || `图片银行图片 ${index + 1}`,
+            sourceFile,
+            photoBankUrl: image.url,
+            source: "photobank" as const,
+          };
+        }),
+      );
+      const newProduct: ProductRecord = {
+        id: `photobank-${now}`,
+        reference: `BANK-${String(now).slice(-6)}-01`,
+        images,
+        mainImageId: images[0].id,
+        title: "",
+        keywords: [],
+        sellingPoints: [],
+        description: "",
+        visibleTraits: [],
+        aiConfirmed: false,
+        stage: "uploaded",
+        facts: createEmptyFacts(settings),
+        errors: ["等待 AI 分析"],
+      };
+      const shouldReplaceDemo = dataMode === "demo";
+      onProductsChange(shouldReplaceDemo ? [newProduct] : [...products, newProduct]);
+      if (shouldReplaceDemo) {
+        onDataModeChange("live");
+      }
+      setActiveProductId(newProduct.id);
+      setPhotoSelection([]);
+      const missingFiles = images.filter((image) => !image.sourceFile).length;
+      notify(
+        "success",
+        `已从图片银行加入 1 个商品 · ${images.length} 张图片`,
+        missingFiles
+          ? `${missingFiles} 张图片无法下载原图，AI 分析将跳过这些图片。`
+          : "第一张默认为主图，可随时更换；AI 会综合分析整组图片。",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const analyzeOne = async (product: ProductRecord) => {
@@ -533,6 +695,7 @@ export function WorkbenchPage({
           id: `generated-${candidate.slot}-${Date.now()}`,
           url: candidate.image_url,
           name: `${candidate.label}候选`,
+          source: "generated" as const,
         },
       ],
     });
@@ -869,7 +1032,7 @@ export function WorkbenchPage({
     `已确认 ${confirmedCount}`,
     `缺失事实 ${missingCount}`,
     `可建草稿 ${draftReadyCount}`,
-    `待发布 ${publishedProducts.length}`,
+    `待发布 ${draftedProducts.length}`,
   ];
   return (
     <div
@@ -933,6 +1096,17 @@ export function WorkbenchPage({
             <UploadStep
               products={products}
               dragActive={dragActive}
+              busy={busy}
+              photoBankAvailable={photoBankAvailable}
+              photoBankLoading={photoBankLoading}
+              photoBankError={photoBankError}
+              photoGroups={photoGroups}
+              photoGroupId={photoGroupId}
+              photoImages={photoImages}
+              photoSelection={photoSelection}
+              onPhotoGroupChange={setPhotoGroupId}
+              onTogglePhoto={togglePhotoSelection}
+              onCreateFromPhotoBank={() => void createProductFromPhotoBank()}
               onDragActive={setDragActive}
               onDrop={onDrop}
               onPickFiles={() => fileInputRef.current?.click()}
@@ -945,6 +1119,8 @@ export function WorkbenchPage({
             <AiStep
               products={products}
               busy={busy}
+              activeProductId={activeProduct?.id ?? ""}
+              onActiveChange={setActiveProductId}
               onAnalyze={analyzeOne}
               onConfirm={confirmAi}
               onConfirmAll={confirmAllAi}
@@ -990,12 +1166,18 @@ export function WorkbenchPage({
           {step === 4 ? (
             <PreviewStep
               products={products}
-              activeProductId={activeProduct?.id ?? ""}
               selected={selected}
               publishCount={publishTargets.length}
+              storeName={activeStore?.login_id ?? activeStore?.account ?? ""}
+              unit={settings.priceUnit}
+              currency={settings.currency}
               onSelect={toggleSelected}
-              onActiveChange={setActiveProductId}
               onPublish={() => setPublishDialogOpen(true)}
+              onFix={(id) => {
+                setActiveProductId(id);
+                setInspectorOpen(true);
+                setStep(2);
+              }}
             />
           ) : null}
         </section>
@@ -1003,6 +1185,8 @@ export function WorkbenchPage({
         {step === 2 && activeProduct && inspectorOpen ? (
           <WbInspector
             product={activeProduct}
+            settings={settings}
+            onOpenSettings={onOpenSettings}
             imageCandidates={imageCandidates}
             imagePlan={imagePlan}
             imagePlanBusy={imagePlanBusy}
@@ -1110,6 +1294,17 @@ export function WorkbenchPage({
 function UploadStep({
   products,
   dragActive,
+  busy,
+  photoBankAvailable,
+  photoBankLoading,
+  photoBankError,
+  photoGroups,
+  photoGroupId,
+  photoImages,
+  photoSelection,
+  onPhotoGroupChange,
+  onTogglePhoto,
+  onCreateFromPhotoBank,
   onDragActive,
   onDrop,
   onPickFiles,
@@ -1118,12 +1313,29 @@ function UploadStep({
 }: {
   products: ProductRecord[];
   dragActive: boolean;
+  busy: boolean;
+  photoBankAvailable: boolean;
+  photoBankLoading: boolean;
+  photoBankError: string;
+  photoGroups: PhotoBankGroup[];
+  photoGroupId: string;
+  photoImages: PhotoBankImage[];
+  photoSelection: string[];
+  onPhotoGroupChange: (groupId: string) => void;
+  onTogglePhoto: (imageId: string) => void;
+  onCreateFromPhotoBank: () => void;
   onDragActive: (active: boolean) => void;
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onPickFiles: () => void;
   onRemove: (id: string) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
 }) {
+  const [photoQuery, setPhotoQuery] = useState("");
+  const visiblePhotos = photoQuery.trim()
+    ? photoImages.filter((image) =>
+        image.name.toLowerCase().includes(photoQuery.trim().toLowerCase()),
+      )
+    : photoImages;
   return (
     <div className="step-page upload-step">
       <div className="step-heading">
@@ -1153,6 +1365,87 @@ function UploadStep({
           选择商品图片
         </button>
       </div>
+
+      {photoBankAvailable ? (
+        <div className="photobank-panel">
+          <div className="section-bar">
+            <div>
+              <h3>从店铺图片银行选择</h3>
+              <p>分组与图片均来自已授权店铺的 Alibaba 图片银行，按选择顺序组成一个商品。</p>
+            </div>
+            <div className="photobank-toolbar">
+              <select
+                value={photoGroupId}
+                aria-label="图片银行分组"
+                onChange={(event) => onPhotoGroupChange(event.target.value)}
+                disabled={photoBankLoading || !photoGroups.length}
+              >
+                {photoGroups.length ? null : <option value="">暂无分组</option>}
+                {photoGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+              <div className="photobank-search">
+                <MagnifyingGlass size={15} />
+                <input
+                  value={photoQuery}
+                  placeholder="按图片名称搜索"
+                  onChange={(event) => setPhotoQuery(event.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="button button-dark"
+                onClick={onCreateFromPhotoBank}
+                disabled={!photoSelection.length || busy}
+              >
+                {busy ? <CircleNotch size={16} className="spin" /> : <Plus size={16} />}
+                以所选 {photoSelection.length} 张图建立商品
+              </button>
+            </div>
+          </div>
+          {photoBankError ? (
+            <div className="photobank-state is-error">
+              <WarningCircle size={18} />
+              <span>{photoBankError}</span>
+            </div>
+          ) : photoBankLoading ? (
+            <div className="photobank-state">
+              <CircleNotch size={18} className="spin" />
+              <span>正在从 Alibaba 同步图片银行…</span>
+            </div>
+          ) : visiblePhotos.length ? (
+            <div className="photobank-grid">
+              {visiblePhotos.map((image) => {
+                const order = photoSelection.indexOf(image.id);
+                return (
+                  <button
+                    key={image.id}
+                    type="button"
+                    className={`photobank-item ${order >= 0 ? "is-selected" : ""}`}
+                    onClick={() => onTogglePhoto(image.id)}
+                  >
+                    <img src={image.url} alt={image.name} loading="lazy" />
+                    {order >= 0 ? <span className="photobank-order">{order + 1}</span> : null}
+                    <span className="photobank-name">{image.name || "未命名图片"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="photobank-state">
+              <Image size={18} />
+              <span>
+                {photoQuery.trim()
+                  ? "没有匹配搜索的图片"
+                  : "该分组下暂无图片，可切换分组或本地上传"}
+              </span>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {products.length ? (
         <div className="uploaded-products">
@@ -1190,6 +1483,17 @@ function UploadStep({
                   <span>
                     {product.title || `${product.images.length} 张商品图片 · 等待 AI 分析`}
                   </span>
+                  <span
+                    className={`upload-source-tag ${
+                      product.images.some((image) => image.source === "photobank")
+                        ? "is-photobank"
+                        : "is-upload"
+                    }`}
+                  >
+                    {product.images.some((image) => image.source === "photobank")
+                      ? "图片银行"
+                      : "本地上传"}
+                  </span>
                 </div>
                 <button type="button" className="icon-button" onClick={() => onRemove(product.id)}>
                   <Trash size={17} />
@@ -1207,6 +1511,8 @@ function UploadStep({
 function AiStep({
   products,
   busy,
+  activeProductId,
+  onActiveChange,
   onAnalyze,
   onConfirm,
   onConfirmAll,
@@ -1215,6 +1521,8 @@ function AiStep({
 }: {
   products: ProductRecord[];
   busy: boolean;
+  activeProductId: string;
+  onActiveChange: (id: string) => void;
   onAnalyze: (product: ProductRecord) => Promise<{ success: boolean }>;
   onConfirm: (id: string) => void;
   onConfirmAll: () => void;
@@ -1222,6 +1530,22 @@ function AiStep({
   onMainImageChange: (productId: string, imageId: string) => void;
 }) {
   const pending = products.filter((product) => !product.aiConfirmed);
+  const active = products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
+  const listStatus = (product: ProductRecord) => {
+    if (product.stage === "analyzing") {
+      return { label: "分析中", className: "is-analyzing" };
+    }
+    if (product.stage === "error") {
+      return { label: "分析失败", className: "is-error" };
+    }
+    if (product.stage === "uploaded") {
+      return { label: "待分析", className: "is-pending" };
+    }
+    if (product.aiConfirmed) {
+      return { label: "已确认", className: "is-confirmed" };
+    }
+    return { label: "待确认", className: "is-pending" };
+  };
   return (
     <div className="step-page ai-step">
       <div className="step-heading">
@@ -1239,186 +1563,220 @@ function AiStep({
         </button>
       </div>
 
-      <div className="ai-review-list">
-        {products.map((product) => (
-          <article key={product.id} className="ai-review-card">
-            <div className="ai-image-frame">
-              <img src={getMainProductImage(product).url} alt="" />
-              <span className="image-count">图库 {product.images.length}</span>
-              <div className="ai-gallery-thumbnails">
-                {product.images.map((image) => (
-                  <button
-                    key={image.id}
-                    type="button"
-                    className={image.id === product.mainImageId ? "is-main" : ""}
-                    onClick={() => onMainImageChange(product.id, image.id)}
-                    aria-label={`设为主图：${image.name}`}
-                  >
-                    <img src={image.url} alt="" />
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="ai-review-content">
-              <div className="review-title-row">
-                <div>
-                  <span className="source-badge source-ai">
-                    <Sparkle size={13} weight="fill" />
-                    AI 候选
-                  </span>
-                  <strong>{product.reference}</strong>
-                </div>
-                {product.stage === "analyzing" ? (
-                  <span className="analysis-state">
-                    <CircleNotch size={16} className="spin" />
-                    正在分析
-                  </span>
-                ) : null}
-              </div>
-              <div className="ai-field-table-scroll">
-                <table className="ai-field-table">
-                  <thead>
-                    <tr>
-                      <th>字段</th>
-                      <th>中文说明 / 发布内容</th>
-                      <th>来源</th>
-                      <th>状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <th scope="row">商品标题</th>
-                      <td>
-                        <div className="ai-field-bilingual">
-                          <AiLocalizedValue
-                            value={product.titleZh}
-                            emptyLabel="等待 AI 生成中文说明"
-                          />
-                          <label className="ai-field-publish">
-                            <span>发布英文</span>
-                            <textarea
-                              rows={2}
-                              value={product.title}
-                              placeholder="等待 AI 生成"
-                              aria-label={`${product.reference} 英文标题`}
-                              onChange={(event) =>
-                                onChange({ ...product, title: event.target.value })
-                              }
-                            />
-                          </label>
-                        </div>
-                      </td>
-                      <td>
-                        <AiFieldSource label="AI 生成" />
-                      </td>
-                      <td>{aiFieldStatus(product, Boolean(product.title.trim()))}</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">类目建议</th>
-                      <td>
-                        <AiLocalizedPair
-                          localized={product.facts.categoryLabelZh}
-                          publication={product.facts.categoryLabel}
-                          publicationLabel="Alibaba 英文类目建议"
-                          emptyLabel="等待 AI 分析"
-                        />
-                      </td>
-                      <td>
-                        <AiFieldSource label="AI 建议" />
-                      </td>
-                      <td>{aiFieldStatus(product, Boolean(product.facts.categoryLabel.trim()))}</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">关键词</th>
-                      <td>
-                        <AiLocalizedTags
-                          localized={product.keywordsZh}
-                          publication={product.keywords}
-                          publicationLabel="发布英文"
-                          emptyLabel="等待 AI 生成"
-                        />
-                      </td>
-                      <td>
-                        <AiFieldSource label="AI 生成" />
-                      </td>
-                      <td>{aiFieldStatus(product, product.keywords.length > 0)}</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">核心卖点</th>
-                      <td>
-                        <AiLocalizedList
-                          localized={product.sellingPointsZh}
-                          publication={product.sellingPoints}
-                          publicationLabel="发布英文"
-                          emptyLabel="等待 AI 生成"
-                        />
-                      </td>
-                      <td>
-                        <AiFieldSource label="AI 生成" />
-                      </td>
-                      <td>{aiFieldStatus(product, product.sellingPoints.length > 0)}</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">商品描述</th>
-                      <td>
-                        <AiLocalizedPair
-                          localized={product.descriptionZh}
-                          publication={product.description}
-                          publicationLabel="发布英文"
-                          emptyLabel="等待 AI 生成"
-                        />
-                      </td>
-                      <td>
-                        <AiFieldSource label="AI 生成" />
-                      </td>
-                      <td>{aiFieldStatus(product, Boolean(product.description.trim()))}</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">图片可见属性</th>
-                      <td>
-                        <AiLocalizedTags
-                          localized={product.visibleTraitsZh}
-                          publication={product.visibleTraits}
-                          publicationLabel="图片识别原文"
-                          emptyLabel="等待 AI 分析"
-                        />
-                      </td>
-                      <td>
-                        <AiFieldSource label="图片识别" />
-                      </td>
-                      <td>{aiFieldStatus(product, product.visibleTraits.length > 0)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="ai-review-actions">
-              {product.stage === "uploaded" || product.stage === "error" ? (
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() => void onAnalyze(product)}
-                >
-                  <MagicWand size={17} />
-                  开始分析
-                </button>
-              ) : null}
+      <div className="ai-master-detail">
+        <div className="ai-product-list" role="listbox" aria-label="商品列表">
+          {products.map((product) => {
+            const status = listStatus(product);
+            return (
               <button
+                key={product.id}
                 type="button"
-                className={`button ${product.aiConfirmed ? "button-success" : "button-dark"}`}
-                onClick={() => onConfirm(product.id)}
-                disabled={product.stage === "analyzing" || product.stage === "uploaded"}
+                className={`ai-product-item ${active?.id === product.id ? "is-active" : ""}`}
+                onClick={() => onActiveChange(product.id)}
               >
-                {product.aiConfirmed ? (
-                  <CheckCircle size={18} weight="fill" />
-                ) : (
-                  <Check size={18} />
-                )}
-                {product.aiConfirmed ? "已确认" : "确认内容"}
+                <img src={getMainProductImage(product).url} alt="" />
+                <span className="ai-product-item-copy">
+                  <strong>{product.title || product.reference}</strong>
+                  <small>{product.images.length} 张图片</small>
+                </span>
+                <span className={`ai-product-status ${status.className}`}>
+                  {product.stage === "analyzing" ? (
+                    <CircleNotch size={13} className="spin" />
+                  ) : null}
+                  {status.label}
+                </span>
               </button>
-            </div>
-          </article>
-        ))}
+            );
+          })}
+        </div>
+        <div className="ai-review-list">
+          {products
+            .filter((product) => product.id === (active?.id ?? ""))
+            .map((product) => (
+              <article key={product.id} className="ai-review-card">
+                <div className="ai-image-frame">
+                  <img src={getMainProductImage(product).url} alt="" />
+                  <span className="image-count">图库 {product.images.length}</span>
+                  <div className="ai-gallery-thumbnails">
+                    {product.images.map((image) => (
+                      <button
+                        key={image.id}
+                        type="button"
+                        className={image.id === product.mainImageId ? "is-main" : ""}
+                        onClick={() => onMainImageChange(product.id, image.id)}
+                        aria-label={`设为主图：${image.name}`}
+                      >
+                        <img src={image.url} alt="" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="ai-review-content">
+                  <div className="review-title-row">
+                    <div>
+                      <span className="source-badge source-ai">
+                        <Sparkle size={13} weight="fill" />
+                        AI 候选
+                      </span>
+                      <strong>{product.reference}</strong>
+                    </div>
+                    {product.stage === "analyzing" ? (
+                      <span className="analysis-state">
+                        <CircleNotch size={16} className="spin" />
+                        正在分析
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="ai-field-table-scroll">
+                    <table className="ai-field-table">
+                      <thead>
+                        <tr>
+                          <th>字段</th>
+                          <th>中文说明 / 发布内容</th>
+                          <th>来源</th>
+                          <th>状态</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <th scope="row">商品标题</th>
+                          <td>
+                            <div className="ai-field-bilingual">
+                              <AiLocalizedValue
+                                value={product.titleZh}
+                                emptyLabel="等待 AI 生成中文说明"
+                              />
+                              <label className="ai-field-publish">
+                                <span>发布英文</span>
+                                <textarea
+                                  rows={2}
+                                  value={product.title}
+                                  placeholder="等待 AI 生成"
+                                  aria-label={`${product.reference} 英文标题`}
+                                  onChange={(event) =>
+                                    onChange({ ...product, title: event.target.value })
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </td>
+                          <td>
+                            <AiFieldSource label="AI 生成" />
+                          </td>
+                          <td>{aiFieldStatus(product, Boolean(product.title.trim()))}</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">类目建议</th>
+                          <td>
+                            <AiLocalizedPair
+                              localized={product.facts.categoryLabelZh}
+                              publication={product.facts.categoryLabel}
+                              publicationLabel="Alibaba 英文类目建议"
+                              emptyLabel="等待 AI 分析"
+                            />
+                          </td>
+                          <td>
+                            <AiFieldSource label="AI 建议" />
+                          </td>
+                          <td>
+                            {aiFieldStatus(product, Boolean(product.facts.categoryLabel.trim()))}
+                          </td>
+                        </tr>
+                        <tr>
+                          <th scope="row">关键词</th>
+                          <td>
+                            <AiLocalizedTags
+                              localized={product.keywordsZh}
+                              publication={product.keywords}
+                              publicationLabel="发布英文"
+                              emptyLabel="等待 AI 生成"
+                            />
+                          </td>
+                          <td>
+                            <AiFieldSource label="AI 生成" />
+                          </td>
+                          <td>{aiFieldStatus(product, product.keywords.length > 0)}</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">核心卖点</th>
+                          <td>
+                            <AiLocalizedList
+                              localized={product.sellingPointsZh}
+                              publication={product.sellingPoints}
+                              publicationLabel="发布英文"
+                              emptyLabel="等待 AI 生成"
+                            />
+                          </td>
+                          <td>
+                            <AiFieldSource label="AI 生成" />
+                          </td>
+                          <td>{aiFieldStatus(product, product.sellingPoints.length > 0)}</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">商品描述</th>
+                          <td>
+                            <AiLocalizedPair
+                              localized={product.descriptionZh}
+                              publication={product.description}
+                              publicationLabel="发布英文"
+                              emptyLabel="等待 AI 生成"
+                            />
+                          </td>
+                          <td>
+                            <AiFieldSource label="AI 生成" />
+                          </td>
+                          <td>{aiFieldStatus(product, Boolean(product.description.trim()))}</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">图片可见属性</th>
+                          <td>
+                            <AiLocalizedTags
+                              localized={product.visibleTraitsZh}
+                              publication={product.visibleTraits}
+                              publicationLabel="图片识别原文"
+                              emptyLabel="等待 AI 分析"
+                            />
+                          </td>
+                          <td>
+                            <AiFieldSource label="图片识别" />
+                          </td>
+                          <td>{aiFieldStatus(product, product.visibleTraits.length > 0)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="ai-review-actions">
+                  {product.stage !== "analyzing" ? (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => void onAnalyze(product)}
+                    >
+                      <MagicWand size={17} />
+                      {product.stage === "uploaded" || product.stage === "error"
+                        ? "开始分析"
+                        : "重新分析"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`button ${product.aiConfirmed ? "button-success" : "button-dark"}`}
+                    onClick={() => onConfirm(product.id)}
+                    disabled={product.stage === "analyzing" || product.stage === "uploaded"}
+                  >
+                    {product.aiConfirmed ? (
+                      <CheckCircle size={18} weight="fill" />
+                    ) : (
+                      <Check size={18} />
+                    )}
+                    {product.aiConfirmed ? "已确认" : "确认内容"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          {!active ? <div className="preview-empty">还没有可确认的商品。</div> : null}
+        </div>
       </div>
     </div>
   );
@@ -1836,6 +2194,8 @@ function FactsStep({
 
 function WbInspector({
   product,
+  settings,
+  onOpenSettings,
   imageCandidates,
   imagePlan,
   imagePlanBusy,
@@ -1850,6 +2210,8 @@ function WbInspector({
   onAddGeneratedImage,
 }: {
   product: ProductRecord;
+  settings: StoreSettings;
+  onOpenSettings: () => void;
   imageCandidates: ProductImageCandidate[];
   imagePlan: ImageSlotPlan[];
   imagePlanBusy: boolean;
@@ -2011,16 +2373,18 @@ function WbInspector({
           <div className="wb-field">
             <span className="wb-field-label">类目</span>
             <div className="wb-field-control">
-              {sourceBadge(true)}
-              <div className="wb-input wb-input-select">
-                <select
-                  value={product.facts.categoryLabel}
-                  onChange={(event) => setFact("categoryLabel", event.target.value)}
-                >
-                  <option value={product.facts.categoryLabel || "工具 > 涂装工具 > 刷子"}>
-                    {product.facts.categoryLabel || "工具 > 涂装工具 > 刷子"}
-                  </option>
-                </select>
+              {sourceBadge(product.aiConfirmed)}
+              <div className="wb-input wb-input-readonly">
+                {product.facts.categoryLabel ? (
+                  <p>
+                    {product.facts.categoryLabel}
+                    {product.facts.categoryId ? <small>ID {product.facts.categoryId}</small> : null}
+                  </p>
+                ) : (
+                  <p className="wb-input-empty">
+                    等待 AI 类目建议（创建草稿时按 Alibaba 类目 schema 校验）
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -2069,7 +2433,9 @@ function WbInspector({
           </div>
           <div className="wb-field wb-field-split">
             <div>
-              <span className="wb-field-label">价格（USD）</span>
+              <span className="wb-field-label">
+                价格{settings.currency ? `（${settings.currency}）` : ""}
+              </span>
               <div className="wb-input">
                 <input
                   value={product.facts.price}
@@ -2088,15 +2454,17 @@ function WbInspector({
             </div>
           </div>
           <div className="wb-field">
-            <span className="wb-field-label">单位</span>
+            <span className="wb-field-label">计量单位</span>
             <div className="wb-field-control">
               {sourceBadge(true)}
-              <div className="wb-input wb-input-select">
-                <select defaultValue="套">
-                  <option value="套">套</option>
-                  <option value="件">件</option>
-                  <option value="个">个</option>
-                </select>
+              <div className="wb-input wb-input-readonly">
+                {settings.priceUnit ? (
+                  <p>{settings.priceUnit}</p>
+                ) : (
+                  <button type="button" className="wb-link" onClick={onOpenSettings}>
+                    尚未从店铺同步，去通用模板设置
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2144,11 +2512,16 @@ function WbInspector({
             <span className="wb-field-label">运费模版</span>
             <div className="wb-field-control">
               {sourceBadge(true)}
-              <div className="wb-input wb-input-select">
-                <select defaultValue="标准物流">
-                  <option value="标准物流">标准物流</option>
-                  <option value="快速物流">快速物流</option>
-                </select>
+              <div className="wb-input wb-input-readonly">
+                {settings.shippingTemplateLabel || settings.shippingTemplateId ? (
+                  <p>
+                    {settings.shippingTemplateLabel || `模板 ID ${settings.shippingTemplateId}`}
+                  </p>
+                ) : (
+                  <button type="button" className="wb-link" onClick={onOpenSettings}>
+                    尚未从店铺同步，去通用模板设置
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2210,6 +2583,11 @@ function DraftStep({
     ? products.filter((product) => selected.has(product.id))
     : products;
   const ready = scopedProducts.filter((product) => getProductErrors(product).length === 0);
+  const aiPendingCount = scopedProducts.filter((product) => !product.aiConfirmed).length;
+  const missingFactsCount = scopedProducts.filter(
+    (product) => product.aiConfirmed && getFactErrors(product).length > 0,
+  ).length;
+  const failedCount = scopedProducts.filter((product) => product.stage === "error").length;
   return (
     <div className="step-page draft-step">
       <div className="step-heading">
@@ -2227,81 +2605,112 @@ function DraftStep({
         </button>
       </div>
 
-      <div className="draft-overview">
-        <div className="draft-score">
-          <span>可创建草稿</span>
-          <strong>
-            {ready.length}
-            <small> / {scopedProducts.length}</small>
-          </strong>
+      <div className="draft-stat-cards">
+        <div className="draft-stat-card is-ok">
+          <CheckCircle size={22} weight="fill" />
+          <span>
+            <strong>{ready.length}</strong>
+            <small>可创建草稿</small>
+          </span>
         </div>
-        <div className="draft-checks">
-          <CheckLine
-            label="AI 内容已人工确认"
-            passed={scopedProducts.every((p) => p.aiConfirmed)}
-          />
-          <CheckLine
-            label="交易和库存来自可信数据"
-            passed={scopedProducts.every((p) => p.facts.price && p.facts.stock)}
-          />
-          <CheckLine
-            label="尺寸、重量和包装完整"
-            passed={scopedProducts.every((p) => p.facts.grossWeight)}
-          />
-          <CheckLine
-            label="平台类目规则"
-            passed={scopedProducts.every((p) => p.isDemo || Boolean(p.schemaData))}
-            pendingLabel="创建草稿时获取"
-          />
+        <div className="draft-stat-card is-info">
+          <Sparkle size={22} weight="fill" />
+          <span>
+            <strong>{aiPendingCount}</strong>
+            <small>AI 内容待确认</small>
+          </span>
+        </div>
+        <div className="draft-stat-card is-warn">
+          <WarningCircle size={22} weight="fill" />
+          <span>
+            <strong>{missingFactsCount}</strong>
+            <small>缺失事实</small>
+          </span>
+        </div>
+        <div className="draft-stat-card is-danger">
+          <XCircle size={22} weight="fill" />
+          <span>
+            <strong>{failedCount}</strong>
+            <small>校验失败</small>
+          </span>
         </div>
       </div>
 
-      <div className="draft-product-list">
-        {products.map((product) => {
-          const errors = getProductErrors(product);
-          const isDrafted = product.stage === "drafted" || product.stage === "published";
-          return (
-            <article key={product.id} className="draft-product-row">
-              <img src={getMainProductImage(product).url} alt="" />
-              <div className="draft-product-name">
-                <strong>{product.title || product.reference}</strong>
-                <span>{product.reference}</span>
-              </div>
-              <div className="draft-source-checks">
-                <SourceBadge
-                  source={product.aiConfirmed ? "confirmed" : "ai"}
-                  label={product.aiConfirmed ? "AI 已确认" : "AI 待确认"}
-                />
-                <SourceBadge source="default" label="店铺默认 5 项" />
-                <SourceBadge
-                  source={errors.length ? "missing" : "trusted"}
-                  label={errors.length ? `缺 ${errors.length} 项` : "可信事实完整"}
-                />
-              </div>
-              <div className="draft-row-status">
-                {isDrafted ? (
-                  <SourceBadge source="trusted" label="草稿已创建" />
-                ) : product.stage === "drafting" ? (
-                  <span className="working-label">
-                    <CircleNotch size={16} className="spin" />
-                    创建中
-                  </span>
-                ) : errors.length ? (
-                  <button
-                    type="button"
-                    className="row-action is-danger"
-                    onClick={() => onOpenProduct(product.id)}
-                  >
-                    补齐资料
-                    <ArrowRight size={15} />
-                  </button>
-                ) : (
-                  <SourceBadge source="trusted" label="准备完成" />
-                )}
-              </div>
-            </article>
-          );
-        })}
+      <div className="draft-table-wrap">
+        <table className="draft-table">
+          <thead>
+            <tr>
+              <th>商品</th>
+              <th>类目（Alibaba）</th>
+              <th>价格</th>
+              <th>MOQ</th>
+              <th>库存</th>
+              <th>校验状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((product) => {
+              const errors = getProductErrors(product);
+              const isDrafted = product.stage === "drafted" || product.stage === "published";
+              const isFailed = product.stage === "error";
+              return (
+                <tr key={product.id} className={errors.length || isFailed ? "is-invalid" : ""}>
+                  <td>
+                    <div className="draft-table-product">
+                      <img src={getMainProductImage(product).url} alt="" />
+                      <span>
+                        <strong>{product.title || product.reference}</strong>
+                        <small>{product.reference}</small>
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    {product.facts.categoryLabel ? (
+                      <span className="draft-table-category">
+                        {product.facts.categoryLabel}
+                        {product.facts.categoryId ? (
+                          <small>ID {product.facts.categoryId}</small>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span className="ai-empty">待 AI 建议</span>
+                    )}
+                  </td>
+                  <td className="is-numeric">{product.facts.price || "—"}</td>
+                  <td className="is-numeric">{product.facts.moq || "—"}</td>
+                  <td className="is-numeric">{product.facts.stock || "—"}</td>
+                  <td>
+                    {isDrafted ? (
+                      <SourceBadge source="trusted" label="草稿已创建" />
+                    ) : product.stage === "drafting" ? (
+                      <span className="working-label">
+                        <CircleNotch size={15} className="spin" />
+                        创建中
+                      </span>
+                    ) : isFailed ? (
+                      <span className="draft-error-text">{product.errors[0] ?? "创建失败"}</span>
+                    ) : errors.length ? (
+                      <span className="draft-error-text">{errors[0]}</span>
+                    ) : (
+                      <SourceBadge source="trusted" label="校验通过" />
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className={`row-action ${errors.length || isFailed ? "is-danger" : ""}`}
+                      onClick={() => onOpenProduct(product.id)}
+                    >
+                      {errors.length || isFailed ? "修复" : "查看"}
+                      <ArrowRight size={15} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -2309,157 +2718,214 @@ function DraftStep({
 
 function PreviewStep({
   products,
-  activeProductId,
   selected,
   publishCount,
+  storeName,
+  unit,
+  currency,
   onSelect,
-  onActiveChange,
   onPublish,
+  onFix,
 }: {
   products: ProductRecord[];
-  activeProductId: string;
   selected: Set<string>;
   publishCount: number;
+  storeName: string;
+  unit: string;
+  currency: string;
   onSelect: (id: string) => void;
-  onActiveChange: (id: string) => void;
   onPublish: () => void;
+  onFix: (id: string) => void;
 }) {
-  const drafted = products.filter(
-    (product) => product.stage === "drafted" || product.stage === "published",
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const rows = products.filter(
+    (product) =>
+      Boolean(product.draftProductId) ||
+      product.stage === "drafted" ||
+      product.stage === "publishing" ||
+      product.stage === "published" ||
+      product.stage === "error",
   );
-  const activeProduct =
-    drafted.find((product) => product.id === activeProductId) ?? drafted[0] ?? null;
+  const succeeded = rows.filter((product) => product.stage !== "error").length;
+  const failed = rows.length - succeeded;
+  const toggleExpanded = (id: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+  const statusBadge = (product: ProductRecord) => {
+    if (product.stage === "published") {
+      return <SourceBadge source="trusted" label="已发布" />;
+    }
+    if (product.stage === "publishing") {
+      return (
+        <span className="working-label">
+          <CircleNotch size={15} className="spin" />
+          发布中
+        </span>
+      );
+    }
+    if (product.stage === "error") {
+      return <SourceBadge source="missing" label="失败" />;
+    }
+    return <SourceBadge source="default" label="草稿待发布" />;
+  };
 
   return (
-    <div className="preview-step">
-      <div className="preview-list">
-        <div className="preview-list-header">
-          <div>
-            <span className="eyebrow">草稿回读</span>
-            <h2>确认后发布</h2>
-          </div>
-          <span>{drafted.length} 个草稿</span>
+    <div className="step-page preview-step">
+      <div className="step-heading">
+        <div>
+          <h2>回读草稿并发布</h2>
         </div>
-        {drafted.map((product) => {
-          const canPublish = product.stage === "drafted";
-          return (
-            <button
-              key={product.id}
-              type="button"
-              className={`preview-product-button ${
-                activeProduct?.id === product.id ? "is-active" : ""
-              }`}
-              onClick={() => onActiveChange(product.id)}
-            >
-              <input
-                type="checkbox"
-                aria-label={`选择发布 ${product.reference}`}
-                checked={selected.has(product.id)}
-                disabled={!canPublish}
-                onClick={(event) => event.stopPropagation()}
-                onChange={() => onSelect(product.id)}
-              />
-              <img src={getMainProductImage(product).url} alt="" />
-              <span>
-                <strong>{product.reference}</strong>
-                <small>
-                  {product.stage === "published"
-                    ? "已发布"
-                    : canPublish
-                      ? "草稿可发布"
-                      : "尚无草稿"}
-                </small>
-              </span>
-            </button>
-          );
-        })}
+        <button
+          type="button"
+          className="button button-primary button-large"
+          onClick={onPublish}
+          disabled={publishCount === 0}
+        >
+          <UploadSimple size={19} />
+          确认并发布所选 {publishCount} 个商品
+        </button>
       </div>
 
-      {activeProduct ? (
-        <article className="listing-preview">
-          <div className="preview-browser-bar">
-            <span />
-            <span />
-            <span />
-            <p>Alibaba.com 商品草稿预览</p>
-          </div>
-          <div className="preview-content">
-            <div className="preview-gallery">
-              <img src={getMainProductImage(activeProduct).url} alt={activeProduct.title} />
-              <div className="preview-thumbnails">
-                {activeProduct.images.map((image) => (
-                  <img
-                    key={image.id}
-                    src={image.url}
-                    alt=""
-                    className={image.id === activeProduct.mainImageId ? "is-main" : ""}
-                  />
-                ))}
-                <span>
-                  <Image size={19} />
-                  AI 白底图
-                </span>
-                <span>
-                  <Image size={19} />
-                  场景图
-                </span>
-              </div>
-            </div>
-            <div className="preview-copy">
-              <span className="preview-category">{activeProduct.facts.categoryLabel}</span>
-              <h2>{activeProduct.title}</h2>
-              <div className="preview-price">
-                <strong>US ${activeProduct.facts.price}</strong>
-                <span>/{settingsUnit(activeProduct)}</span>
-              </div>
-              <dl className="preview-specs">
-                <div>
-                  <dt>Minimum order</dt>
-                  <dd>
-                    {activeProduct.facts.moq} {settingsUnit(activeProduct)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Model number</dt>
-                  <dd>{activeProduct.facts.model}</dd>
-                </div>
-                <div>
-                  <dt>Material</dt>
-                  <dd>{activeProduct.facts.material}</dd>
-                </div>
-                <div>
-                  <dt>Lead time</dt>
-                  <dd>{activeProduct.facts.leadTime} days</dd>
-                </div>
-              </dl>
-              <div className="preview-points">
-                {activeProduct.sellingPoints.map((point) => (
-                  <p key={point}>
-                    <CheckCircle size={17} weight="fill" />
-                    {point}
-                  </p>
-                ))}
-              </div>
-              <button type="button" className="preview-inquiry-button" disabled>
-                Contact supplier · preview
-              </button>
-            </div>
-          </div>
-          <div className="preview-review-strip">
-            <CheckCircle size={19} weight="fill" />
-            <p>请检查图片、标题、属性、SKU、价格、MOQ、库存、包装物流和认证。</p>
-            <button
-              type="button"
-              className="button button-primary"
-              onClick={onPublish}
-              disabled={publishCount === 0}
-            >
-              确认并发布所选商品
-            </button>
-          </div>
-        </article>
+      <div className={`publish-banner ${failed ? "has-failures" : ""}`}>
+        {failed ? (
+          <WarningCircle size={22} weight="fill" />
+        ) : (
+          <CheckCircle size={22} weight="fill" />
+        )}
+        <p>
+          草稿创建完成：成功 <strong>{succeeded}</strong> 个
+          {failed ? (
+            <>
+              {" "}
+              · 失败 <strong>{failed}</strong> 个，展开失败行可查看 Alibaba 返回的具体错误
+            </>
+          ) : null}
+        </p>
+      </div>
+
+      {rows.length ? (
+        <div className="draft-table-wrap">
+          <table className="draft-table readback-table">
+            <thead>
+              <tr>
+                <th aria-label="选择" />
+                <th>商品</th>
+                <th>草稿 / 商品 ID</th>
+                <th>店铺</th>
+                <th>价格</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((product) => {
+                const canPublish = product.stage === "drafted";
+                const isFailed = product.stage === "error";
+                const isExpanded = expanded.has(product.id);
+                return (
+                  <Fragment key={product.id}>
+                    <tr className={isFailed ? "is-invalid" : ""}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择发布 ${product.reference}`}
+                          checked={selected.has(product.id)}
+                          disabled={!canPublish}
+                          onChange={() => onSelect(product.id)}
+                        />
+                      </td>
+                      <td>
+                        <div className="draft-table-product">
+                          <img src={getMainProductImage(product).url} alt="" />
+                          <span>
+                            <strong>{product.title || product.reference}</strong>
+                            <small>{product.reference}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="is-numeric">{product.draftProductId ?? "—"}</td>
+                      <td>{storeName || "—"}</td>
+                      <td className="is-numeric">
+                        {product.facts.price
+                          ? `${currency || "USD"} ${product.facts.price}${unit ? ` / ${unit}` : ""}`
+                          : "—"}
+                      </td>
+                      <td>{statusBadge(product)}</td>
+                      <td>
+                        <div className="readback-actions">
+                          {isFailed ? (
+                            <>
+                              <button
+                                type="button"
+                                className="row-action is-danger"
+                                onClick={() => toggleExpanded(product.id)}
+                              >
+                                {isExpanded ? "收起错误" : "查看错误"}
+                              </button>
+                              <button
+                                type="button"
+                                className="row-action"
+                                onClick={() => onFix(product.id)}
+                              >
+                                返回修复
+                                <ArrowRight size={15} />
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              className="row-action"
+                              onClick={() => toggleExpanded(product.id)}
+                            >
+                              {isExpanded ? "收起" : "查看"}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr className="readback-detail-row">
+                        <td colSpan={7}>
+                          {isFailed && product.errors.length ? (
+                            <div className="readback-errors">
+                              <strong>Alibaba 返回错误</strong>
+                              <ul>
+                                {product.errors.map((error) => (
+                                  <li key={error}>{error}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <div className="readback-preview">
+                              <img src={getMainProductImage(product).url} alt="" />
+                              <div>
+                                <h3>{product.title || product.reference}</h3>
+                                <p>{product.facts.categoryLabel || "类目待定"}</p>
+                                <p className="readback-preview-points">
+                                  {product.sellingPoints.slice(0, 3).join(" · ")}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
-        <div className="preview-empty">还没有可预览的商品。</div>
+        <div className="preview-empty">还没有已创建的草稿，请先在上一步创建草稿。</div>
       )}
     </div>
   );
@@ -2528,26 +2994,6 @@ function PublishDialog({
           </button>
         </div>
       </section>
-    </div>
-  );
-}
-
-function CheckLine({
-  label,
-  passed,
-  pendingLabel,
-}: {
-  label: string;
-  passed: boolean;
-  pendingLabel?: string;
-}) {
-  return (
-    <div className={passed ? "is-passed" : ""}>
-      {passed ? <CheckCircle size={20} weight="fill" /> : <Warning size={20} weight="fill" />}
-      <span>
-        <strong>{label}</strong>
-        <small>{passed ? "已通过" : (pendingLabel ?? "仍需处理")}</small>
-      </span>
     </div>
   );
 }
@@ -2771,10 +3217,6 @@ function getProductId(response?: Record<string, unknown>): string | undefined {
     }
   }
   return undefined;
-}
-
-function settingsUnit(_product: ProductRecord) {
-  return "Set";
 }
 
 const delay = (milliseconds: number) =>

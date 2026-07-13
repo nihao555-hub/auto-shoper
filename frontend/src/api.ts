@@ -230,6 +230,95 @@ export const uploadPhotoBankImage = async (
   );
 };
 
+export type PhotoBankGroup = {
+  id: string;
+  name: string;
+};
+
+export type PhotoBankImage = {
+  id: string;
+  name: string;
+  url: string;
+};
+
+export const listPhotoBankGroups = async (): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/photo-bank/groups?current_page=1&page_size=50`),
+  );
+
+export const listPhotoBankImages = async (
+  groupId: string,
+  page = 1,
+): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(
+      `${API_ROOT}/alibaba/photo-bank/images?group_id=${encodeURIComponent(groupId)}&current_page=${page}&page_size=40`,
+    ),
+  );
+
+const readString = (record: Record<string, unknown>, keys: string[]): string => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number") {
+      return String(value);
+    }
+  }
+  return "";
+};
+
+const collectRecords = (
+  payload: unknown,
+  matches: (record: Record<string, unknown>) => boolean,
+) => {
+  const found: Record<string, unknown>[] = [];
+  const walk = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item);
+      }
+      return;
+    }
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (matches(record)) {
+        found.push(record);
+        return;
+      }
+      for (const nested of Object.values(record)) {
+        walk(nested);
+      }
+    }
+  };
+  walk(payload);
+  return found;
+};
+
+export const findPhotoBankGroups = (payload: Record<string, unknown>): PhotoBankGroup[] =>
+  collectRecords(
+    payload,
+    (record) =>
+      Boolean(readString(record, ["id", "group_id", "groupId"])) &&
+      Boolean(readString(record, ["name", "group_name", "groupName"])),
+  ).map((record) => ({
+    id: readString(record, ["id", "group_id", "groupId"]),
+    name: readString(record, ["name", "group_name", "groupName"]),
+  }));
+
+export const findPhotoBankImages = (payload: Record<string, unknown>): PhotoBankImage[] =>
+  collectRecords(payload, (record) =>
+    ["url", "image_url", "imageUrl", "image_uri", "imageUri"].some((key) => {
+      const value = record[key];
+      return typeof value === "string" && value.startsWith("http");
+    }),
+  ).map((record, index) => ({
+    id: readString(record, ["id", "image_id", "imageId"]) || `photo-${index}`,
+    name: readString(record, ["name", "file_name", "fileName", "image_name", "imageName"]),
+    url: readString(record, ["url", "image_url", "imageUrl", "image_uri", "imageUri"]),
+  }));
+
 export const findPhotoBankUrl = (payload: Record<string, unknown>): string | null => {
   const preferredKeys = ["url", "image_url", "imageUrl", "image_uri", "imageUri"];
   for (const key of preferredKeys) {
