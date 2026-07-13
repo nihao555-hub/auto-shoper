@@ -116,11 +116,17 @@ def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
     )
     url = AlibabaOAuthStore().create_authorization_url(settings)
     parsed = urlparse(url)
-    query = parse_qs(parsed.query)
+    login_query = parse_qs(parsed.query)
+    consent_url = urlparse(login_query["return_url"][0])
+    query = parse_qs(consent_url.query)
 
     assert (
         f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == "https://openapi-auth.alibaba.com/oauth/authorize"
+        == "https://login.alibaba.com/newlogin/icbuLogin.htm"
+    )
+    assert (
+        f"{consent_url.scheme}://{consent_url.netloc}{consent_url.path}"
+        == "https://openapi-api.alibaba.com/oauth/authorize"
     )
     assert query["client_id"] == ["app-key"]
     assert query["redirect_uri"] == [
@@ -168,7 +174,8 @@ def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Pat
     )
 
     url = create_workspace_authorization_url(settings, database, user)
-    query = parse_qs(urlparse(url).query)
+    login_query = parse_qs(urlparse(url).query)
+    query = parse_qs(urlparse(login_query["return_url"][0]).query)
 
     assert "force_login" not in query
     assert query["sp"] == ["icbu"]
@@ -236,7 +243,8 @@ def test_signed_state_survives_store_recreation_and_rejects_tampering() -> None:
         alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
     )
     authorization_url = AlibabaOAuthStore(clock=lambda: now).create_authorization_url(settings)
-    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+    login_query = parse_qs(urlparse(authorization_url).query)
+    state = parse_qs(urlparse(login_query["return_url"][0]).query)["state"][0]
     recreated_store = AlibabaOAuthStore(clock=lambda: now + timedelta(minutes=1))
 
     recreated_store._validate_state(state, settings)
@@ -253,7 +261,8 @@ def test_signed_state_expires_after_ten_minutes() -> None:
         alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
     )
     authorization_url = AlibabaOAuthStore(clock=lambda: now).create_authorization_url(settings)
-    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+    login_query = parse_qs(urlparse(authorization_url).query)
+    state = parse_qs(urlparse(login_query["return_url"][0]).query)["state"][0]
 
     with pytest.raises(AlibabaOAuthError):
         AlibabaOAuthStore(clock=lambda: now + timedelta(minutes=11))._validate_state(

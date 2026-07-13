@@ -17,6 +17,9 @@ from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
+ALIBABA_LOGIN_URL = "https://login.alibaba.com/newlogin/icbuLogin.htm"
+NEW_PLATFORM_AUTH_HOST = "openapi-auth.alibaba.com"
+NEW_PLATFORM_CONSENT_URL = "https://openapi-api.alibaba.com/oauth/authorize"
 
 
 class AlibabaOAuthError(RuntimeError):
@@ -36,6 +39,16 @@ def _authorization_query(settings: Settings, state: str) -> str:
     ):
         params["view"] = "web"
     return urlencode(params)
+
+
+def _authorization_url(settings: Settings, state: str) -> str:
+    query = _authorization_query(settings, state)
+    if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
+        NEW_PLATFORM_AUTH_HOST
+    ):
+        consent_url = f"{NEW_PLATFORM_CONSENT_URL}?{query}"
+        return f"{ALIBABA_LOGIN_URL}?{urlencode({'return_url': consent_url})}"
+    return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
 
 @dataclass
@@ -67,8 +80,7 @@ class AlibabaOAuthStore:
                 settings.alibaba_oauth_configuration_error or "Alibaba OAuth 配置无效"
             )
         state = self._create_state(settings)
-        query = _authorization_query(settings, state)
-        return f"{settings.alibaba_oauth_authorize_url}?{query}"
+        return _authorization_url(settings, state)
 
     async def exchange_code(self, code: str, state: str, settings: Settings) -> AlibabaOAuthToken:
         if not settings.has_alibaba_oauth_app:
@@ -265,8 +277,7 @@ def create_workspace_authorization_url(
     if not settings.encryption_key_material:
         raise AlibabaOAuthError("Alibaba token 加密密钥未配置")
     state = database.create_oauth_state(user)
-    query = _authorization_query(settings, state)
-    return f"{settings.alibaba_oauth_authorize_url}?{query}"
+    return _authorization_url(settings, state)
 
 
 async def exchange_workspace_code(
