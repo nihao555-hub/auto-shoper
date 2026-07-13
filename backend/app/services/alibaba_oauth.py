@@ -29,11 +29,12 @@ def _authorization_query(settings: Settings, state: str) -> str:
         "client_id": settings.alibaba_app_key,
         "redirect_uri": settings.alibaba_oauth_redirect_uri,
         "state": state,
+        "sp": "icbu",
     }
     if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
         "oauth.alibaba.com"
     ):
-        params.update({"view": "web", "sp": "icbu"})
+        params["view"] = "web"
     return urlencode(params)
 
 

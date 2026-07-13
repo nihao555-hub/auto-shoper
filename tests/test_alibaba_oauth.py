@@ -107,7 +107,7 @@ async def test_exchange_code_raises_on_provider_error(
         await store.exchange_code("bad-code", state, settings)
 
 
-def test_new_platform_authorization_url_omits_legacy_top_parameters() -> None:
+def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
     settings = Settings(
         _env_file=None,
         alibaba_app_key="app-key",
@@ -128,7 +128,7 @@ def test_new_platform_authorization_url_omits_legacy_top_parameters() -> None:
     ]
     assert query["response_type"] == ["code"]
     assert query["state"][0]
-    assert "sp" not in query
+    assert query["sp"] == ["icbu"]
     assert "view" not in query
     assert "force_login" not in query
 
@@ -171,7 +171,7 @@ def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Pat
     query = parse_qs(urlparse(url).query)
 
     assert "force_login" not in query
-    assert "sp" not in query
+    assert query["sp"] == ["icbu"]
     assert "view" not in query
     assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)
 
