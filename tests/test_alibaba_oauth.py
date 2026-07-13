@@ -107,7 +107,7 @@ async def test_exchange_code_raises_on_provider_error(
         await store.exchange_code("bad-code", state, settings)
 
 
-def test_authorization_url_uses_icbu_server_flow() -> None:
+def test_new_platform_authorization_url_omits_legacy_top_parameters() -> None:
     settings = Settings(
         _env_file=None,
         alibaba_app_key="app-key",
@@ -127,9 +127,25 @@ def test_authorization_url_uses_icbu_server_flow() -> None:
         "https://merchant.example.com/api/v1/alibaba/oauth/callback"
     ]
     assert query["response_type"] == ["code"]
-    assert query["sp"] == ["ICBU"]
     assert query["state"][0]
+    assert "sp" not in query
+    assert "view" not in query
     assert "force_login" not in query
+
+
+def test_legacy_authorization_url_keeps_icbu_server_parameters() -> None:
+    settings = Settings(
+        _env_file=None,
+        alibaba_app_key="app-key",
+        alibaba_app_secret="app-secret",
+        alibaba_oauth_authorize_url="https://oauth.alibaba.com/authorize",
+        alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
+    )
+
+    query = parse_qs(urlparse(AlibabaOAuthStore().create_authorization_url(settings)).query)
+
+    assert query["sp"] == ["icbu"]
+    assert query["view"] == ["web"]
 
 
 def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Path) -> None:
@@ -155,6 +171,8 @@ def test_workspace_authorization_url_does_not_force_repeated_login(tmp_path: Pat
     query = parse_qs(urlparse(url).query)
 
     assert "force_login" not in query
+    assert "sp" not in query
+    assert "view" not in query
     assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)
 
 

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -21,6 +21,20 @@ TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
 
 class AlibabaOAuthError(RuntimeError):
     pass
+
+
+def _authorization_query(settings: Settings, state: str) -> str:
+    params = {
+        "response_type": "code",
+        "client_id": settings.alibaba_app_key,
+        "redirect_uri": settings.alibaba_oauth_redirect_uri,
+        "state": state,
+    }
+    if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
+        "oauth.alibaba.com"
+    ):
+        params.update({"view": "web", "sp": "icbu"})
+    return urlencode(params)
 
 
 @dataclass
@@ -52,16 +66,7 @@ class AlibabaOAuthStore:
                 settings.alibaba_oauth_configuration_error or "Alibaba OAuth 配置无效"
             )
         state = self._create_state(settings)
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": settings.alibaba_app_key,
-                "redirect_uri": settings.alibaba_oauth_redirect_uri,
-                "state": state,
-                "view": "web",
-                "sp": "ICBU",
-            }
-        )
+        query = _authorization_query(settings, state)
         return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
     async def exchange_code(self, code: str, state: str, settings: Settings) -> AlibabaOAuthToken:
@@ -259,16 +264,7 @@ def create_workspace_authorization_url(
     if not settings.encryption_key_material:
         raise AlibabaOAuthError("Alibaba token 加密密钥未配置")
     state = database.create_oauth_state(user)
-    query = urlencode(
-        {
-            "response_type": "code",
-            "client_id": settings.alibaba_app_key,
-            "redirect_uri": settings.alibaba_oauth_redirect_uri,
-            "state": state,
-            "view": "web",
-            "sp": "ICBU",
-        }
-    )
+    query = _authorization_query(settings, state)
     return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
 
