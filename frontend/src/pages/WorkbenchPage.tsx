@@ -1564,7 +1564,7 @@ function AiStep({
       </div>
 
       <div className="ai-master-detail">
-        <div className="ai-product-list" role="listbox" aria-label="商品列表">
+        <div className="ai-product-list" aria-label="商品列表">
           {products.map((product) => {
             const status = listStatus(product);
             return (
