@@ -3399,3 +3399,306 @@ tr.is-failed .bt-store small {
   color: var(--text-secondary, #8c8c8c);
   font-size: 12px;
 }
+
+/* 步骤 1：图片来源切换 */
+.upload-source-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.upload-source-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 12px;
+  background: var(--surface-2, #fafafa);
+}
+.upload-source-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  border-radius: 9px;
+  padding: 8px 16px;
+  background: transparent;
+  font-size: 13.5px;
+  color: var(--text-secondary, #595959);
+  cursor: pointer;
+}
+.upload-source-tab.is-active {
+  background: #fff;
+  color: var(--brand, #ff6a00);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+.upload-source-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.photobank-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.photobank-panel-head p {
+  margin: 0;
+  color: var(--text-secondary, #8c8c8c);
+  font-size: 12.5px;
+}
+
+/* 步骤 2：底部操作条与类目置信度 */
+.ai-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  padding: 12px 16px;
+}
+.ai-bottom-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #595959);
+}
+.ai-bottom-actions {
+  display: inline-flex;
+  gap: 10px;
+}
+.ai-confidence {
+  display: block;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary, #8c8c8c);
+  position: relative;
+  padding-bottom: 8px;
+  min-width: 88px;
+}
+.ai-confidence-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--brand, #ff6a00);
+  display: block;
+}
+.ai-category-evidence {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary, #8c8c8c);
+}
+
+/* 步骤 4：筛选与底部操作 */
+.draft-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  padding: 10px 14px;
+}
+.draft-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary, #595959);
+}
+.draft-filter select {
+  border: 1px solid var(--line, #d9d9d9);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  background: #fff;
+}
+.draft-reason-row td {
+  background: rgba(255, 77, 79, 0.05);
+  color: var(--danger, #cf1322);
+  font-size: 12.5px;
+  padding: 8px 14px;
+}
+.draft-reason-row svg {
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+.draft-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  padding: 12px 16px;
+}
+.draft-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary, #595959);
+  flex: 1;
+  min-width: 180px;
+}
+.draft-progress-track {
+  display: block;
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--surface-2, #f0f0f0);
+  overflow: hidden;
+}
+.draft-progress-bar {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 4px;
+  background: var(--brand, #ff6a00);
+  animation: draft-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes draft-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+/* 步骤 4：校验详情抽屉 */
+.draft-detail-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 92vw);
+  background: #fff;
+  border-left: 1px solid var(--line, #e5e7eb);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.1);
+  padding: 18px 20px;
+  overflow-y: auto;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.draft-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.draft-detail-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.draft-detail-product {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.draft-detail-product img {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+.draft-detail-product div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.draft-detail-product small {
+  color: var(--text-secondary, #8c8c8c);
+  font-size: 12px;
+}
+.draft-detail-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.draft-detail-errors {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.draft-detail-errors li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--danger, #cf1322);
+  font-size: 12.5px;
+}
+.draft-detail-passes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.draft-detail-passes li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-secondary, #595959);
+}
+.draft-detail-passes i {
+  font-style: normal;
+  color: var(--success, #00795e);
+  font-size: 12px;
+}
+
+/* 步骤 5：回读发布 */
+.readback-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.readback-link {
+  color: var(--brand, #ff6a00);
+  font-size: 12px;
+  word-break: break-all;
+}
+.row-action.is-primary {
+  color: var(--brand, #ff6a00);
+  font-weight: 600;
+}
+.readback-failure {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.readback-suggestion strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.readback-suggestion p {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  color: var(--text-secondary, #595959);
+}
+.readback-suggestion .button {
+  margin-top: 8px;
+}
+@media (max-width: 900px) {
+  .readback-failure {
+    grid-template-columns: 1fr;
+  }
+}

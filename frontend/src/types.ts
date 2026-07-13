@@ -97,6 +97,9 @@ export type ProductRecord = {
   visibleTraits: string[];
   visibleTraitsZh?: string[];
   aiConfirmed: boolean;
+  analyzedAt?: string;
+  categoryConfidence?: number;
+  categoryEvidence?: string;
   stage: ProductStage;
   facts: ProductFacts;
   errors: string[];
