@@ -1508,12 +1508,41 @@ function UploadStep({
   onMainImageChange: (productId: string, imageId: string) => void;
 }) {
   const [photoQuery, setPhotoQuery] = useState("");
+  const [productQuery, setProductQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "confirmed" | "error">(
+    "all",
+  );
   const [sourceTab, setSourceTab] = useState<"local" | "photobank">("local");
   const visiblePhotos = photoQuery.trim()
     ? photoImages.filter((image) =>
         image.name.toLowerCase().includes(photoQuery.trim().toLowerCase()),
       )
     : photoImages;
+  const pendingCount = products.filter(
+    (product) => product.stage === "uploaded" || product.stage === "analyzing",
+  ).length;
+  const confirmedCount = products.filter((product) => product.aiConfirmed).length;
+  const errorCount = products.filter((product) => product.stage === "error").length;
+  const visibleProducts = products.filter((product) => {
+    const normalized = productQuery.trim().toLowerCase();
+    if (
+      normalized &&
+      !product.reference.toLowerCase().includes(normalized) &&
+      !product.title.toLowerCase().includes(normalized)
+    ) {
+      return false;
+    }
+    if (statusFilter === "pending") {
+      return product.stage === "uploaded" || product.stage === "analyzing";
+    }
+    if (statusFilter === "confirmed") {
+      return product.aiConfirmed;
+    }
+    if (statusFilter === "error") {
+      return product.stage === "error";
+    }
+    return true;
+  });
   return (
     <div className="step-page upload-step">
       <div className="upload-source-bar">
@@ -1541,33 +1570,58 @@ function UploadStep({
             从图片银行选择
           </button>
         </div>
-        {sourceTab === "photobank" && photoBankAvailable ? (
-          <div className="photobank-toolbar">
-            <select
-              value={photoGroupId}
-              aria-label="图片银行分组"
-              onChange={(event) => onPhotoGroupChange(event.target.value)}
-              disabled={photoBankLoading || !photoGroups.length}
-            >
-              {photoGroups.length ? null : <option value="">暂无分组</option>}
-              {photoGroups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-            <div className="photobank-search">
-              <MagnifyingGlass size={15} />
-              <input
-                value={photoQuery}
-                placeholder="按图片名称搜索"
-                onChange={(event) => setPhotoQuery(event.target.value)}
-              />
-            </div>
-          </div>
-        ) : (
-          <span className="quiet-stat">最多 100 个商品 / 批次</span>
-        )}
+        <div className="upload-toolbar-end">
+          {sourceTab === "photobank" && photoBankAvailable ? (
+            <>
+              <select
+                value={photoGroupId}
+                aria-label="图片银行分组"
+                onChange={(event) => onPhotoGroupChange(event.target.value)}
+                disabled={photoBankLoading || !photoGroups.length}
+              >
+                {photoGroups.length ? null : <option value="">暂无分组</option>}
+                {photoGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+              <div className="photobank-search">
+                <MagnifyingGlass size={15} />
+                <input
+                  value={photoQuery}
+                  placeholder="按图片名称搜索"
+                  onChange={(event) => setPhotoQuery(event.target.value)}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="upload-group-filter">
+                <span>商品分组</span>
+                <select aria-label="商品分组" defaultValue="all">
+                  <option value="all">全部商品</option>
+                </select>
+              </label>
+              <div className="photobank-search">
+                <MagnifyingGlass size={15} />
+                <input
+                  value={productQuery}
+                  placeholder="搜索货号 / 商品标题"
+                  onChange={(event) => setProductQuery(event.target.value)}
+                />
+              </div>
+              <span className="upload-view-switch" aria-label="网格视图">
+                <button type="button" className="is-active" aria-label="网格视图">
+                  ▦
+                </button>
+                <button type="button" aria-label="列表视图">
+                  ≡
+                </button>
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       {sourceTab === "photobank" && photoBankAvailable ? (
@@ -1626,83 +1680,151 @@ function UploadStep({
       ) : null}
 
       {sourceTab === "local" || products.length ? (
-        <div className="uploaded-products">
-          <div className="section-bar">
-            <div>
-              <h3>{products.length ? `已加入 ${products.length} 个商品` : "添加第一个商品"}</h3>
-              <p>每次选择的一组图片会建立为一个商品，第一张默认为主图。</p>
+        <div className="upload-catalog-layout">
+          <aside className="upload-status-panel" aria-label="上传状态">
+            <div className="upload-status-title">
+              <strong>上传状态</strong>
+              <small>{products.length} 个商品</small>
             </div>
-            {products.length ? (
-              <button type="button" className="text-button" onClick={onPickFiles}>
-                继续添加
-              </button>
-            ) : null}
-          </div>
-          <div className="upload-grid">
-            {sourceTab === "local" ? (
-              <div
-                className={`upload-dropzone ${dragActive ? "is-active" : ""}`}
-                onDragEnter={(event) => {
-                  event.preventDefault();
-                  onDragActive(true);
-                }}
-                onDragOver={(event) => event.preventDefault()}
-                onDragLeave={() => onDragActive(false)}
-                onDrop={onDrop}
+            {[
+              { value: "all", label: "全部商品", count: products.length },
+              { value: "pending", label: "待 AI 分析", count: pendingCount },
+              { value: "confirmed", label: "内容已确认", count: confirmedCount },
+              { value: "error", label: "处理异常", count: errorCount },
+            ].map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={statusFilter === item.value ? "is-active" : ""}
+                onClick={() =>
+                  setStatusFilter(item.value as "all" | "pending" | "confirmed" | "error")
+                }
               >
-                <div className="upload-icon">
-                  <CloudArrowUp size={26} />
+                <span>{item.label}</span>
+                <strong>{item.count}</strong>
+              </button>
+            ))}
+            <div className="upload-capacity">
+              <span>本批容量</span>
+              <strong>{products.length} / 100</strong>
+              <i>
+                <b style={{ width: `${Math.min(100, products.length)}%` }} />
+              </i>
+            </div>
+          </aside>
+
+          <div className="uploaded-products">
+            <div className="section-bar">
+              <div>
+                <h3>{products.length ? `已选择 ${products.length} 个商品` : "添加第一个商品"}</h3>
+                <p>每组图片对应一个商品，第一张图默认为主图。</p>
+              </div>
+              <div className="upload-list-tools">
+                <label>
+                  <input type="checkbox" checked={products.length > 0} readOnly />
+                  全选当前页
+                </label>
+                <select aria-label="商品排序" defaultValue="latest">
+                  <option value="latest">按上传时间</option>
+                  <option value="reference">按货号</option>
+                </select>
+                {products.length ? (
+                  <button type="button" className="text-button" onClick={onPickFiles}>
+                    继续添加
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="upload-grid">
+              {sourceTab === "local" && statusFilter === "all" && !productQuery.trim() ? (
+                <div
+                  className={`upload-dropzone ${dragActive ? "is-active" : ""}`}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    onDragActive(true);
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={() => onDragActive(false)}
+                  onDrop={onDrop}
+                >
+                  <div className="upload-icon">
+                    <CloudArrowUp size={26} />
+                  </div>
+                  <h3>上传一组商品图</h3>
+                  <p>拖入或选择 JPG、PNG、WebP，单张不超过 10 MB。</p>
+                  <button type="button" className="button button-dark" onClick={onPickFiles}>
+                    <Plus size={17} />
+                    选择图片
+                  </button>
                 </div>
-                <h3>上传一组商品图</h3>
-                <p>拖入或选择 JPG、PNG、WebP，单张不超过 10 MB。</p>
-                <button type="button" className="button button-dark" onClick={onPickFiles}>
-                  <Plus size={17} />
-                  选择图片
+              ) : null}
+              {visibleProducts.map((product, index) => (
+                <article key={product.id} className="upload-card">
+                  <span className="upload-card-check">
+                    <Check size={12} weight="bold" />
+                  </span>
+                  <span className="upload-order">{String(index + 1).padStart(2, "0")}</span>
+                  <div className="upload-card-gallery">
+                    <img src={getMainProductImage(product).url} alt="" />
+                    <div className="gallery-thumbnail-row">
+                      {product.images.map((image) => (
+                        <button
+                          key={image.id}
+                          type="button"
+                          className={image.id === product.mainImageId ? "is-main" : ""}
+                          onClick={() => onMainImageChange(product.id, image.id)}
+                          aria-label={`设为主图：${image.name}`}
+                        >
+                          <img src={image.url} alt="" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="upload-card-copy">
+                    <strong>{product.reference}</strong>
+                    <span>
+                      {product.title || `${product.images.length} 张商品图片 · 等待 AI 分析`}
+                    </span>
+                    <span
+                      className={`upload-source-tag ${
+                        product.images.some((image) => image.source === "photobank")
+                          ? "is-photobank"
+                          : "is-upload"
+                      }`}
+                    >
+                      {product.images.some((image) => image.source === "photobank")
+                        ? "图片银行"
+                        : "上传完成"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => onRemove(product.id)}
+                  >
+                    <Trash size={17} />
+                    <span className="sr-only">移除商品</span>
+                  </button>
+                </article>
+              ))}
+            </div>
+            <div className="upload-pagination">
+              <span>共 {visibleProducts.length} 条</span>
+              <div>
+                <button type="button" disabled>
+                  <CaretLeft size={14} />
+                </button>
+                <button type="button" className="is-current">
+                  1
+                </button>
+                <button type="button" disabled>
+                  <CaretRight size={14} />
                 </button>
               </div>
-            ) : null}
-            {products.map((product, index) => (
-              <article key={product.id} className="upload-card">
-                <span className="upload-order">{String(index + 1).padStart(2, "0")}</span>
-                <div className="upload-card-gallery">
-                  <img src={getMainProductImage(product).url} alt="" />
-                  <div className="gallery-thumbnail-row">
-                    {product.images.map((image) => (
-                      <button
-                        key={image.id}
-                        type="button"
-                        className={image.id === product.mainImageId ? "is-main" : ""}
-                        onClick={() => onMainImageChange(product.id, image.id)}
-                        aria-label={`设为主图：${image.name}`}
-                      >
-                        <img src={image.url} alt="" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="upload-card-copy">
-                  <strong>{product.reference}</strong>
-                  <span>
-                    {product.title || `${product.images.length} 张商品图片 · 等待 AI 分析`}
-                  </span>
-                  <span
-                    className={`upload-source-tag ${
-                      product.images.some((image) => image.source === "photobank")
-                        ? "is-photobank"
-                        : "is-upload"
-                    }`}
-                  >
-                    {product.images.some((image) => image.source === "photobank")
-                      ? "图片银行"
-                      : "本地上传"}
-                  </span>
-                </div>
-                <button type="button" className="icon-button" onClick={() => onRemove(product.id)}>
-                  <Trash size={17} />
-                  <span className="sr-only">移除商品</span>
-                </button>
-              </article>
-            ))}
+              <select aria-label="每页条数" defaultValue="20">
+                <option value="20">20 条 / 页</option>
+              </select>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1772,6 +1894,12 @@ function AiStep({
 
       <div className="ai-master-detail">
         <div className="ai-product-list" aria-label="商品列表">
+          <div className="ai-product-list-head">
+            <span>商品信息</span>
+            <span>AI 状态</span>
+            <span>图片数</span>
+            <span>最后分析</span>
+          </div>
           {products.map((product) => {
             const status = listStatus(product);
             return (
@@ -1781,12 +1909,15 @@ function AiStep({
                 className={`ai-product-item ${active?.id === product.id ? "is-active" : ""}`}
                 onClick={() => onActiveChange(product.id)}
               >
-                <img src={getMainProductImage(product).url} alt="" />
-                <span className="ai-product-item-copy">
-                  <strong>{product.title || product.reference}</strong>
-                  <small>
-                    {product.images.length} 张素材 · 最近分析 {formatAnalyzedAt(product.analyzedAt)}
-                  </small>
+                <span className="ai-product-primary">
+                  <i className="ai-row-check">
+                    {active?.id === product.id ? <Check size={10} /> : null}
+                  </i>
+                  <img src={getMainProductImage(product).url} alt="" />
+                  <span className="ai-product-item-copy">
+                    <strong>{product.title || product.reference}</strong>
+                    <small>{product.reference}</small>
+                  </span>
                 </span>
                 <span className={`ai-product-status ${status.className}`}>
                   {product.stage === "analyzing" ? (
@@ -1794,47 +1925,66 @@ function AiStep({
                   ) : null}
                   {status.label}
                 </span>
+                <span className="ai-product-image-count">{product.images.length}</span>
+                <span className="ai-product-time">{formatAnalyzedAt(product.analyzedAt)}</span>
               </button>
             );
           })}
+          <div className="ai-product-list-footer">
+            <span>共 {products.length} 条</span>
+            <div>
+              <button type="button" disabled aria-label="上一页">
+                <CaretLeft size={13} />
+              </button>
+              <button type="button" className="is-current">
+                1
+              </button>
+              <button type="button" disabled aria-label="下一页">
+                <CaretRight size={13} />
+              </button>
+            </div>
+          </div>
         </div>
         <div className="ai-review-list">
           {products
             .filter((product) => product.id === (active?.id ?? ""))
             .map((product) => (
               <article key={product.id} className="ai-review-card">
-                <div className="ai-image-frame">
-                  <img src={getMainProductImage(product).url} alt="" />
-                  <span className="image-count">图库 {product.images.length}</span>
-                  <div className="ai-gallery-thumbnails">
-                    {product.images.map((image) => (
-                      <button
-                        key={image.id}
-                        type="button"
-                        className={image.id === product.mainImageId ? "is-main" : ""}
-                        onClick={() => onMainImageChange(product.id, image.id)}
-                        aria-label={`设为主图：${image.name}`}
-                      >
-                        <img src={image.url} alt="" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div className="ai-review-content">
                   <div className="review-title-row">
-                    <div>
-                      <span className="source-badge source-ai">
-                        <Sparkle size={13} weight="fill" />
-                        AI 候选
+                    <div className="ai-selected-product">
+                      <img src={getMainProductImage(product).url} alt="" />
+                      <span>
+                        <small>已选择 1 个商品</small>
+                        <strong>{product.title || product.reference}</strong>
                       </span>
-                      <strong>{product.reference}</strong>
+                      <div className="ai-selected-gallery">
+                        {product.images.slice(0, 4).map((image) => (
+                          <button
+                            key={image.id}
+                            type="button"
+                            className={image.id === product.mainImageId ? "is-main" : ""}
+                            onClick={() => onMainImageChange(product.id, image.id)}
+                            aria-label={`设为主图：${image.name}`}
+                          >
+                            <img src={image.url} alt="" />
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    {product.stage === "analyzing" ? (
-                      <span className="analysis-state">
-                        <CircleNotch size={16} className="spin" />
-                        正在分析
-                      </span>
-                    ) : null}
+                    <span className="ai-review-summary">
+                      {product.stage === "analyzing" ? (
+                        <>
+                          <CircleNotch size={16} className="spin" />
+                          正在分析
+                        </>
+                      ) : (
+                        <>
+                          <Sparkle size={14} weight="fill" />
+                          AI 已生成 {product.aiConfirmed ? "· 已确认" : "· 待确认"}
+                        </>
+                      )}
+                    </span>
                   </div>
                   <div className="ai-field-table-scroll">
                     <table className="ai-field-table">
@@ -3579,150 +3729,169 @@ function PreviewStep({
       </div>
 
       {rows.length ? (
-        <div className="draft-table-wrap">
-          <table className="draft-table readback-table">
-            <thead>
-              <tr>
-                <th aria-label="选择" />
-                <th>商品 ID</th>
-                <th>标题</th>
-                <th>店铺</th>
-                <th>价格</th>
-                <th>发布状态</th>
-                <th>Alibaba 商品链接</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((product) => {
-                const canPublish = product.stage === "drafted";
-                const isFailed = product.stage === "error";
-                const isExpanded = expanded.has(product.id);
-                const productUrl =
-                  product.stage === "published" && product.draftProductId
-                    ? `https://www.alibaba.com/product-detail/${product.draftProductId}.html`
-                    : "";
-                return (
-                  <Fragment key={product.id}>
-                    <tr className={isFailed ? "is-invalid" : ""}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={`选择发布 ${product.reference}`}
-                          checked={selected.has(product.id)}
-                          disabled={!canPublish}
-                          onChange={() => onSelect(product.id)}
-                        />
-                      </td>
-                      <td className="is-numeric">{product.draftProductId ?? "—"}</td>
-                      <td>
-                        <div className="draft-table-product">
-                          <img src={getMainProductImage(product).url} alt="" />
-                          <span>
-                            <strong>{product.title || product.reference}</strong>
-                            <small>{product.reference}</small>
-                          </span>
-                        </div>
-                      </td>
-                      <td>{storeName || "—"}</td>
-                      <td className="is-numeric">
-                        {product.facts.price
-                          ? `${currency || "USD"} ${product.facts.price}${unit ? ` / ${unit}` : ""}`
-                          : "—"}
-                      </td>
-                      <td>{statusBadge(product)}</td>
-                      <td>
-                        {productUrl ? (
-                          <a
-                            className="readback-link"
-                            href={productUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {productUrl}
-                          </a>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td>
-                        <div className="readback-actions">
-                          {canPublish ? (
-                            <button
-                              type="button"
-                              className="row-action is-primary"
-                              onClick={() => onPublishOne(product.id)}
+        <div className="readback-results">
+          <div className="draft-table-wrap">
+            <table className="draft-table readback-table">
+              <thead>
+                <tr>
+                  <th aria-label="选择" />
+                  <th>商品 ID</th>
+                  <th>标题</th>
+                  <th>店铺</th>
+                  <th>价格</th>
+                  <th>发布状态</th>
+                  <th>Alibaba 商品链接</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((product) => {
+                  const canPublish = product.stage === "drafted";
+                  const isFailed = product.stage === "error";
+                  const isExpanded = expanded.has(product.id);
+                  const productUrl =
+                    product.stage === "published" && product.draftProductId
+                      ? `https://www.alibaba.com/product-detail/${product.draftProductId}.html`
+                      : "";
+                  return (
+                    <Fragment key={product.id}>
+                      <tr className={isFailed ? "is-invalid" : ""}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`选择发布 ${product.reference}`}
+                            checked={selected.has(product.id)}
+                            disabled={!canPublish}
+                            onChange={() => onSelect(product.id)}
+                          />
+                        </td>
+                        <td className="is-numeric">{product.draftProductId ?? "—"}</td>
+                        <td>
+                          <div className="draft-table-product">
+                            <img src={getMainProductImage(product).url} alt="" />
+                            <span>
+                              <strong>{product.title || product.reference}</strong>
+                              <small>{product.reference}</small>
+                            </span>
+                          </div>
+                        </td>
+                        <td>{storeName || "—"}</td>
+                        <td className="is-numeric">
+                          {product.facts.price
+                            ? `${currency || "USD"} ${product.facts.price}${unit ? ` / ${unit}` : ""}`
+                            : "—"}
+                        </td>
+                        <td>{statusBadge(product)}</td>
+                        <td>
+                          {productUrl ? (
+                            <a
+                              className="readback-link"
+                              href={productUrl}
+                              target="_blank"
+                              rel="noreferrer"
                             >
-                              发布
-                            </button>
-                          ) : null}
-                          {isFailed ? (
-                            <button
-                              type="button"
-                              className="row-action is-danger"
-                              onClick={() => onRetry(product.id)}
-                            >
-                              重试
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="row-action"
-                            onClick={() => toggleExpanded(product.id)}
-                          >
-                            {isExpanded ? "收起" : "查看"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {isExpanded ? (
-                      <tr className="readback-detail-row">
-                        <td colSpan={8}>
-                          {isFailed && product.errors.length ? (
-                            <div className="readback-failure">
-                              <div className="readback-errors">
-                                <strong>失败原因（Alibaba 通道）</strong>
-                                <ul>
-                                  {product.errors.map((error) => (
-                                    <li key={error}>{error}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                              <div className="readback-suggestion">
-                                <strong>修复建议</strong>
-                                <p>
-                                  1. 请进入「补齐事实」步骤，检查并补充缺失的类目属性与交易信息；
-                                </p>
-                                <p>2. 修改完成后回到本页点击「重试」重新创建草稿。</p>
-                                <button
-                                  type="button"
-                                  className="button button-dark"
-                                  onClick={() => onFix(product.id)}
-                                >
-                                  去补齐事实
-                                </button>
-                              </div>
-                            </div>
+                              {productUrl}
+                            </a>
                           ) : (
-                            <div className="readback-preview">
-                              <img src={getMainProductImage(product).url} alt="" />
-                              <div>
-                                <h3>{product.title || product.reference}</h3>
-                                <p>{product.facts.categoryLabel || "类目待定"}</p>
-                                <p className="readback-preview-points">
-                                  {product.sellingPoints.slice(0, 3).join(" · ")}
-                                </p>
-                              </div>
-                            </div>
+                            "—"
                           )}
                         </td>
+                        <td>
+                          <div className="readback-actions">
+                            {canPublish ? (
+                              <button
+                                type="button"
+                                className="row-action is-primary"
+                                onClick={() => onPublishOne(product.id)}
+                              >
+                                发布
+                              </button>
+                            ) : null}
+                            {isFailed ? (
+                              <button
+                                type="button"
+                                className="row-action is-danger"
+                                onClick={() => onRetry(product.id)}
+                              >
+                                重试
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="row-action"
+                              onClick={() => toggleExpanded(product.id)}
+                            >
+                              {isExpanded ? "收起" : "查看"}
+                            </button>
+                          </div>
+                        </td>
                       </tr>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                      {isExpanded ? (
+                        <tr className="readback-detail-row">
+                          <td colSpan={8}>
+                            {isFailed && product.errors.length ? (
+                              <div className="readback-failure">
+                                <div className="readback-errors">
+                                  <strong>失败原因（Alibaba 通道）</strong>
+                                  <ul>
+                                    {product.errors.map((error) => (
+                                      <li key={error}>{error}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <div className="readback-suggestion">
+                                  <strong>修复建议</strong>
+                                  <p>
+                                    1. 请进入「补齐事实」步骤，检查并补充缺失的类目属性与交易信息；
+                                  </p>
+                                  <p>2. 修改完成后回到本页点击「重试」重新创建草稿。</p>
+                                  <button
+                                    type="button"
+                                    className="button button-dark"
+                                    onClick={() => onFix(product.id)}
+                                  >
+                                    去补齐事实
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="readback-preview">
+                                <img src={getMainProductImage(product).url} alt="" />
+                                <div>
+                                  <h3>{product.title || product.reference}</h3>
+                                  <p>{product.facts.categoryLabel || "类目待定"}</p>
+                                  <p className="readback-preview-points">
+                                    {product.sellingPoints.slice(0, 3).join(" · ")}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="readback-pagination">
+            <span>共 {rows.length} 条</span>
+            <select aria-label="每页条数" defaultValue="20">
+              <option value="20">20 条 / 页</option>
+            </select>
+            <div>
+              <button type="button" disabled aria-label="上一页">
+                <CaretLeft size={13} />
+              </button>
+              <button type="button" className="is-current">
+                1
+              </button>
+              <button type="button" disabled aria-label="下一页">
+                <CaretRight size={13} />
+              </button>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="preview-empty">还没有已创建的草稿，请先在上一步创建草稿。</div>
