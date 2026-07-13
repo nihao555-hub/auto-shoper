@@ -17,9 +17,8 @@ from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
-ALIBABA_LOGIN_URL = "https://login.alibaba.com/newlogin/icbuLogin.htm"
+ALIBABA_LOGIN_URL = "https://passport.alibaba.com/icbu_login.htm"
 NEW_PLATFORM_AUTH_HOST = "openapi-auth.alibaba.com"
-NEW_PLATFORM_CONSENT_URL = "https://openapi-api.alibaba.com/oauth/authorize"
 
 
 class AlibabaOAuthError(RuntimeError):
@@ -46,8 +45,9 @@ def _authorization_url(settings: Settings, state: str) -> str:
     if (urlparse(settings.alibaba_oauth_authorize_url).hostname or "").lower() == (
         NEW_PLATFORM_AUTH_HOST
     ):
-        consent_url = f"{NEW_PLATFORM_CONSENT_URL}?{query}"
-        return f"{ALIBABA_LOGIN_URL}?{urlencode({'return_url': consent_url})}"
+        authorization_url = f"{settings.alibaba_oauth_authorize_url}?{query}"
+        login_query = urlencode({"from": "orange", "return_url": authorization_url})
+        return f"{ALIBABA_LOGIN_URL}?{login_query}"
     return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
 

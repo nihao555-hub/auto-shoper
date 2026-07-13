@@ -117,16 +117,17 @@ def test_new_platform_authorization_url_uses_required_icbu_parameter() -> None:
     url = AlibabaOAuthStore().create_authorization_url(settings)
     parsed = urlparse(url)
     login_query = parse_qs(parsed.query)
-    consent_url = urlparse(login_query["return_url"][0])
-    query = parse_qs(consent_url.query)
+    authorization_url = urlparse(login_query["return_url"][0])
+    query = parse_qs(authorization_url.query)
 
     assert (
         f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == "https://login.alibaba.com/newlogin/icbuLogin.htm"
+        == "https://passport.alibaba.com/icbu_login.htm"
     )
+    assert login_query["from"] == ["orange"]
     assert (
-        f"{consent_url.scheme}://{consent_url.netloc}{consent_url.path}"
-        == "https://openapi-api.alibaba.com/oauth/authorize"
+        f"{authorization_url.scheme}://{authorization_url.netloc}{authorization_url.path}"
+        == "https://openapi-auth.alibaba.com/oauth/authorize"
     )
     assert query["client_id"] == ["app-key"]
     assert query["redirect_uri"] == [
