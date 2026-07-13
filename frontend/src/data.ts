@@ -116,7 +116,7 @@ const demoProduct = (input: {
   mainImageId: `${input.id}-main`,
   title: input.title,
   keywords: ["paint brush", "painting tools", "wall painting"],
-  sellingPoints: [],
+  sellingPoints: [input.description, "耐用结构，适合连续涂装", "握持舒适，操作省力"],
   description: input.description,
   visibleTraits: [],
   aiConfirmed: input.aiConfirmed,

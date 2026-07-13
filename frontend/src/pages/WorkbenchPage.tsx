@@ -322,7 +322,10 @@ export function WorkbenchPage({
 
   const aiPending = products.filter((product) => !product.aiConfirmed).length;
   const draftedProducts = products.filter(
-    (product) => product.stage === "drafted" || product.stage === "published",
+    (product) =>
+      product.stage === "drafted" ||
+      product.stage === "publishing" ||
+      product.stage === "published",
   );
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
