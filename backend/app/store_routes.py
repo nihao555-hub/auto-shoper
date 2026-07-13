@@ -1,4 +1,5 @@
 import logging
+import re
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Annotated
@@ -549,7 +550,9 @@ def oauth_authorize(
     record_event(
         "authorize_url_created",
         workspace_id=user.workspace_id,
-        authorization_url=authorization_url,
+        authorization_url=re.sub(
+            r"(state=[^&]{12})[^&]*", r"\1…", authorization_url
+        ),
     )
     logger.info("Alibaba OAuth authorize URL created for workspace %s", user.workspace_id)
     return {"authorization_url": authorization_url}
@@ -569,9 +572,7 @@ def _callback_url(base: str, *, result: str, reason: str | None = None) -> str:
 
 
 @router.get("/oauth/debug")
-def oauth_debug(
-    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-) -> dict[str, object]:
+def oauth_debug() -> dict[str, object]:
     return {"events": recent_events()}
 
 
