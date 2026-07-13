@@ -14,6 +14,7 @@ import type {
   ProductImagePlanResponse,
   ProductRecord,
   RegisterPayload,
+  SchemaGuidanceResult,
   StoreSettings,
 } from "./types";
 
@@ -338,9 +339,36 @@ export const findPhotoBankUrl = (payload: Record<string, unknown>): string | nul
   return null;
 };
 
+export const findPhotoBankFileId = (payload: Record<string, unknown>): string | null => {
+  const direct = readString(payload, ["file_id", "fileId", "image_id", "imageId", "id"]);
+  if (direct) {
+    return direct;
+  }
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = findPhotoBankFileId(value as Record<string, unknown>);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
+};
+
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
     await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
+  );
+
+export const getSchemaGuidance = async (
+  schemaData: Record<string, unknown> | string,
+): Promise<SchemaGuidanceResult> =>
+  parseResponse<SchemaGuidanceResult>(
+    await apiFetch(`${API_ROOT}/alibaba/schemas/guidance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schema_data: schemaData }),
+    }),
   );
 
 const trustedField = (value: unknown): DraftField => ({
@@ -359,6 +387,7 @@ const accountDefault = (value: unknown): DraftField => ({
 });
 
 const productFields = (product: ProductRecord): Record<string, DraftField> => ({
+  ...(product.schemaFields ?? {}),
   category_id: confirmedField(product.facts.categoryId),
   subject: confirmedField(product.title),
   keywords: confirmedField(product.keywords),

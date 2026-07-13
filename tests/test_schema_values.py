@@ -151,6 +151,23 @@ def test_build_schema_xml_rejects_unknown_fields() -> None:
     assert any(issue.rule == "unknownField" for issue in result.errors)
 
 
+def test_build_schema_xml_adds_required_attributes_for_known_options() -> None:
+    schema = """
+    <schema>
+      <field id="currency" type="singleCheck">
+        <rules><rule name="valueAttributeRule" value="text"/></rules>
+        <options><option displayName="USD" value="1"/></options>
+      </field>
+    </schema>
+    """
+    result = build_schema_xml(schema, {"currency": "1"})
+    assert result.ready_to_submit is True
+    root = ElementTree.fromstring(result.xml)
+    value = root.find("field/value")
+    assert value is not None
+    assert value.attrib["text"] == "USD"
+
+
 def test_validate_filled_schema_xml_rechecks_submission_values() -> None:
     built = build_schema_xml(
         SCHEMA_XML,

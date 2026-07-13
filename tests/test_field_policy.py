@@ -41,6 +41,20 @@ def test_schema_required_field_is_enforced() -> None:
     assert result.missing_fields == ["voltage"]
 
 
+def test_complex_schema_parent_is_satisfied_by_trusted_child_fields() -> None:
+    fields = trusted_fields()
+    fields["shippingTemplate.shippingTemplateId"] = DraftField(
+        value="42",
+        source=FieldSource.ACCOUNT_DEFAULT,
+    )
+    result = validate_product_fields(
+        fields,
+        ["shippingTemplate", "shippingTemplate.shippingTemplateId"],
+    )
+    assert result.ready_to_publish is True
+    assert result.missing_fields == []
+
+
 def test_ai_source_requires_confirmation_even_without_client_flag() -> None:
     fields = trusted_fields()
     fields["title"] = DraftField(

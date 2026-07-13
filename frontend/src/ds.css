@@ -2155,6 +2155,47 @@ tr.is-failed .bt-store small {
   min-height: 0;
 }
 
+.wb-required-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid #cfe4d2;
+  border-radius: 8px;
+  background: var(--ds-success-soft);
+  color: var(--ds-success);
+}
+
+.wb-required-summary > svg {
+  flex-shrink: 0;
+}
+
+.wb-required-summary > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-required-summary strong {
+  display: block;
+  font-size: 12.5px;
+}
+
+.wb-required-summary p {
+  margin: 2px 0 0;
+  color: var(--ds-text-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.wb-required-summary > span {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .wb-toolbar {
   display: flex;
   align-items: center;
@@ -2205,6 +2246,18 @@ tr.is-failed .bt-store small {
 
 .wb-bulk-fill .button {
   height: 34px;
+}
+
+.wb-missing-summary {
+  display: block;
+  max-width: 180px;
+  color: var(--ds-danger);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.wb-missing-summary.is-done {
+  color: var(--ds-success);
 }
 
 .wb-select select,
@@ -2532,6 +2585,49 @@ tr.is-failed .bt-store small {
   gap: 0;
 }
 
+.wb-inspector-intro {
+  padding: 12px;
+  border: 1px solid #eaded5;
+  border-radius: 8px;
+  background: #fff8f4;
+}
+
+.wb-inspector-intro strong,
+.wb-inspector-intro p,
+.wb-inspector-intro small {
+  display: block;
+}
+
+.wb-inspector-intro strong {
+  font-size: 11px;
+  color: var(--ds-brand);
+}
+
+.wb-inspector-intro p {
+  margin: 3px 0 8px;
+  color: var(--ds-text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.wb-inspector-intro span {
+  display: inline-block;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ds-danger);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.wb-inspector-intro small {
+  margin-top: 6px;
+  color: var(--ds-text-3);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
 .wb-inspector-section {
   padding: 12px 2px 14px;
   border-bottom: 1px solid var(--ds-border-soft);
@@ -2555,6 +2651,141 @@ tr.is-failed .bt-store small {
   font-weight: 750;
   color: var(--ds-text-2);
   letter-spacing: 0.08em;
+}
+
+.wb-inspector-optional {
+  border-bottom: 1px solid var(--ds-border-soft);
+}
+
+.wb-inspector-optional > summary {
+  padding: 11px 2px;
+  color: var(--ds-text-3);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.wb-inspector-optional[open] > summary {
+  color: var(--ds-text-2);
+}
+
+.wb-content-optional {
+  order: 10;
+}
+
+.wb-image-generation-optional {
+  order: 11;
+}
+
+.wb-auto-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--ds-border-soft);
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.wb-auto-value > span {
+  flex-shrink: 0;
+  color: var(--ds-success);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.wb-auto-value p {
+  flex: 1;
+  margin: 0;
+  color: var(--ds-text-2);
+  font-size: 10.5px;
+}
+
+.wb-schema-required {
+  padding-top: 14px;
+}
+
+.wb-schema-field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-schema-field {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.wb-schema-field > label {
+  color: var(--ds-text-2);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.wb-schema-field > label small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ds-text-3);
+  font-size: 9.5px;
+  font-weight: 400;
+}
+
+.wb-schema-field input,
+.wb-schema-field select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--ds-border);
+  border-radius: 6px;
+  background: var(--ds-surface);
+  color: var(--ds-text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.wb-schema-field.is-complete input,
+.wb-schema-field.is-complete select {
+  border-color: #b7d9bf;
+  background: #fbfefb;
+}
+
+.wb-schema-complete {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--ds-success-soft);
+  color: var(--ds-success);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.wb-schema-note {
+  margin: 10px 0 0;
+  color: var(--ds-text-3);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.wb-input-with-suffix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-input-with-suffix input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-input-with-suffix > span {
+  flex-shrink: 0;
+  color: var(--ds-text-3);
+  font-size: 11px;
 }
 
 .wb-field {

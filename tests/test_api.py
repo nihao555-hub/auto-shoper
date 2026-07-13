@@ -629,6 +629,49 @@ def test_prepare_official_listing_merges_trusted_store_defaults() -> None:
     assert "<value>100000015</value>" in body["xml"]
 
 
+def test_prepare_official_listing_builds_complex_values_from_api_field_paths() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <field id="shippingTemplate" type="complex">
+        <fields>
+          <field id="templateType" type="singleCheck">
+            <rules><rule name="requiredRule" value="true"/></rules>
+            <options><option value="aliLogistics"/></options>
+          </field>
+          <field id="shippingTemplateId" type="input">
+            <rules><rule name="requiredRule" value="true"/></rules>
+          </field>
+        </fields>
+      </field>
+    </schema>
+    """
+    response = client.post(
+        "/api/v1/products/official-listing/prepare",
+        json={
+            "category_id": "123",
+            "schema_data": schema_xml,
+            "fields": {
+                "category_id": {"value": "123", "source": "user_confirmed"},
+                "shippingTemplate.templateType": {
+                    "value": "aliLogistics",
+                    "source": "account_default",
+                },
+                "shippingTemplate.shippingTemplateId": {
+                    "value": "42",
+                    "source": "account_default",
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready_to_draft"] is True
+    assert body["missing_fields"] == []
+    assert '<field id="shippingTemplateId"' in body["xml"]
+    assert "<value>42</value>" in body["xml"]
+
+
 def test_prepare_official_listing_rejects_ai_business_fact_and_category_mismatch() -> None:
     client = TestClient(app)
     schema_xml = """

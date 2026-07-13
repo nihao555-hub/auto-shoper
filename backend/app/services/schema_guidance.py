@@ -52,7 +52,10 @@ def _collect(
             name=field.name,
             type=field.type,
             required=field.required,
-            manual_fact=is_manual_fact_field(key),
+            manual_fact=(
+                is_manual_fact_field(key)
+                or is_manual_fact_field(field.name or "")
+            ),
             max_length=_max_length(field.rules),
             tip=_tip(field.rules),
             options=field.options[:MAX_OPTIONS_PER_FIELD],

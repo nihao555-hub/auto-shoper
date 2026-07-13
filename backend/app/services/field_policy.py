@@ -42,12 +42,17 @@ STORE_DEFAULT_ALIASES = {
     "customizationpolicy",
     "detailpagetemplate",
     "detailtemplate",
+    "fobunittype",
     "imagestyleprompt",
     "inventorycode",
+    "origin",
+    "placeoforigin",
+    "countryoforigin",
     "photobankgroupid",
     "priceunit",
     "productgroupid",
     "servicepolicy",
+    "shippingtemplate",
     "shippingtemplateid",
     "warehouseid",
 }
@@ -106,10 +111,7 @@ def validate_product_fields(
     missing = sorted(
         name
         for name in required
-        if (
-            (field := get_listing_field(effective, name)) is None
-            or field.value in (None, "", [], {})
-        )
+        if not _field_or_descendant_present(effective, name)
     )
     manual_keys = {
         _compact_field_name(name)
@@ -169,6 +171,21 @@ def get_listing_field(
     return None
 
 
+def _field_or_descendant_present(
+    fields: dict[str, DraftField],
+    field_name: str,
+) -> bool:
+    direct = get_listing_field(fields, field_name)
+    if direct is not None and direct.value not in (None, "", [], {}):
+        return True
+    target = field_name.lower().replace("/", ".").rstrip(".")
+    return any(
+        name.lower().replace("/", ".").startswith(f"{target}.")
+        and field.value not in (None, "", [], {})
+        for name, field in fields.items()
+    )
+
+
 def is_store_default_field(field_name: str) -> bool:
     normalized = _compact_field_name(field_name)
     parts = {
@@ -188,6 +205,10 @@ def is_manual_fact_field(field_name: str) -> bool:
         normalized in MANUAL_FIELD_KEYS
         or normalized in MANUAL_FACT_ALIAS_KEYS
         or parts & MANUAL_FACT_ALIAS_KEYS
+        or any(
+            len(alias) >= 5 and alias in normalized
+            for alias in MANUAL_FACT_ALIAS_KEYS
+        )
     )
 
 

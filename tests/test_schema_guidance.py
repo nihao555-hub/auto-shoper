@@ -37,6 +37,7 @@ def test_build_schema_guidance_separates_ai_and_manual_fields() -> None:
     assert "productTitle" in ai_fields
     assert ai_fields["productTitle"].max_length == 128
     assert "icbuCatProp.p-use" in ai_fields
+    assert "icbuCatProp.p-material" in manual_fields
     # price is a business/human fact the AI must not guess.
     assert "price" in manual_fields
 

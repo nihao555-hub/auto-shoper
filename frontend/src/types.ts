@@ -78,7 +78,30 @@ export type ProductImage = {
   name: string;
   sourceFile?: File;
   photoBankUrl?: string;
+  photoBankFileId?: string;
   source?: "upload" | "photobank" | "generated";
+};
+
+export type SchemaOption = {
+  display_name?: string;
+  value: string;
+};
+
+export type SchemaFieldGuidance = {
+  field: string;
+  name?: string;
+  type?: string;
+  required: boolean;
+  manual_fact: boolean;
+  max_length?: number;
+  tip?: string;
+  options: SchemaOption[];
+};
+
+export type SchemaGuidanceResult = {
+  ai_fillable_fields: SchemaFieldGuidance[];
+  manual_fact_fields: SchemaFieldGuidance[];
+  required_field_ids: string[];
 };
 
 export type ProductRecord = {
@@ -105,6 +128,8 @@ export type ProductRecord = {
   errors: string[];
   draftProductId?: string;
   schemaData?: Record<string, unknown> | string;
+  schemaGuidance?: SchemaGuidanceResult;
+  schemaFields?: Record<string, DraftField>;
   isDemo?: boolean;
 };
 
