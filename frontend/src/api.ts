@@ -1,4 +1,5 @@
 import type {
+  AlibabaCategoryLevel,
   AlibabaConnectedStore,
   AlibabaOAuthStatus,
   AlibabaStoreDirectory,
@@ -380,6 +381,11 @@ export const findPhotoBankFileId = (payload: Record<string, unknown>): string | 
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
     await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
+  );
+
+export const listCategoryChildren = async (categoryId: string): Promise<AlibabaCategoryLevel> =>
+  parseResponse<AlibabaCategoryLevel>(
+    await apiFetch(`${API_ROOT}/alibaba/categories/${encodeURIComponent(categoryId)}/children`),
   );
 
 export const getSchemaGuidance = async (
