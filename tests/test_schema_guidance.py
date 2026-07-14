@@ -64,6 +64,34 @@ def test_unknown_schema_fields_default_to_merchant_not_ai() -> None:
     assert guidance.manual_fact_fields[0].responsibility_label == "客户填写"
 
 
+def test_legal_description_does_not_become_ai_owned_by_name_collision() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="patentDescription" name="Patent description" type="input">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    assert guidance.manual_fact_fields[0].responsibility == "merchant"
+
+
+def test_origin_is_a_product_fact_not_an_automatic_store_default() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="placeOfOrigin" name="Place of origin" type="singleCheck">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        '<options><option displayName="China" value="CN"/></options>'
+        "</field>"
+        "</itemSchema>"
+    )
+    field = build_schema_guidance(schema).manual_fact_fields[0]
+
+    assert field.responsibility == "business_system"
+
+
 def test_guidance_marks_async_choice_fields() -> None:
     schema = (
         "<itemSchema>"

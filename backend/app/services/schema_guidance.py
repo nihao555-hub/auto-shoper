@@ -86,19 +86,7 @@ def _responsibility(
     str,
     list[FieldSource],
 ]:
-    key_result = schema_field_responsibility(key)
-    name_result = schema_field_responsibility(name)
-    priority = {
-        "store_default": 3,
-        "business_system": 2,
-        "ai_candidate": 1,
-        "merchant": 0,
-    }
-    return (
-        key_result
-        if priority[key_result[0]] >= priority[name_result[0]]
-        else name_result
-    )
+    return schema_field_responsibility(f"{key}.{name}")
 
 
 def _max_length(rules: list[SchemaRule]) -> int | None:

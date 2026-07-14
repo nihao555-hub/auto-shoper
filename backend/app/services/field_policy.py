@@ -47,9 +47,6 @@ STORE_DEFAULT_ALIASES = {
     "fobunittype",
     "imagestyleprompt",
     "inventorycode",
-    "origin",
-    "placeoforigin",
-    "countryoforigin",
     "photobankgroupid",
     "priceunit",
     "productgroupid",
@@ -63,6 +60,7 @@ MANUAL_FACT_ALIASES = {
     "categoryid",
     "certification",
     "certifications",
+    "composition",
     "currency",
     "deliverytime",
     "dimension",
@@ -70,14 +68,20 @@ MANUAL_FACT_ALIASES = {
     "fob",
     "hs_code",
     "inventory",
+    "manufacturer",
+    "model",
+    "modelnumber",
     "ladderprice",
     "leadtime",
     "logistics",
     "material",
+    "minorderquantity",
     "moq",
     "origin",
     "package",
     "packaging",
+    "barcode",
+    "carton",
     "packagedimension",
     "packageheight",
     "packagelength",
@@ -94,6 +98,15 @@ MANUAL_FACT_ALIASES = {
     "skustock",
     "stock",
     "supplyquantity",
+    "supplyability",
+    "productioncapacity",
+    "paymentterm",
+    "tradeterm",
+    "incoterm",
+    "gtin",
+    "ean",
+    "upc",
+    "mpn",
     "weight",
 }
 MANUAL_FIELD_KEYS = {_compact_field_name(name) for name in MANUAL_FIELD_NAMES}
@@ -119,9 +132,32 @@ AI_ASSISTED_ALIASES = {
     "usage",
     "use",
 }
+MERCHANT_CONFIRMATION_ALIASES = {
+    "aftersaleslimit",
+    "authorization",
+    "brandrights",
+    "categoryspecificdeclaration",
+    "claim",
+    "compliancestatement",
+    "copyright",
+    "customizationlimit",
+    "dangerousgoodsdeclaration",
+    "declaration",
+    "imagerights",
+    "ownership",
+    "patent",
+    "productrights",
+    "regulatorydeclaration",
+    "safetydeclaration",
+    "specialdeclaration",
+    "trademark",
+    "warrantyterms",
+}
 BUSINESS_SYSTEM_ALIASES = {
+    "barcode",
     "brand",
     "capacity",
+    "carton",
     "certification",
     "composition",
     "currency",
@@ -129,23 +165,38 @@ BUSINESS_SYSTEM_ALIASES = {
     "dimension",
     "hs_code",
     "inventory",
+    "manufacturer",
     "ladderprice",
     "leadtime",
     "logistics",
     "material",
     "model",
+    "modelnumber",
+    "minorderquantity",
     "moq",
     "origin",
     "package",
     "port",
     "price",
+    "productioncapacity",
+    "paymentterm",
     "shipping",
     "sku",
     "stock",
     "supplyquantity",
+    "supplyability",
+    "tradeterm",
+    "incoterm",
+    "gtin",
+    "ean",
+    "upc",
+    "mpn",
     "weight",
 }
 AI_ASSISTED_KEYS = {_compact_field_name(name) for name in AI_ASSISTED_ALIASES}
+MERCHANT_CONFIRMATION_KEYS = {
+    _compact_field_name(name) for name in MERCHANT_CONFIRMATION_ALIASES
+}
 BUSINESS_SYSTEM_KEYS = {_compact_field_name(name) for name in BUSINESS_SYSTEM_ALIASES}
 
 
@@ -262,6 +313,22 @@ def is_manual_fact_field(field_name: str) -> bool:
     )
 
 
+def is_merchant_confirmation_field(field_name: str) -> bool:
+    normalized = _compact_field_name(field_name)
+    parts = {
+        _compact_field_name(part)
+        for part in field_name.replace("/", ".").split(".")
+    }
+    return bool(
+        normalized in MERCHANT_CONFIRMATION_KEYS
+        or parts & MERCHANT_CONFIRMATION_KEYS
+        or any(
+            len(alias) >= 5 and alias in normalized
+            for alias in MERCHANT_CONFIRMATION_KEYS
+        )
+    )
+
+
 def is_ai_assisted_field(field_name: str) -> bool:
     normalized = _compact_field_name(field_name)
     parts = {
@@ -270,6 +337,7 @@ def is_ai_assisted_field(field_name: str) -> bool:
     }
     return bool(
         not is_manual_fact_field(field_name)
+        and not is_merchant_confirmation_field(field_name)
         and (
             normalized in AI_ASSISTED_KEYS
             or parts & AI_ASSISTED_KEYS
@@ -300,15 +368,15 @@ def schema_field_responsibility(
                 FieldSource.BUSINESS_SYSTEM,
             ],
         )
-    if is_ai_assisted_field(field_name):
+    if is_merchant_confirmation_field(field_name):
         return (
-            "ai_candidate",
-            "AI 先填·客户确认",
-            "AI 只能生成候选，客户确认后才能提交",
+            "merchant",
+            "客户填写",
+            "涉及声明、权利或承诺，必须由客户提供并确认",
             [
-                FieldSource.IMAGE_EXTRACTED,
-                FieldSource.AI_GENERATED,
+                FieldSource.USER_PROVIDED,
                 FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
             ],
         )
     normalized = _compact_field_name(field_name)
@@ -323,6 +391,17 @@ def schema_field_responsibility(
             [
                 FieldSource.BUSINESS_SYSTEM,
                 FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+            ],
+        )
+    if is_ai_assisted_field(field_name):
+        return (
+            "ai_candidate",
+            "AI 先填·客户确认",
+            "AI 只能生成候选，客户确认后才能提交",
+            [
+                FieldSource.IMAGE_EXTRACTED,
+                FieldSource.AI_GENERATED,
                 FieldSource.USER_CONFIRMED,
             ],
         )

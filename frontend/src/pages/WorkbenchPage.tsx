@@ -2881,6 +2881,8 @@ function WbInspector({
   for (const field of requiredSchemaFields) {
     responsibilityCounts[field.responsibility] += 1;
   }
+  const aiCandidateCount = responsibilityCounts.ai_candidate;
+  const humanFactCount = requiredSchemaFields.length - aiCandidateCount;
   const inputSchemaFields = requiredSchemaFields.filter((field) => {
     if (isImageSchemaField(field) || isTitleSchemaField(field)) {
       return false;
@@ -3106,14 +3108,21 @@ function WbInspector({
             <div className="wb-schema-heading">
               <div>
                 <h3>Alibaba API 实时必填</h3>
-                <p>字段由当前叶子类目 Schema 返回，未知字段默认交给客户，不交给 AI。</p>
+                <p>先由 API 决定字段，再决定谁提供；未知字段一律不交给 AI。</p>
               </div>
             </div>
-            <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
+            <div className="wb-schema-decision">
               <span className="is-ai">
-                <strong>{responsibilityCounts.ai_candidate}</strong>
-                AI 候选
+                <strong>{aiCandidateCount} 项 AI 可先填</strong>
+                <small>仅文案和图片可见属性，全部需要客户确认</small>
               </span>
+              <span className="is-human">
+                <strong>{humanFactCount} 项 AI 不得填写</strong>
+                <small>交易、SKU、供应链、包装、履约、合规、权利及未知字段</small>
+              </span>
+            </div>
+            <p className="wb-schema-source-title">人工事实来源细分</p>
+            <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
               <span className="is-default">
                 <strong>{responsibilityCounts.store_default}</strong>
                 店铺默认
@@ -3130,17 +3139,34 @@ function WbInspector({
             <details className="wb-schema-matrix">
               <summary>查看全部 {requiredSchemaFields.length} 个必填字段与责任</summary>
               <div>
-                {requiredSchemaFields.map((field) => {
-                  const value = getSchemaFieldValue(product, field);
-                  return (
-                    <p key={field.field}>
-                      <span>{schemaFieldLabel(field)}</span>
-                      <b>{schemaFieldControlLabel(field)}</b>
-                      <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
-                      <small>{hasSchemaValue(value) ? "已带入" : "待补充"}</small>
-                    </p>
-                  );
-                })}
+                <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
+                {requiredSchemaFields
+                  .filter((field) => field.responsibility === "ai_candidate")
+                  .map((field) => {
+                    const value = getSchemaFieldValue(product, field);
+                    return (
+                      <p key={field.field}>
+                        <span>{schemaFieldLabel(field)}</span>
+                        <b>{schemaFieldControlLabel(field)}</b>
+                        <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                        <small>{hasSchemaValue(value) ? "已确认" : "待确认"}</small>
+                      </p>
+                    );
+                  })}
+                <h4>AI 不得填写（{humanFactCount}）</h4>
+                {requiredSchemaFields
+                  .filter((field) => field.responsibility !== "ai_candidate")
+                  .map((field) => {
+                    const value = getSchemaFieldValue(product, field);
+                    return (
+                      <p key={field.field}>
+                        <span>{schemaFieldLabel(field)}</span>
+                        <b>{schemaFieldControlLabel(field)}</b>
+                        <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                        <small>{hasSchemaValue(value) ? "已带入" : "待补充"}</small>
+                      </p>
+                    );
+                  })}
               </div>
             </details>
             {inputSchemaFields.length ? (
@@ -4599,7 +4625,8 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
     if (hasSchemaValue(schemaFields[field.field]?.value)) {
       continue;
     }
-    const defaultValue = schemaDefaultForField(field, settings);
+    const defaultValue =
+      field.responsibility === "store_default" ? schemaDefaultForField(field, settings) : null;
     if (defaultValue) {
       schemaFields[field.field] = {
         value: defaultValue,

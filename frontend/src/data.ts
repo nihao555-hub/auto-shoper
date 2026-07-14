@@ -179,7 +179,7 @@ const demoManualSchemaFields = [
   demoGuidanceField("packageWidth", "包装宽度", "input", "business_system"),
   demoGuidanceField("packageHeight", "包装高度", "input", "business_system"),
   demoGuidanceField("leadTime", "交期", "input", "business_system"),
-  demoGuidanceField("placeOfOrigin", "原产地", "singleCheck", "store_default", [
+  demoGuidanceField("placeOfOrigin", "原产地", "singleCheck", "business_system", [
     { display_name: "中国", value: "CN" },
     { display_name: "越南", value: "VN" },
     { display_name: "印度", value: "IN" },
@@ -244,7 +244,7 @@ const demoSchemaFields = (
     packageWidth: { value: productFacts.packageWidth, source: "business_system" },
     packageHeight: { value: productFacts.packageHeight, source: "business_system" },
     leadTime: { value: productFacts.leadTime, source: "business_system" },
-    placeOfOrigin: { value: "CN", source: "account_default" },
+    placeOfOrigin: { value: "CN", source: "business_system" },
   };
 };
 
