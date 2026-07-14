@@ -119,7 +119,7 @@ def test_category_children_endpoint_loads_live_child_details() -> None:
     try:
         response = TestClient(app).get("/api/v1/alibaba/categories/0/children")
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_alibaba_client, None)
 
     assert response.status_code == 200
     assert response.json()["categories"] == [
