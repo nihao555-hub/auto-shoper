@@ -26,6 +26,7 @@ import {
   X,
   XCircle,
 } from "@phosphor-icons/react";
+import { type TCountryCode, type TLanguageCode, countries, languages } from "countries-list";
 import {
   type ChangeEvent,
   type DragEvent,
@@ -94,22 +95,48 @@ type TargetMarket = {
   languageLabel: string;
 };
 
-const targetMarkets: TargetMarket[] = [
-  { code: "US", label: "美国", languageCode: "en-US", languageLabel: "英语" },
-  { code: "DE", label: "德国", languageCode: "de-DE", languageLabel: "德语" },
-  { code: "FR", label: "法国", languageCode: "fr-FR", languageLabel: "法语" },
-  { code: "ES", label: "西班牙", languageCode: "es-ES", languageLabel: "西班牙语" },
-  { code: "IT", label: "意大利", languageCode: "it-IT", languageLabel: "意大利语" },
-  { code: "JP", label: "日本", languageCode: "ja-JP", languageLabel: "日语" },
-  { code: "KR", label: "韩国", languageCode: "ko-KR", languageLabel: "韩语" },
-  { code: "SA", label: "沙特阿拉伯", languageCode: "ar-SA", languageLabel: "阿拉伯语" },
-  { code: "BR", label: "巴西", languageCode: "pt-BR", languageLabel: "葡萄牙语" },
-  { code: "MX", label: "墨西哥", languageCode: "es-MX", languageLabel: "西班牙语" },
-  { code: "ID", label: "印度尼西亚", languageCode: "id-ID", languageLabel: "印度尼西亚语" },
-  { code: "TH", label: "泰国", languageCode: "th-TH", languageLabel: "泰语" },
-  { code: "VN", label: "越南", languageCode: "vi-VN", languageLabel: "越南语" },
-  { code: "RU", label: "俄罗斯", languageCode: "ru-RU", languageLabel: "俄语" },
-];
+type TargetCountry = {
+  code: TCountryCode;
+  label: string;
+  defaultLanguageCode: TLanguageCode;
+};
+
+type TargetLanguage = {
+  code: TLanguageCode;
+  label: string;
+};
+
+const regionNames = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+const languageNames = new Intl.DisplayNames(["zh-CN"], { type: "language" });
+
+const targetCountries: TargetCountry[] = Object.entries(countries)
+  .map(([code, country]) => ({
+    code: code as TCountryCode,
+    label: regionNames.of(code) ?? country.name,
+    defaultLanguageCode: country.languages[0] ?? "en",
+  }))
+  .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+const targetLanguages: TargetLanguage[] = Object.entries(languages)
+  .map(([code, language]) => ({
+    code: code as TLanguageCode,
+    label: languageNames.of(code) ?? language.name,
+  }))
+  .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+const getTargetMarket = (countryCode: string, languageCode: string): TargetMarket | null => {
+  const country = targetCountries.find((item) => item.code === countryCode);
+  const language = targetLanguages.find((item) => item.code === languageCode);
+  if (!country || !language) {
+    return null;
+  }
+  return {
+    code: country.code,
+    label: country.label,
+    languageCode: `${language.code}-${country.code}`,
+    languageLabel: language.label,
+  };
+};
 
 const hasMarketTranslation = (
   product: ProductRecord,
@@ -250,6 +277,7 @@ export function WorkbenchPage({
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [targetMarketCode, setTargetMarketCode] = useState("");
+  const [targetLanguageCode, setTargetLanguageCode] = useState("");
   const [translationBusy, setTranslationBusy] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
@@ -414,7 +442,7 @@ export function WorkbenchPage({
       product.stage === "publishing" ||
       product.stage === "published",
   );
-  const targetMarket = targetMarkets.find((market) => market.code === targetMarketCode) ?? null;
+  const targetMarket = getTargetMarket(targetMarketCode, targetLanguageCode);
   const translatedProducts = draftedProducts.filter((product) =>
     hasMarketTranslation(product, targetMarket),
   );
@@ -427,6 +455,11 @@ export function WorkbenchPage({
     draftedProducts.every(
       (product) => hasMarketTranslation(product, targetMarket) && product.translation.confirmed,
     );
+  const changeTargetCountry = (countryCode: string) => {
+    setTargetMarketCode(countryCode);
+    const country = targetCountries.find((item) => item.code === countryCode);
+    setTargetLanguageCode(country?.defaultLanguageCode ?? "");
+  };
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
     (product) =>
@@ -1093,13 +1126,13 @@ export function WorkbenchPage({
       return;
     }
     if (
-      targetMarket.languageCode !== "en-US" &&
+      !targetMarket.languageCode.startsWith("en-") &&
       (!backendConnected || !capabilities?.model_credentials_configured)
     ) {
       notify(
         "error",
         !backendConnected ? "翻译服务暂不可用" : "AI 翻译服务尚未配置",
-        "可以选择美国英语保留原文，或联系管理员配置现有 AI Provider。",
+        "可以选择英语保留原文，或联系管理员配置现有 AI Provider。",
       );
       return;
     }
@@ -1108,19 +1141,18 @@ export function WorkbenchPage({
     const results = await Promise.all(
       draftedProducts.map(async (product) => {
         try {
-          const response =
-            targetMarket.languageCode === "en-US"
-              ? {
-                  title: product.title,
-                  keywords: product.keywords,
-                  selling_points: product.sellingPoints,
-                  description: product.description,
-                }
-              : await translateProductContent(
-                  product,
-                  targetMarket.languageCode,
-                  targetMarket.languageLabel,
-                );
+          const response = targetMarket.languageCode.startsWith("en-")
+            ? {
+                title: product.title,
+                keywords: product.keywords,
+                selling_points: product.sellingPoints,
+                description: product.description,
+              }
+            : await translateProductContent(
+                product,
+                targetMarket.languageCode,
+                targetMarket.languageLabel,
+              );
           const translation: ProductTranslation = {
             targetMarketCode: targetMarket.code,
             targetMarketLabel: targetMarket.label,
@@ -1536,6 +1568,7 @@ export function WorkbenchPage({
                 setInspectorOpen(false);
                 setPublishDialogOpen(false);
                 setTargetMarketCode("");
+                setTargetLanguageCode("");
               }}
             >
               <ArrowCounterClockwise size={16} />
@@ -1684,10 +1717,13 @@ export function WorkbenchPage({
           {step === 4 ? (
             <TranslationStep
               products={draftedProducts}
-              targetMarkets={targetMarkets}
+              targetCountries={targetCountries}
+              targetLanguages={targetLanguages}
               targetMarketCode={targetMarketCode}
+              targetLanguageCode={targetLanguageCode}
               busy={translationBusy}
-              onTargetMarketChange={setTargetMarketCode}
+              onTargetMarketChange={changeTargetCountry}
+              onTargetLanguageChange={setTargetLanguageCode}
               onTranslate={() => void translateDrafts()}
               onChange={changeTranslation}
               onConfirm={confirmTranslation}
@@ -2869,17 +2905,10 @@ function FactsStep({
 
   return (
     <div className="wb-facts">
-      <div className="wb-required-summary">
-        <CheckCircle size={20} weight="fill" />
-        <div>
-          <strong>仅填写 Alibaba 当前类目仍缺少的必填项</strong>
-          <p>
-            系统会自动带入图片、AI 已确认内容和店铺默认值；右侧只显示 API 判定仍需你提供的真实信息。
-          </p>
-        </div>
-        <span>{remainingCount ? `${remainingCount} 个商品待补充` : "已全部完成"}</span>
-      </div>
       <div className="wb-toolbar">
+        <span className={`wb-facts-count ${remainingCount ? "" : "is-complete"}`}>
+          {remainingCount ? `${remainingCount} 个商品待补充` : "已全部完成"}
+        </span>
         <label className="wb-select">
           <span className="sr-only">校验状态</span>
           <select
@@ -2912,10 +2941,10 @@ function FactsStep({
       </div>
 
       <div className="wb-bulk-fill">
-        <strong>相同信息可一次填写（可选）</strong>
+        <strong>批量补空缺</strong>
         <small>
           {selectedCount ? `套用到选中的 ${selectedCount} 个商品` : "未勾选时套用到全部商品"}
-          ，只填空缺、不覆盖已有值；不同商品请直接点击该商品填写
+          ，不覆盖已有值
         </small>
         <label>
           <span>价格（USD）</span>
@@ -3183,12 +3212,6 @@ function WbInspector({
           <span>
             {missingFacts.length ? `还需填写 ${missingFacts.length} 项` : "必要信息已完成"}
           </span>
-          <small>
-            系统已处理类目、图片、计量单位和运费模板
-            {!settings.priceUnit || !settings.shippingTemplateId
-              ? "；缺少店铺默认值时会提示设置"
-              : ""}
-          </small>
         </div>
 
         <section className="wb-inspector-section wb-image-generation wb-image-generation-prominent">
@@ -3367,39 +3390,28 @@ function WbInspector({
         {product.schemaGuidance ? (
           <section className="wb-inspector-section wb-schema-required">
             <div className="wb-schema-heading">
-              <div>
-                <h3>Alibaba API 实时必填</h3>
-                <p>先由 API 决定字段，再决定谁提供；未知字段一律不交给 AI。</p>
-              </div>
-            </div>
-            <div className="wb-schema-decision">
-              <span className="is-ai">
-                <strong>{aiCandidateCount} 项 AI 可先填</strong>
-                <small>仅文案和图片可见属性，全部需要客户确认</small>
-              </span>
-              <span className="is-human">
-                <strong>{humanFactCount} 项 AI 不得填写</strong>
-                <small>交易、SKU、供应链、包装、履约、合规、权利及未知字段</small>
-              </span>
-            </div>
-            <p className="wb-schema-source-title">人工事实来源细分</p>
-            <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
-              <span className="is-default">
-                <strong>{responsibilityCounts.store_default}</strong>
-                店铺默认
-              </span>
-              <span className="is-system">
-                <strong>{responsibilityCounts.business_system}</strong>
-                ERP / 客户事实
-              </span>
-              <span className="is-merchant">
-                <strong>{responsibilityCounts.merchant}</strong>
-                客户填写
-              </span>
+              <h3>需补充字段（{inputSchemaFields.length}）</h3>
             </div>
             <details className="wb-schema-matrix">
-              <summary>查看全部 {requiredSchemaFields.length} 个必填字段与责任</summary>
+              <summary>字段来源与 AI 边界</summary>
               <div>
+                <p className="wb-schema-policy">
+                  AI 仅可起草文案与图片可见属性；价格、SKU、库存、材质和合规必须使用真实值。
+                </p>
+                <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
+                  <span className="is-default">
+                    <strong>{responsibilityCounts.store_default}</strong>
+                    店铺默认
+                  </span>
+                  <span className="is-system">
+                    <strong>{responsibilityCounts.business_system}</strong>
+                    ERP / 客户事实
+                  </span>
+                  <span className="is-merchant">
+                    <strong>{responsibilityCounts.merchant}</strong>
+                    客户填写
+                  </span>
+                </div>
                 <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
                 {requiredSchemaFields
                   .filter((field) => field.responsibility === "ai_candidate")
@@ -3460,10 +3472,7 @@ function WbInspector({
                           </i>
                         </span>
                         <small>
-                          {field.tip ||
-                            (hasSchemaValue(value)
-                              ? "已填写，可继续修改"
-                              : field.responsibility_reason)}
+                          {field.tip || (hasSchemaValue(value) ? "已填写" : "请提供真实值")}
                         </small>
                       </div>
                       {field.async_options && !field.options.length ? (
@@ -3551,10 +3560,6 @@ function WbInspector({
                 <span>当前类目要求的必填项已全部完成</span>
               </div>
             )}
-            <p className="wb-schema-note">
-              共 {requiredSchemaFields.length} 个 API 必填项；系统会隐藏已从图片、AI
-              确认结果或店铺设置带入的字段。
-            </p>
           </section>
         ) : (
           <>
@@ -4152,10 +4157,13 @@ function DraftDetailDrawer({
 
 function TranslationStep({
   products,
-  targetMarkets,
+  targetCountries,
+  targetLanguages,
   targetMarketCode,
+  targetLanguageCode,
   busy,
   onTargetMarketChange,
+  onTargetLanguageChange,
   onTranslate,
   onChange,
   onConfirm,
@@ -4163,10 +4171,13 @@ function TranslationStep({
   onContinue,
 }: {
   products: ProductRecord[];
-  targetMarkets: TargetMarket[];
+  targetCountries: TargetCountry[];
+  targetLanguages: TargetLanguage[];
   targetMarketCode: string;
+  targetLanguageCode: string;
   busy: boolean;
   onTargetMarketChange: (code: string) => void;
+  onTargetLanguageChange: (code: string) => void;
   onTranslate: () => void;
   onChange: (
     productId: string,
@@ -4179,7 +4190,16 @@ function TranslationStep({
   onContinue: () => void;
 }) {
   const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
-  const market = targetMarkets.find((item) => item.code === targetMarketCode) ?? null;
+  const market = getTargetMarket(targetMarketCode, targetLanguageCode);
+  const countryLanguageCodes = targetMarketCode
+    ? (countries[targetMarketCode as TCountryCode]?.languages ?? [])
+    : [];
+  const countryLanguages = countryLanguageCodes
+    .map((code) => targetLanguages.find((language) => language.code === code))
+    .filter((language): language is TargetLanguage => Boolean(language));
+  const otherLanguages = targetLanguages.filter(
+    (language) => !countryLanguageCodes.includes(language.code),
+  );
   const activeProduct =
     products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
   const matchingTranslation =
@@ -4217,20 +4237,41 @@ function TranslationStep({
             value={targetMarketCode}
             onChange={(event) => onTargetMarketChange(event.target.value)}
           >
-            <option value="">请选择目标国家</option>
-            {targetMarkets.map((item) => (
+            <option value="">请选择国家或地区</option>
+            {targetCountries.map((item) => (
               <option key={item.code} value={item.code}>
                 {item.label}
               </option>
             ))}
           </select>
         </label>
-        <div className="translation-language-readonly">
-          <small>自动匹配语言</small>
-          <strong>
-            {market ? `${market.languageLabel} · ${market.languageCode}` : "等待选择"}
-          </strong>
-        </div>
+        <label>
+          <span>目标语言</span>
+          <select
+            value={targetLanguageCode}
+            onChange={(event) => onTargetLanguageChange(event.target.value)}
+            disabled={!targetMarketCode}
+          >
+            <option value="">请选择目标语言</option>
+            {countryLanguages.length ? (
+              <optgroup label="该国家 / 地区常用语言">
+                {countryLanguages.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.label}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            <optgroup label="其他语言">
+              {otherLanguages.map((language) => (
+                <option key={language.code} value={language.code}>
+                  {language.label}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <small>{market ? `发布文案语言：${market.languageCode}` : "可覆盖系统推荐语言"}</small>
+        </label>
         <div className="translation-scope">
           <span>翻译范围</span>
           <strong>标题 · 关键词 · 卖点 · 商品详情</strong>
