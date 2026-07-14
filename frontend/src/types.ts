@@ -256,6 +256,19 @@ export type AlibabaStoreDirectory = {
   stores: AlibabaConnectedStore[];
 };
 
+export type AlibabaCategoryOption = {
+  id: string;
+  name: string;
+  leaf: boolean;
+  level: number | null;
+  child_ids: string[];
+};
+
+export type AlibabaCategoryLevel = {
+  parent: AlibabaCategoryOption | null;
+  categories: AlibabaCategoryOption[];
+};
+
 export type ListingFieldGroup = {
   key: string;
   label: string;

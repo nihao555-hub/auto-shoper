@@ -55,6 +55,7 @@ from backend.app.models import (
     SchemaParseResult,
 )
 from backend.app.services.auth import get_current_user
+from backend.app.services.categories import category_children, extract_category_records
 from backend.app.services.field_policy import (
     effective_listing_fields,
     get_listing_field,
@@ -151,6 +152,44 @@ async def get_official_listing_flow() -> OfficialListingFlowResponse:
 @router.get("/alibaba/listing-field-matrix", response_model=list[ListingFieldGroup])
 async def get_listing_field_matrix() -> list[ListingFieldGroup]:
     return listing_field_groups()
+
+
+@router.get("/alibaba/categories/{category_id}/children")
+async def get_category_children(
+    category_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    payload = await _alibaba_call(client, "category_get", {"cat_id": category_id})
+    records = extract_category_records(payload)
+    parent, children, missing_child_ids = category_children(category_id, records)
+    if missing_child_ids:
+        semaphore = asyncio.Semaphore(5)
+
+        async def load_child(child_id: str) -> dict[str, Any]:
+            async with semaphore:
+                return await _alibaba_call(client, "category_get", {"cat_id": child_id})
+
+        child_payloads = await asyncio.gather(
+            *[load_child(child_id) for child_id in missing_child_ids]
+        )
+        for child_id, child_payload in zip(missing_child_ids, child_payloads, strict=True):
+            child_records = extract_category_records(child_payload)
+            child = next(
+                (record for record in child_records if record["id"] == child_id),
+                None,
+            )
+            if child is not None:
+                children.append(child)
+
+    unique_children = {
+        child["id"]: child
+        for child in children
+        if child["id"] != category_id
+    }
+    return {
+        "parent": parent,
+        "categories": sorted(unique_children.values(), key=lambda item: item["name"].casefold()),
+    }
 
 
 @router.get("/alibaba/categories/{category_id}")
