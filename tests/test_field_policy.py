@@ -169,6 +169,9 @@ def test_trade_supply_chain_and_compliance_fields_are_business_facts(
         "productRightsClaim",
         "warrantyTerms",
         "dangerousGoodsDeclaration",
+        "companyImage.images.imageURL",
+        "imageVideo",
+        "designAndSampleService",
     ],
 )
 def test_declarations_rights_and_commitments_require_merchant_input(

@@ -109,6 +109,22 @@ def test_guidance_marks_async_choice_fields() -> None:
     assert field.async_query_method == "top.category.options.get"
 
 
+def test_optionless_ai_looking_choice_defaults_to_merchant() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="productFeature" type="multiCheck">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    field = guidance.manual_fact_fields[0]
+    assert field.responsibility == "merchant"
+    assert "未返回可安全提交的选项" in field.responsibility_reason
+
+
 def test_guidance_prompt_lists_options_and_manual_fields() -> None:
     guidance = build_schema_guidance(SCHEMA_XML)
     prompt = render_guidance_prompt(guidance)

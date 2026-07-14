@@ -13,6 +13,7 @@ from backend.app.services.schema_rules import parse_schema_data
 
 MAX_OPTIONS_PER_FIELD = 40
 SKIPPED_TYPES = {"label", "hidden"}
+CHOICE_TYPES = {"singleCheck", "multiCheck"}
 
 
 def build_schema_guidance(
@@ -50,9 +51,19 @@ def _collect(
         and (bool(field.options) or not field.children)
     )
     if describable:
+        async_query_method = _rule_value(field.rules, "asyncQueryRule")
         responsibility, label, reason, allowed_sources = _responsibility(
             key, field.name or ""
         )
+        if (
+            responsibility == "ai_candidate"
+            and field.type in CHOICE_TYPES
+            and not field.options
+            and async_query_method is None
+        ):
+            responsibility, label, reason, allowed_sources = (
+                _unsupported_choice_responsibility()
+            )
         guidance = SchemaFieldGuidance(
             field=key,
             name=field.name,
@@ -63,8 +74,8 @@ def _collect(
             responsibility_label=label,
             responsibility_reason=reason,
             allowed_sources=allowed_sources,
-            async_options=_rule_value(field.rules, "asyncQueryRule") is not None,
-            async_query_method=_rule_value(field.rules, "asyncQueryRule"),
+            async_options=async_query_method is not None,
+            async_query_method=async_query_method,
             max_length=_max_length(field.rules),
             tip=_tip(field.rules),
             options=field.options[:MAX_OPTIONS_PER_FIELD],
@@ -87,6 +98,24 @@ def _responsibility(
     list[FieldSource],
 ]:
     return schema_field_responsibility(f"{key}.{name}")
+
+
+def _unsupported_choice_responsibility() -> tuple[
+    Literal["merchant"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    return (
+        "merchant",
+        "客户填写",
+        "Alibaba 选择字段未返回可安全提交的选项，必须由客户选择或等待选项加载",
+        [
+            FieldSource.USER_PROVIDED,
+            FieldSource.USER_CONFIRMED,
+            FieldSource.BUSINESS_SYSTEM,
+        ],
+    )
 
 
 def _max_length(rules: list[SchemaRule]) -> int | None:
