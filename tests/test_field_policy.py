@@ -1,5 +1,11 @@
+import pytest
+
 from backend.app.models import DraftField, FieldSource
-from backend.app.services.field_policy import MANUAL_FIELD_NAMES, validate_product_fields
+from backend.app.services.field_policy import (
+    MANUAL_FIELD_NAMES,
+    schema_field_responsibility,
+    validate_product_fields,
+)
 
 
 def trusted_fields() -> dict[str, DraftField]:
@@ -39,6 +45,20 @@ def test_schema_required_field_is_enforced() -> None:
     result = validate_product_fields(fields, ["voltage"])
     assert result.ready_to_publish is False
     assert result.missing_fields == ["voltage"]
+
+
+def test_complex_schema_parent_is_satisfied_by_trusted_child_fields() -> None:
+    fields = trusted_fields()
+    fields["shippingTemplate.shippingTemplateId"] = DraftField(
+        value="42",
+        source=FieldSource.ACCOUNT_DEFAULT,
+    )
+    result = validate_product_fields(
+        fields,
+        ["shippingTemplate", "shippingTemplate.shippingTemplateId"],
+    )
+    assert result.ready_to_publish is True
+    assert result.missing_fields == []
 
 
 def test_ai_source_requires_confirmation_even_without_client_flag() -> None:
@@ -92,3 +112,80 @@ def test_store_default_cannot_supply_per_product_price() -> None:
     assert result.ready_to_publish is False
     assert result.missing_fields == ["price"]
     assert result.invalid_default_fields == ["price"]
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "productTitle",
+        "searchKeyword",
+        "sellingPoint",
+        "productDescription",
+        "icbuCatProp.visibleColor",
+        "icbuCatProp.pattern",
+        "icbuCatProp.shape",
+        "icbuCatProp.application",
+    ],
+)
+def test_only_marketing_and_visible_fields_are_ai_candidates(field_name: str) -> None:
+    responsibility, _, _, _ = schema_field_responsibility(field_name)
+    assert responsibility == "ai_candidate"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "brandName",
+        "modelNumber",
+        "productMaterial",
+        "unitPrice",
+        "minOrderQuantity",
+        "availableStock",
+        "netWeight",
+        "grossWeight",
+        "packageSize",
+        "productionLeadTime",
+        "placeOfOrigin",
+        "hsCode",
+        "certificationName",
+        "paymentTerms",
+        "incoterm",
+        "portOfLoading",
+    ],
+)
+def test_trade_supply_chain_and_compliance_fields_are_business_facts(
+    field_name: str,
+) -> None:
+    responsibility, _, _, _ = schema_field_responsibility(field_name)
+    assert responsibility == "business_system"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "categorySpecificDeclaration",
+        "patentDescription",
+        "trademarkAuthorization",
+        "productRightsClaim",
+        "warrantyTerms",
+        "dangerousGoodsDeclaration",
+        "companyImage.images.imageURL",
+        "imageVideo",
+        "designAndSampleService",
+    ],
+)
+def test_declarations_rights_and_commitments_require_merchant_input(
+    field_name: str,
+) -> None:
+    responsibility, _, reason, _ = schema_field_responsibility(field_name)
+    assert responsibility == "merchant"
+    assert "必须由客户" in reason
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["currency", "fobUnitType", "warehouseId", "shippingTemplateId"],
+)
+def test_only_confirmed_store_configuration_uses_defaults(field_name: str) -> None:
+    responsibility, _, _, _ = schema_field_responsibility(field_name)
+    assert responsibility == "store_default"

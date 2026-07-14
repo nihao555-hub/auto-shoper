@@ -13,6 +13,12 @@ OPERATIONS = {
         purpose="获取类目发布 Schema 和动态必填规则",
         safety="可自动读取",
     ),
+    "category_schema_level_get": AlibabaOperation(
+        key="category_schema_level_get",
+        operation="/alibaba/icbu/category/schema/level/get",
+        purpose="根据已选上级属性加载联动枚举选项",
+        safety="只读取 Alibaba 动态选项，不生成或猜测枚举值",
+    ),
     "photo_upload": AlibabaOperation(
         key="photo_upload",
         operation="/alibaba/icbu/photobank/upload",

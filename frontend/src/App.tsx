@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   activateAlibabaStore,
+  disconnectAlibabaStore,
   getAlibabaStores,
   getCapabilities,
   getCurrentUser,
@@ -164,7 +165,6 @@ export default function App() {
   const [backendConnected, setBackendConnected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const oauthPopup = useRef<Window | null>(null);
-
   const [demoStoreId, setDemoStoreId] = useState<string>(demoActiveStoreId);
 
   const products = dataMode === "demo" ? demoProducts : liveProducts;
@@ -401,6 +401,25 @@ export default function App() {
     }
   };
 
+  const disconnectStore = async (storeId: string): Promise<boolean> => {
+    if (dataMode === "demo") {
+      notify("info", "演示店铺不会被解绑", "请切换到真实工作区后再操作。");
+      return false;
+    }
+    try {
+      await disconnectAlibabaStore(storeId);
+      if (user) {
+        window.localStorage.removeItem(settingsStorageKey(user.workspace_id, storeId));
+      }
+      await refreshWorkspace();
+      notify("success", "店铺已解绑", "本地授权令牌已移除，可随时重新授权。");
+      return true;
+    } catch (error) {
+      notify("error", "无法解绑店铺", error instanceof ApiError ? error.message : undefined);
+      return false;
+    }
+  };
+
   const signOut = async () => {
     try {
       await logout();
@@ -432,6 +451,12 @@ export default function App() {
       mode === "demo" ? "已进入演示空间" : "已切回真实工作区",
       mode === "demo" ? "演示操作不会影响真实店铺。" : "示例数据已隐藏。",
     );
+  };
+
+  const resetDemo = () => {
+    setDemoProducts(cloneDemoProducts());
+    setBatchId(createBatchId());
+    notify("info", "演示流程已重置", "已回到第 1 步，不会写入真实 Alibaba 店铺。");
   };
 
   const updateProducts = (nextProducts: ProductRecord[]) => {
@@ -492,9 +517,12 @@ export default function App() {
           onAuthorize={() => void authorizeAlibaba()}
           onSwitchStore={(storeId) => void switchStore(storeId)}
           onSyncStore={(storeId) => void syncStore(storeId)}
+          onDisconnectStore={disconnectStore}
+          disconnectEnabled={dataMode === "live"}
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
+          key={dataMode}
           batchId={batchId}
           activeStore={visibleStores.find((store) => store.id === visibleActiveStoreId) ?? null}
           capabilities={capabilities}
@@ -504,6 +532,7 @@ export default function App() {
           settings={settings}
           onProductsChange={updateProducts}
           onDataModeChange={changeDataMode}
+          onResetDemo={resetDemo}
           onOpenSettings={() => setSettingsOpen(true)}
           notify={notify}
         />

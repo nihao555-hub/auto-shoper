@@ -1,6 +1,6 @@
 # Alibaba.com 批量上品流程与 ICBU API 对照
 
-调研时间：2026-07-10。结论基于 Alibaba.com Seller Central、阿里开放平台公开文档和新版 GOP 调用示例。应用控制台中实际授权的方法、参数和限流规则仍是最终依据。
+调研时间：2026-07-14。结论基于 Alibaba.com Seller Central、阿里开放平台公开文档和新版 GOP 调用示例。应用控制台中实际授权的方法、参数和限流规则仍是最终依据。
 
 ## 结论
 
@@ -78,6 +78,7 @@
 | --- | --- | --- | --- |
 | 类目 | `/icbu/product/category/get` | `GET /api/v1/alibaba/categories/{category_id}` | 已封装；叶子类目仍需人工确认 |
 | 发布 Schema | `/alibaba/icbu/product/schema/get` | `GET /api/v1/alibaba/categories/{category_id}/schema` | 已封装 |
+| 联动枚举选项 | `/alibaba/icbu/category/schema/level/get` | `POST /api/v1/alibaba/categories/schema-level` | 已封装；提交当前 XML 后读取下一层 `options` |
 | Schema 解析 | 本地解析 `schema.get` XML | `POST /api/v1/alibaba/schemas/parse` | 已实现；提取必填、枚举、复杂字段和人工确认字段 |
 | Schema 填值 | 本地写入实时 Schema XML | `POST /api/v1/alibaba/schemas/build` | 已实现；支持标量、多值、复合、多复合和值属性，返回字段级错误 |
 | 官方流程清单 | 后台 Bulk Upload/Posting 流程 | `GET /api/v1/alibaba/listing-flow` | 已实现；用于前端/任务编排对标 |
@@ -154,9 +155,13 @@
 - 原产地、港口、HS Code、产能、交期和物流。
 - 定制能力、售后条款和服务限制。
 
+Schema 字段采用保守白名单：只有标题、关键词、描述、卖点以及明确可见的颜色、花纹、
+形状、用途等字段进入 AI 候选；价格、SKU、库存、材质、包装、履约和合规字段进入
+ERP/客户事实；无法识别的新字段默认由客户填写，不能因为“不在禁止列表”就交给 AI。
+
 全店通用的币种、计量单位、仓库、库存地点、图片银行分组、商品分组和运费模板
 可以保存为 `account_default`。白名单以外的字段不能使用店铺默认来源；价格、SKU、
-库存、材质、尺寸、重量、包装、交期和合规资料始终按单品校验。
+库存、材质、尺寸、重量、包装、交期、原产地和合规资料始终按单品校验。
 
 ## 公开依据
 

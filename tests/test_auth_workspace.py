@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.config import Settings, get_settings
-from backend.app.database import Database, get_database
+from backend.app.database import SQLITE_SCHEMA, Database, get_database
 from backend.app.main import app
 from backend.app.registration_codes import generate_registration_codes
 
@@ -252,3 +252,111 @@ def test_oauth_state_is_workspace_bound_and_one_time(workspace_database: Databas
     assert workspace_database.consume_oauth_state(state) == (user.workspace_id, user.id)
     assert workspace_database.consume_oauth_state(state) is None
     assert workspace_database.consume_oauth_state("unknown-state") is None
+
+
+def test_disconnect_store_removes_tokens_and_preserves_batch_history(
+    workspace_database: Database,
+) -> None:
+    user, _ = workspace_database.register(
+        email="owner@example.com",
+        password="strong-password",
+        display_name="Owner",
+        workspace_name="Example Trading",
+        registration_code="CODE-A",
+    )
+    other_user, _ = workspace_database.register(
+        email="other@example.com",
+        password="strong-password",
+        display_name="Other",
+        workspace_name="Other Trading",
+        registration_code="CODE-B",
+    )
+    fallback_store = workspace_database.upsert_store(
+        workspace_id=user.workspace_id,
+        provider_user_id="merchant-one",
+        login_id="merchant-one@example.com",
+        account="merchant-one",
+        access_token="first-access-token",
+        refresh_token=None,
+        expires_at=None,
+        refresh_expires_at=None,
+    )
+    disconnected_store = workspace_database.upsert_store(
+        workspace_id=user.workspace_id,
+        provider_user_id="merchant-two",
+        login_id="merchant-two@example.com",
+        account="merchant-two",
+        access_token="token-that-must-be-removed",
+        refresh_token="refresh-token-that-must-be-removed",
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        refresh_expires_at=datetime.now(UTC) + timedelta(days=90),
+    )
+    assert workspace_database.ensure_batch(
+        user.workspace_id,
+        disconnected_store.id,
+        "BATCH-PRESERVED",
+    )
+
+    client = TestClient(app)
+    client.cookies.set("auto_shoper_session", workspace_database.create_session(other_user.id))
+    forbidden = client.delete(f"/api/v1/alibaba/stores/{disconnected_store.id}")
+    assert forbidden.status_code == 404
+
+    client.cookies.set("auto_shoper_session", workspace_database.create_session(user.id))
+    response = client.delete(f"/api/v1/alibaba/stores/{disconnected_store.id}")
+    assert response.status_code == 204
+    assert workspace_database.get_store(user.workspace_id, disconnected_store.id) is None
+    active_store = workspace_database.get_active_store(user.workspace_id)
+    assert active_store is not None
+    assert active_store.id == fallback_store.id
+    assert workspace_database.list_batches(user.workspace_id)[0]["store_connection_id"] == (
+        disconnected_store.id
+    )
+
+    with sqlite3.connect(workspace_database.settings.database_path) as connection:
+        stored = connection.execute(
+            """
+            SELECT access_token_encrypted, refresh_token_encrypted, disconnected_at
+            FROM store_connections WHERE id = ?
+            """,
+            (disconnected_store.id,),
+        ).fetchone()
+    assert stored is not None
+    assert "token-that-must-be-removed" not in stored[0]
+    assert stored[1] is None
+    assert stored[2] is not None
+
+    repeated = client.delete(f"/api/v1/alibaba/stores/{disconnected_store.id}")
+    assert repeated.status_code == 404
+
+    reconnected_store = workspace_database.upsert_store(
+        workspace_id=user.workspace_id,
+        provider_user_id="merchant-two",
+        login_id="merchant-two@example.com",
+        account="merchant-two",
+        access_token="new-access-token",
+        refresh_token=None,
+        expires_at=None,
+        refresh_expires_at=None,
+    )
+    assert reconnected_store.id == disconnected_store.id
+    assert reconnected_store.active
+
+
+def test_existing_sqlite_database_adds_disconnect_marker(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing.db"
+    old_schema = SQLITE_SCHEMA.replace("    disconnected_at TEXT,\n", "")
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(old_schema)
+
+    Database(
+        Settings(
+            database_path=str(database_path),
+            registration_codes="",
+            token_encryption_key="test-only-token-encryption-key",
+        )
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        columns = connection.execute("PRAGMA table_info(store_connections)").fetchall()
+    assert "disconnected_at" in {str(column[1]) for column in columns}

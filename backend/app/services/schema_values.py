@@ -86,6 +86,7 @@ def _validate_and_fill(
     field_key = ".".join(part for part in path if part)
     field_type = field.attrib.get("type", "input")
     rules = _rules(field)
+    value = _with_option_attributes(field, value, rules)
 
     if _rule_is_true(rules, "disableRule") and supplied:
         errors.append(_issue(field_key, "disableRule", "Disabled field must not be submitted"))
@@ -464,6 +465,51 @@ def _option_values(field: ElementTree.Element) -> set[str]:
             value = option.attrib.get("value")
             if value is not None:
                 result.add(value)
+    return result
+
+
+def _with_option_attributes(
+    field: ElementTree.Element,
+    value: object,
+    rules: dict[str, list[dict[str, str]]],
+) -> object:
+    required_attributes = {
+        rule.get("value", "")
+        for rule in rules.get("valueAttributeRule", [])
+        if rule.get("value")
+    }
+    option_labels = _option_labels(field)
+    if not required_attributes or not option_labels:
+        return value
+    if field.attrib.get("type") in _MULTI_TYPES and isinstance(value, list):
+        return [
+            _with_required_attributes(item, option_labels, required_attributes)
+            for item in value
+        ]
+    return _with_required_attributes(value, option_labels, required_attributes)
+
+
+def _with_required_attributes(
+    value: object,
+    option_labels: dict[str, str],
+    required_attributes: set[str],
+) -> object:
+    text, attributes = _value_parts(value)
+    if text is None or text not in option_labels:
+        return value
+    completed = dict(attributes)
+    for attribute in required_attributes:
+        completed.setdefault(attribute, option_labels[text] if attribute == "text" else "")
+    return {"value": text, "attributes": completed}
+
+
+def _option_labels(field: ElementTree.Element) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for options in _children_named(field, "options"):
+        for option in _children_named(options, "option"):
+            value = option.attrib.get("value")
+            if value is not None:
+                result[value] = option.attrib.get("displayName", value)
     return result
 
 

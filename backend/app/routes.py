@@ -26,6 +26,7 @@ from backend.app.models import (
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
+    DraftField,
     ImageGenerationRequest,
     ImagePromptTemplate,
     ImageSlot,
@@ -37,6 +38,9 @@ from backend.app.models import (
     OfficialListingPrepareRequest,
     OfficialListingPublishRequest,
     OfficialListingValidationResult,
+    ParsedSchemaField,
+    ProductContentTranslationRequest,
+    ProductContentTranslationResponse,
     ProductImageAnalysis,
     ProductImageCandidate,
     ProductImageGenerationRequest,
@@ -187,6 +191,22 @@ async def get_schema(
         client,
         "schema_get",
         {"cat_id": category_id, "language": language},
+    )
+
+
+@router.post("/alibaba/categories/schema-level")
+async def get_category_schema_level(
+    request: AlibabaSchemaRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "category_schema_level_get",
+        {
+            "cat_id": request.category_id,
+            "language": request.language,
+            "xml": request.xml,
+        },
     )
 
 
@@ -475,6 +495,20 @@ async def analyze_product_image(
             category_hint,
             field_guidance,
         )
+    except AIProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/products/translate-content",
+    response_model=ProductContentTranslationResponse,
+)
+async def translate_product_content(
+    request: ProductContentTranslationRequest,
+    ai_client: Annotated[AIClient, Depends(get_ai_client)],
+) -> ProductContentTranslationResponse:
+    try:
+        return await ai_client.translate_product_content(request)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -915,12 +949,7 @@ def _prepare_official_listing(
     invalid_defaults = list(validation.invalid_default_fields)
     if category_mismatch:
         invalid_defaults.append("category_id")
-    top_level_ids = {field.id for field in parsed.fields}
-    values: dict[str, object] = {}
-    for field_id in top_level_ids:
-        field = get_listing_field(effective, field_id)
-        if field is not None and field.value not in (None, "", [], {}):
-            values[field_id] = field.value
+    values = _schema_values(parsed.fields, effective)
     schema = build_schema_xml(request.schema_data, values)
     ready = (
         validation.ready_to_publish
@@ -941,6 +970,40 @@ def _prepare_official_listing(
         schema_errors=schema.errors,
         schema_warnings=schema.warnings,
     )
+
+
+def _schema_values(
+    fields: list[ParsedSchemaField],
+    effective: dict[str, DraftField],
+) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for field in fields:
+        value = _schema_field_value(field, effective, [])
+        if value not in (None, "", [], {}):
+            values[field.id] = value
+    return values
+
+
+def _schema_field_value(
+    field: ParsedSchemaField,
+    effective: dict[str, DraftField],
+    parent_path: list[str],
+) -> object | None:
+    path = [*parent_path, field.id]
+    path_key = ".".join(part for part in path if part)
+    supplied = get_listing_field(effective, path_key)
+    if supplied is not None and supplied.value not in (None, "", [], {}):
+        return supplied.value
+    child_values: dict[str, object] = {}
+    for child in field.children:
+        value = _schema_field_value(child, effective, path)
+        if value not in (None, "", [], {}):
+            child_values[child.id] = value
+    if not child_values:
+        return None
+    if field.type == "multiComplex":
+        return [child_values]
+    return child_values
 
 
 def _require_prepared_listing(

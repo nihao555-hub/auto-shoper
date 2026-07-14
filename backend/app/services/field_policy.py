@@ -1,3 +1,5 @@
+from typing import Literal
+
 from backend.app.models import (
     DraftField,
     FieldSource,
@@ -42,12 +44,14 @@ STORE_DEFAULT_ALIASES = {
     "customizationpolicy",
     "detailpagetemplate",
     "detailtemplate",
+    "fobunittype",
     "imagestyleprompt",
     "inventorycode",
     "photobankgroupid",
     "priceunit",
     "productgroupid",
     "servicepolicy",
+    "shippingtemplate",
     "shippingtemplateid",
     "warehouseid",
 }
@@ -56,6 +60,7 @@ MANUAL_FACT_ALIASES = {
     "categoryid",
     "certification",
     "certifications",
+    "composition",
     "currency",
     "deliverytime",
     "dimension",
@@ -63,14 +68,20 @@ MANUAL_FACT_ALIASES = {
     "fob",
     "hs_code",
     "inventory",
+    "manufacturer",
+    "model",
+    "modelnumber",
     "ladderprice",
     "leadtime",
     "logistics",
     "material",
+    "minorderquantity",
     "moq",
     "origin",
     "package",
     "packaging",
+    "barcode",
+    "carton",
     "packagedimension",
     "packageheight",
     "packagelength",
@@ -87,11 +98,113 @@ MANUAL_FACT_ALIASES = {
     "skustock",
     "stock",
     "supplyquantity",
+    "supplyability",
+    "productioncapacity",
+    "paymentterm",
+    "tradeterm",
+    "incoterm",
+    "gtin",
+    "ean",
+    "upc",
+    "mpn",
     "weight",
 }
 MANUAL_FIELD_KEYS = {_compact_field_name(name) for name in MANUAL_FIELD_NAMES}
 MANUAL_FACT_ALIAS_KEYS = {_compact_field_name(name) for name in MANUAL_FACT_ALIASES}
 STORE_DEFAULT_KEYS = {_compact_field_name(name) for name in STORE_DEFAULT_ALIASES}
+AI_ASSISTED_ALIASES = {
+    "application",
+    "appearance",
+    "color",
+    "colour",
+    "component",
+    "description",
+    "design",
+    "feature",
+    "image",
+    "keyword",
+    "pattern",
+    "sellingpoint",
+    "shape",
+    "style",
+    "subject",
+    "title",
+    "usage",
+    "use",
+}
+MERCHANT_CONFIRMATION_ALIASES = {
+    "aftersaleslimit",
+    "authorization",
+    "brandrights",
+    "categoryspecificdeclaration",
+    "claim",
+    "companyimage",
+    "compliancestatement",
+    "copyright",
+    "customizationlimit",
+    "dangerousgoodsdeclaration",
+    "declaration",
+    "designandsampleservice",
+    "imagerights",
+    "imagevideo",
+    "ownership",
+    "patent",
+    "productvideo",
+    "productrights",
+    "regulatorydeclaration",
+    "safetydeclaration",
+    "sampleservice",
+    "servicecommitment",
+    "servicepromise",
+    "specialdeclaration",
+    "trademark",
+    "warrantyterms",
+}
+BUSINESS_SYSTEM_ALIASES = {
+    "barcode",
+    "brand",
+    "capacity",
+    "carton",
+    "certification",
+    "composition",
+    "currency",
+    "deliverytime",
+    "dimension",
+    "hs_code",
+    "inventory",
+    "manufacturer",
+    "ladderprice",
+    "leadtime",
+    "logistics",
+    "material",
+    "model",
+    "modelnumber",
+    "minorderquantity",
+    "moq",
+    "origin",
+    "package",
+    "port",
+    "price",
+    "productioncapacity",
+    "paymentterm",
+    "shipping",
+    "sku",
+    "stock",
+    "supplyquantity",
+    "supplyability",
+    "tradeterm",
+    "incoterm",
+    "gtin",
+    "ean",
+    "upc",
+    "mpn",
+    "weight",
+}
+AI_ASSISTED_KEYS = {_compact_field_name(name) for name in AI_ASSISTED_ALIASES}
+MERCHANT_CONFIRMATION_KEYS = {
+    _compact_field_name(name) for name in MERCHANT_CONFIRMATION_ALIASES
+}
+BUSINESS_SYSTEM_KEYS = {_compact_field_name(name) for name in BUSINESS_SYSTEM_ALIASES}
 
 
 def validate_product_fields(
@@ -106,10 +219,7 @@ def validate_product_fields(
     missing = sorted(
         name
         for name in required
-        if (
-            (field := get_listing_field(effective, name)) is None
-            or field.value in (None, "", [], {})
-        )
+        if not _field_or_descendant_present(effective, name)
     )
     manual_keys = {
         _compact_field_name(name)
@@ -169,6 +279,21 @@ def get_listing_field(
     return None
 
 
+def _field_or_descendant_present(
+    fields: dict[str, DraftField],
+    field_name: str,
+) -> bool:
+    direct = get_listing_field(fields, field_name)
+    if direct is not None and direct.value not in (None, "", [], {}):
+        return True
+    target = field_name.lower().replace("/", ".").rstrip(".")
+    return any(
+        name.lower().replace("/", ".").startswith(f"{target}.")
+        and field.value not in (None, "", [], {})
+        for name, field in fields.items()
+    )
+
+
 def is_store_default_field(field_name: str) -> bool:
     normalized = _compact_field_name(field_name)
     parts = {
@@ -188,6 +313,114 @@ def is_manual_fact_field(field_name: str) -> bool:
         normalized in MANUAL_FIELD_KEYS
         or normalized in MANUAL_FACT_ALIAS_KEYS
         or parts & MANUAL_FACT_ALIAS_KEYS
+        or any(
+            len(alias) >= 5 and alias in normalized
+            for alias in MANUAL_FACT_ALIAS_KEYS
+        )
+    )
+
+
+def is_merchant_confirmation_field(field_name: str) -> bool:
+    normalized = _compact_field_name(field_name)
+    parts = {
+        _compact_field_name(part)
+        for part in field_name.replace("/", ".").split(".")
+    }
+    return bool(
+        normalized in MERCHANT_CONFIRMATION_KEYS
+        or parts & MERCHANT_CONFIRMATION_KEYS
+        or any(
+            len(alias) >= 5 and alias in normalized
+            for alias in MERCHANT_CONFIRMATION_KEYS
+        )
+    )
+
+
+def is_ai_assisted_field(field_name: str) -> bool:
+    normalized = _compact_field_name(field_name)
+    parts = {
+        _compact_field_name(part)
+        for part in field_name.replace("/", ".").split(".")
+    }
+    return bool(
+        not is_manual_fact_field(field_name)
+        and not is_merchant_confirmation_field(field_name)
+        and (
+            normalized in AI_ASSISTED_KEYS
+            or parts & AI_ASSISTED_KEYS
+            or any(
+                len(alias) >= 4 and alias in normalized
+                for alias in AI_ASSISTED_KEYS
+            )
+        )
+    )
+
+
+def schema_field_responsibility(
+    field_name: str,
+) -> tuple[
+    Literal["ai_candidate", "merchant", "business_system", "store_default"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    if is_store_default_field(field_name):
+        return (
+            "store_default",
+            "店铺默认",
+            "从已确认的店铺配置带入，客户只需维护一次",
+            [
+                FieldSource.ACCOUNT_DEFAULT,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
+            ],
+        )
+    if is_merchant_confirmation_field(field_name):
+        return (
+            "merchant",
+            "客户填写",
+            "涉及声明、权利或承诺，必须由客户提供并确认",
+            [
+                FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
+            ],
+        )
+    normalized = _compact_field_name(field_name)
+    if is_manual_fact_field(field_name) or any(
+        len(alias) >= 4 and alias in normalized
+        for alias in BUSINESS_SYSTEM_KEYS
+    ):
+        return (
+            "business_system",
+            "ERP / 客户事实",
+            "优先从 ERP、商品档案或供应链系统同步，缺失时由客户填写",
+            [
+                FieldSource.BUSINESS_SYSTEM,
+                FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+            ],
+        )
+    if is_ai_assisted_field(field_name):
+        return (
+            "ai_candidate",
+            "AI 先填·客户确认",
+            "AI 只能生成候选，客户确认后才能提交",
+            [
+                FieldSource.IMAGE_EXTRACTED,
+                FieldSource.AI_GENERATED,
+                FieldSource.USER_CONFIRMED,
+            ],
+        )
+    return (
+        "merchant",
+        "客户填写",
+        "API 未证明该字段可由 AI 安全生成，默认要求客户提供真实值",
+        [
+            FieldSource.USER_PROVIDED,
+            FieldSource.USER_CONFIRMED,
+            FieldSource.BUSINESS_SYSTEM,
+        ],
     )
 
 

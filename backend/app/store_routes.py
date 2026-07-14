@@ -1,10 +1,12 @@
+import logging
+import re
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Annotated
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.alibaba import AlibabaAPIError, AlibabaClient
@@ -22,8 +24,10 @@ from backend.app.services.alibaba_oauth import (
     exchange_workspace_code,
 )
 from backend.app.services.auth import get_current_user
+from backend.app.services.oauth_diagnostics import mask, recent_events, record_event
 
 router = APIRouter(prefix="/api/v1/alibaba", tags=["alibaba-store-connections"])
+logger = logging.getLogger(__name__)
 
 
 def _extract_count(payload: object) -> int | None:
@@ -306,11 +310,21 @@ def _template_defaults(
     values = {
         "currency": _first_scalar(
             product_payloads,
-            {"currency", "currency_code", "currencyCode"},
+            {"currency", "currency_code", "currencyCode", "fob_currency", "fobCurrency"},
         ),
         "priceUnit": _first_scalar(
             product_payloads,
-            {"price_unit", "priceUnit", "unit", "unit_name", "unitName"},
+            {
+                "price_unit",
+                "priceUnit",
+                "unit",
+                "unit_name",
+                "unitName",
+                "unit_type",
+                "unitType",
+                "fob_unit_type",
+                "fobUnitType",
+            },
         ),
         "productGroupId": product_group_id,
         "productGroupLabel": product_group_label,
@@ -331,6 +345,8 @@ def _template_defaults(
                 "shippingTemplateId",
                 "freight_template_id",
                 "freightTemplateId",
+                "shipping_line_template_id",
+                "shippingLineTemplateId",
             },
         ),
         "shippingTemplateLabel": _first_text(
@@ -344,7 +360,14 @@ def _template_defaults(
         ),
         "inventoryCode": _first_scalar(
             product_payloads,
-            {"inventory_code", "inventoryCode", "warehouse_code", "warehouseCode"},
+            {
+                "inventory_code",
+                "inventoryCode",
+                "warehouse_code",
+                "warehouseCode",
+                "store_code",
+                "storeCode",
+            },
         ),
         "companyProfile": merchant_assets["company_profile"],
         "brand": merchant_assets["brand"],
@@ -462,6 +485,17 @@ def activate_store(
     )
 
 
+@router.delete("/stores/{store_id}", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_store(
+    store_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> Response:
+    if not database.disconnect_store(user.workspace_id, store_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="店铺不存在")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/stores/{store_id}/sync")
 async def sync_store(
     store_id: str,
@@ -527,10 +561,19 @@ def oauth_authorize(
     try:
         authorization_url = create_workspace_authorization_url(settings, database, user)
     except AlibabaOAuthError as exc:
+        record_event("authorize_failed", workspace_id=user.workspace_id, error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    record_event(
+        "authorize_url_created",
+        workspace_id=user.workspace_id,
+        authorization_url=re.sub(
+            r"(state=[^&]{12})[^&]*", r"\1…", authorization_url
+        ),
+    )
+    logger.info("Alibaba OAuth authorize URL created for workspace %s", user.workspace_id)
     return {"authorization_url": authorization_url}
 
 
@@ -547,6 +590,11 @@ def _callback_url(base: str, *, result: str, reason: str | None = None) -> str:
     return f"{base}{separator}{urlencode(values)}"
 
 
+@router.get("/oauth/debug")
+def oauth_debug() -> dict[str, object]:
+    return {"events": recent_events()}
+
+
 @router.get("/oauth/callback")
 async def oauth_callback(
     settings: Annotated[Settings, Depends(get_settings)],
@@ -554,6 +602,18 @@ async def oauth_callback(
     state: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
+    record_event(
+        "callback_received",
+        code=mask(code),
+        state=mask(state, keep=12),
+        error=error,
+    )
+    logger.info(
+        "Alibaba OAuth callback received: code=%s state=%s error=%s",
+        mask(code),
+        mask(state, keep=12),
+        error,
+    )
     if error:
         reason = (
             "denied"
@@ -576,7 +636,9 @@ async def oauth_callback(
         store = await exchange_workspace_code(code, state, settings, database)
         if not store.expired:
             await _sync_store(database, settings, store)
-    except (AlibabaOAuthError, AlibabaAPIError):
+    except (AlibabaOAuthError, AlibabaAPIError) as exc:
+        logger.warning("Alibaba OAuth callback failed: %s", exc)
+        record_event("token_exchange_failed", error=str(exc))
         return RedirectResponse(
             _callback_url(
                 settings.alibaba_oauth_error_url,
@@ -584,4 +646,10 @@ async def oauth_callback(
                 reason="token_exchange_failed",
             )
         )
+    record_event(
+        "store_connected",
+        store_id=store.id,
+        provider_user_id=store.provider_user_id,
+        account=store.account,
+    )
     return RedirectResponse(_callback_url(settings.alibaba_oauth_success_url, result="connected"))

@@ -78,6 +78,49 @@ export type ProductImage = {
   name: string;
   sourceFile?: File;
   photoBankUrl?: string;
+  photoBankFileId?: string;
+  source?: "upload" | "photobank" | "generated";
+};
+
+export type SchemaOption = {
+  display_name?: string;
+  value: string;
+};
+
+export type SchemaFieldGuidance = {
+  field: string;
+  name?: string;
+  type?: string;
+  required: boolean;
+  manual_fact: boolean;
+  responsibility: "ai_candidate" | "merchant" | "business_system" | "store_default";
+  responsibility_label: string;
+  responsibility_reason: string;
+  allowed_sources: FieldSource[];
+  async_options?: boolean;
+  async_query_method?: string;
+  max_length?: number;
+  tip?: string;
+  options: SchemaOption[];
+};
+
+export type SchemaGuidanceResult = {
+  ai_fillable_fields: SchemaFieldGuidance[];
+  manual_fact_fields: SchemaFieldGuidance[];
+  required_field_ids: string[];
+};
+
+export type ProductTranslation = {
+  targetMarketCode: string;
+  targetMarketLabel: string;
+  targetLanguageCode: string;
+  targetLanguageLabel: string;
+  title: string;
+  keywords: string[];
+  sellingPoints: string[];
+  description: string;
+  confirmed: boolean;
+  translatedAt: string;
 };
 
 export type ProductRecord = {
@@ -96,11 +139,17 @@ export type ProductRecord = {
   visibleTraits: string[];
   visibleTraitsZh?: string[];
   aiConfirmed: boolean;
+  analyzedAt?: string;
+  categoryConfidence?: number;
+  categoryEvidence?: string;
   stage: ProductStage;
   facts: ProductFacts;
   errors: string[];
   draftProductId?: string;
   schemaData?: Record<string, unknown> | string;
+  schemaGuidance?: SchemaGuidanceResult;
+  schemaFields?: Record<string, DraftField>;
+  translation?: ProductTranslation;
   isDemo?: boolean;
 };
 
@@ -232,6 +281,15 @@ export type ImageAnalysisResponse = {
     reason: string;
   }>;
   warnings: string[];
+};
+
+export type ProductContentTranslationResponse = {
+  target_language_code: string;
+  target_language: string;
+  title: string;
+  keywords: string[];
+  selling_points: string[];
+  description: string;
 };
 
 export type ImageSlot = "main" | "detail" | "scenario" | "specification" | "packaging";

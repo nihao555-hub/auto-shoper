@@ -71,3 +71,41 @@ def test_builds_template_defaults_from_store_payloads() -> None:
         "brand": "Studio Line",
         "origin": "China",
     }
+
+
+def test_builds_template_defaults_from_live_product_detail_keys() -> None:
+    defaults = _template_defaults(
+        [
+            {
+                "product": {
+                    "groupId": 802404593,
+                    "groupName": "Paint Color",
+                    "wholesaleTrade": {
+                        "unitType": "Set",
+                        "shippingLineTemplateId": 2003860290,
+                    },
+                    "productSku": {
+                        "skus": [
+                            {
+                                "inventoryDTOList": [
+                                    {"inventory": 360, "storeCode": "CN_LOCAL_01"}
+                                ]
+                            }
+                        ]
+                    },
+                }
+            }
+        ],
+        {"photobank_groups": [{"id": 30011581628, "name": "AI images"}]},
+        {"company_profile": "", "brand": "", "origin": ""},
+    )
+
+    assert defaults == {
+        "priceUnit": "Set",
+        "productGroupId": "802404593",
+        "productGroupLabel": "Paint Color",
+        "photoBankGroupId": "30011581628",
+        "photoBankGroupLabel": "AI images",
+        "shippingTemplateId": "2003860290",
+        "inventoryCode": "CN_LOCAL_01",
+    }

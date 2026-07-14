@@ -7,20 +7,42 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
-from backend.app.clients.alibaba import AlibabaClient
+from backend.app.clients.alibaba import IOP_SDK_PARTNER_ID, AlibabaClient
 from backend.app.config import Settings, get_settings
 from backend.app.database import AuthenticatedUser, Database, StoreConnection
 
 TOKEN_CREATE_OPERATION = "/auth/token/create"
 TOKEN_REFRESH_OPERATION = "/auth/token/refresh"
+LEGACY_AUTH_HOST = "oauth.alibaba.com"
 
 
 class AlibabaOAuthError(RuntimeError):
     pass
+
+
+def _authorization_query(settings: Settings, state: str) -> str:
+    authorize_host = (
+        urlparse(settings.alibaba_oauth_authorize_url).hostname or ""
+    ).lower()
+    params = {
+        "response_type": "code",
+        "client_id": settings.alibaba_app_key,
+        "redirect_uri": settings.alibaba_oauth_redirect_uri,
+        "state": state,
+    }
+    if authorize_host == LEGACY_AUTH_HOST:
+        params["sp"] = "icbu"
+        params["view"] = "web"
+    return urlencode(params)
+
+
+def _authorization_url(settings: Settings, state: str) -> str:
+    query = _authorization_query(settings, state)
+    return f"{settings.alibaba_oauth_authorize_url}?{query}"
 
 
 @dataclass
@@ -52,18 +74,7 @@ class AlibabaOAuthStore:
                 settings.alibaba_oauth_configuration_error or "Alibaba OAuth 配置无效"
             )
         state = self._create_state(settings)
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": settings.alibaba_app_key,
-                "redirect_uri": settings.alibaba_oauth_redirect_uri,
-                "state": state,
-                "view": "web",
-                "sp": "ICBU",
-                "force_login": "true",
-            }
-        )
-        return f"{settings.alibaba_oauth_authorize_url}?{query}"
+        return _authorization_url(settings, state)
 
     async def exchange_code(self, code: str, state: str, settings: Settings) -> AlibabaOAuthToken:
         if not settings.has_alibaba_oauth_app:
@@ -94,7 +105,7 @@ class AlibabaOAuthStore:
             "method": operation,
             "sign_method": "sha256",
             "simplify": "true",
-            "partner_id": "auto-shoper",
+            "partner_id": IOP_SDK_PARTNER_ID,
             "timestamp": str(int(time.time() * 1000)),
         }
         params.update({key: str(value) for key, value in extra.items()})
@@ -260,18 +271,7 @@ def create_workspace_authorization_url(
     if not settings.encryption_key_material:
         raise AlibabaOAuthError("Alibaba token 加密密钥未配置")
     state = database.create_oauth_state(user)
-    query = urlencode(
-        {
-            "response_type": "code",
-            "client_id": settings.alibaba_app_key,
-            "redirect_uri": settings.alibaba_oauth_redirect_uri,
-            "state": state,
-            "view": "web",
-            "sp": "ICBU",
-            "force_login": "true",
-        }
-    )
-    return f"{settings.alibaba_oauth_authorize_url}?{query}"
+    return _authorization_url(settings, state)
 
 
 async def exchange_workspace_code(

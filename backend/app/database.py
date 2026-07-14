@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS store_connections (
     expires_at TEXT,
     refresh_expires_at TEXT,
     active INTEGER NOT NULL DEFAULT 0,
+    disconnected_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_sync_at TEXT,
@@ -323,6 +324,7 @@ OCEANBASE_SCHEMA = (
         expires_at VARCHAR(40),
         refresh_expires_at VARCHAR(40),
         active TINYINT(1) NOT NULL DEFAULT 0,
+        disconnected_at VARCHAR(40),
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         last_sync_at VARCHAR(40),
@@ -463,11 +465,29 @@ class Database:
             if self._connection.dialect == "oceanbase":
                 for statement in OCEANBASE_SCHEMA:
                     self._connection.execute(statement)
+                self._ensure_store_connection_schema()
                 return
             self._connection.execute("PRAGMA foreign_keys = ON")
             if self.settings.database_path != ":memory:":
                 self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.executescript(SQLITE_SCHEMA)
+            self._ensure_store_connection_schema()
+
+    def _ensure_store_connection_schema(self) -> None:
+        if self._connection.dialect == "oceanbase":
+            column = self._connection.execute(
+                "SHOW COLUMNS FROM store_connections LIKE 'disconnected_at'"
+            ).fetchone()
+            if column is None:
+                self._connection.execute(
+                    "ALTER TABLE store_connections ADD COLUMN disconnected_at VARCHAR(40)"
+                )
+            return
+        columns = self._connection.execute("PRAGMA table_info(store_connections)").fetchall()
+        if not any(str(column["name"]) == "disconnected_at" for column in columns):
+            self._connection.execute(
+                "ALTER TABLE store_connections ADD COLUMN disconnected_at TEXT"
+            )
 
     def _seed_registration_codes(self) -> None:
         code_hashes = [_hash_secret(code) for code in self.settings.configured_registration_codes]
@@ -744,7 +764,10 @@ class Database:
             if existing is not None:
                 store_id = str(existing["id"])
             self._connection.execute(
-                "UPDATE store_connections SET active = 0 WHERE workspace_id = ?",
+                """
+                UPDATE store_connections SET active = 0
+                WHERE workspace_id = ? AND disconnected_at IS NULL
+                """,
                 (workspace_id,),
             )
             if self._connection.dialect == "oceanbase":
@@ -763,6 +786,7 @@ class Database:
                         expires_at = VALUES(expires_at),
                         refresh_expires_at = VALUES(refresh_expires_at),
                         active = 1,
+                        disconnected_at = NULL,
                         updated_at = VALUES(updated_at)
                 """
             else:
@@ -781,6 +805,7 @@ class Database:
                         expires_at = excluded.expires_at,
                         refresh_expires_at = excluded.refresh_expires_at,
                         active = 1,
+                        disconnected_at = NULL,
                         updated_at = excluded.updated_at
                 """
             self._connection.execute(
@@ -818,7 +843,7 @@ class Database:
             rows = self._connection.execute(
                 """
                 SELECT * FROM store_connections
-                WHERE workspace_id = ?
+                WHERE workspace_id = ? AND disconnected_at IS NULL
                 ORDER BY active DESC, updated_at DESC
                 """,
                 (workspace_id,),
@@ -830,7 +855,7 @@ class Database:
             row = self._connection.execute(
                 """
                 SELECT * FROM store_connections
-                WHERE workspace_id = ? AND id = ?
+                WHERE workspace_id = ? AND id = ? AND disconnected_at IS NULL
                 """,
                 (workspace_id, store_id),
             ).fetchone()
@@ -853,14 +878,17 @@ class Database:
             exists = self._connection.execute(
                 """
                 SELECT 1 FROM store_connections
-                WHERE workspace_id = ? AND id = ?
+                WHERE workspace_id = ? AND id = ? AND disconnected_at IS NULL
                 """,
                 (workspace_id, store_id),
             ).fetchone()
             if exists is None:
                 return None
             self._connection.execute(
-                "UPDATE store_connections SET active = 0 WHERE workspace_id = ?",
+                """
+                UPDATE store_connections SET active = 0
+                WHERE workspace_id = ? AND disconnected_at IS NULL
+                """,
                 (workspace_id,),
             )
             self._connection.execute(
@@ -872,6 +900,73 @@ class Database:
                 (_iso(), workspace_id, store_id),
             )
         return self.get_store(workspace_id, store_id)
+
+    def disconnect_store(self, workspace_id: str, store_id: str) -> bool:
+        if self._cipher is None:
+            raise RuntimeError("Alibaba token 加密密钥未配置")
+        now = _iso()
+        with self._lock, self._connection:
+            store = self._connection.execute(
+                """
+                SELECT active FROM store_connections
+                WHERE workspace_id = ? AND id = ? AND disconnected_at IS NULL
+                """,
+                (workspace_id, store_id),
+            ).fetchone()
+            if store is None:
+                return False
+            self._connection.execute(
+                """
+                UPDATE store_connections SET
+                    access_token_encrypted = ?,
+                    refresh_token_encrypted = NULL,
+                    expires_at = NULL,
+                    refresh_expires_at = NULL,
+                    active = 0,
+                    disconnected_at = ?,
+                    updated_at = ?,
+                    last_sync_at = NULL,
+                    product_count = NULL,
+                    product_sync_state = 'pending',
+                    photobank_group_count = NULL,
+                    photobank_sync_state = 'pending',
+                    product_group_count = NULL,
+                    product_group_sync_state = 'not_available',
+                    permissions_json = '{}',
+                    sync_error = NULL
+                WHERE workspace_id = ? AND id = ?
+                """,
+                (self._cipher.encrypt(""), now, now, workspace_id, store_id),
+            )
+            self._connection.execute(
+                """
+                DELETE FROM merchant_assets
+                WHERE workspace_id = ? AND store_connection_id = ?
+                """,
+                (workspace_id, store_id),
+            )
+            if bool(store["active"]):
+                next_store = self._connection.execute(
+                    """
+                    SELECT id FROM store_connections
+                    WHERE workspace_id = ? AND disconnected_at IS NULL
+                    ORDER BY
+                        CASE WHEN expires_at IS NULL OR expires_at > ? THEN 0 ELSE 1 END,
+                        updated_at DESC
+                    LIMIT 1
+                    """,
+                    (workspace_id, now),
+                ).fetchone()
+                if next_store is not None:
+                    self._connection.execute(
+                        """
+                        UPDATE store_connections
+                        SET active = 1, updated_at = ?
+                        WHERE workspace_id = ? AND id = ?
+                        """,
+                        (now, workspace_id, str(next_store["id"])),
+                    )
+        return True
 
     def update_store_summary(
         self,
@@ -1034,7 +1129,7 @@ class Database:
                 """
                 SELECT id
                 FROM store_connections
-                WHERE workspace_id = ? AND id = ?
+                WHERE workspace_id = ? AND id = ? AND disconnected_at IS NULL
                 """,
                 (workspace_id, store_connection_id),
             ).fetchone()

@@ -25,11 +25,7 @@ def parse_schema_data(schema_data: dict[str, object] | str) -> SchemaParseResult
         for field in _field_children(root)
     ]
     required = sorted(_required_field_ids(fields))
-    manual = sorted(
-        field_id
-        for field_id in _flatten_field_ids(fields, only_required=False)
-        if is_manual_fact_field(field_id)
-    )
+    manual = sorted(_manual_field_ids(fields))
     return SchemaParseResult(
         fields=fields,
         required_field_ids=required,
@@ -180,6 +176,16 @@ def _flatten_field_ids(
         if not field.disabled and (field.required or not only_required):
             result.add(_field_key(field))
         result.update(_flatten_field_ids(field.children, only_required=only_required))
+    return result
+
+
+def _manual_field_ids(fields: list[ParsedSchemaField]) -> set[str]:
+    result: set[str] = set()
+    for field in fields:
+        key = _field_key(field)
+        if is_manual_fact_field(key) or is_manual_fact_field(field.name or ""):
+            result.add(key)
+        result.update(_manual_field_ids(field.children))
     return result
 
 

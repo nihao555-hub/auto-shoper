@@ -94,12 +94,14 @@ OCEANBASE_HOST=... OCEANBASE_USER=... OCEANBASE_PASSWORD=... OCEANBASE_DATABASE=
 ### Alibaba 商家授权
 
 1. 在 Alibaba.com ICBU 开放平台创建应用并取得 AppKey/AppSecret。
-2. 将回调白名单设为本服务的稳定 HTTPS 地址：
+2. 在「授权管理」确认应用的卖家授权策略：绑定用户授权需将卖家加入白名单；
+   登录用户授权可由任意国际站卖家直接授权；订购授权必须由卖家在外贸服务市场下单后，
+   使用订单中的授权链接完成。将回调白名单设为本服务的稳定 HTTPS 地址：
    `https://<backend-domain>/api/v1/alibaba/oauth/callback`。
 3. 后端配置 `ALIBABA_APP_KEY`、`ALIBABA_APP_SECRET`、
    `ALIBABA_OAUTH_REDIRECT_URI`、`ALIBABA_OAUTH_SUCCESS_URL` 和
    `ALIBABA_OAUTH_ERROR_URL`。
-4. 已登录客户在「店铺与授权」点击「添加店铺」，前端打开 Alibaba 官方安全登录弹窗，
+4. 已登录客户在「店铺与授权」点击「添加店铺」，前端打开 Alibaba 官方卖家授权弹窗，
    后端生成 10 分钟有效、绑定当前用户和工作区、一次性使用的 `state`；回调验证后向新版 GOP 网关
    （`ALIBABA_API_BASE_URL` 的 `/auth/token/create`）用授权码交换 token。
 5. 授权结果通过同源 `postMessage` 返回工作台并自动关闭弹窗。token 加密后按工作区和店铺

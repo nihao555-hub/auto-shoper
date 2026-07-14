@@ -36,9 +36,93 @@ def test_build_schema_guidance_separates_ai_and_manual_fields() -> None:
 
     assert "productTitle" in ai_fields
     assert ai_fields["productTitle"].max_length == 128
+    assert ai_fields["productTitle"].responsibility == "ai_candidate"
     assert "icbuCatProp.p-use" in ai_fields
+    assert "icbuCatProp.p-material" in manual_fields
     # price is a business/human fact the AI must not guess.
     assert "price" in manual_fields
+    material = next(
+        field
+        for field in guidance.manual_fact_fields
+        if field.field == "icbuCatProp.p-material"
+    )
+    assert material.responsibility == "business_system"
+
+
+def test_unknown_schema_fields_default_to_merchant_not_ai() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="categorySpecificDeclaration" name="Special declaration" type="input">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    assert guidance.manual_fact_fields[0].responsibility == "merchant"
+    assert guidance.manual_fact_fields[0].responsibility_label == "客户填写"
+
+
+def test_legal_description_does_not_become_ai_owned_by_name_collision() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="patentDescription" name="Patent description" type="input">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    assert guidance.manual_fact_fields[0].responsibility == "merchant"
+
+
+def test_origin_is_a_product_fact_not_an_automatic_store_default() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="placeOfOrigin" name="Place of origin" type="singleCheck">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        '<options><option displayName="China" value="CN"/></options>'
+        "</field>"
+        "</itemSchema>"
+    )
+    field = build_schema_guidance(schema).manual_fact_fields[0]
+
+    assert field.responsibility == "business_system"
+
+
+def test_guidance_marks_async_choice_fields() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="supplyType" name="Supply type" type="singleCheck">'
+        "<rules>"
+        '<rule name="requiredRule" value="true"/>'
+        '<rule name="asyncQueryRule" value="top.category.options.get"/>'
+        "</rules>"
+        "</field>"
+        "</itemSchema>"
+    )
+    field = build_schema_guidance(schema).manual_fact_fields[0]
+
+    assert field.async_options is True
+    assert field.async_query_method == "top.category.options.get"
+
+
+def test_optionless_ai_looking_choice_defaults_to_merchant() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="productFeature" type="multiCheck">'
+        '<rules><rule name="requiredRule" value="true"/></rules>'
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    field = guidance.manual_fact_fields[0]
+    assert field.responsibility == "merchant"
+    assert "未返回可安全提交的选项" in field.responsibility_reason
 
 
 def test_guidance_prompt_lists_options_and_manual_fields() -> None:

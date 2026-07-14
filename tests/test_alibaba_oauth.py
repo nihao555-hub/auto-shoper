@@ -1,12 +1,18 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 from backend.app.config import Settings
+from backend.app.database import Database
 from backend.app.services import alibaba_oauth as oauth_module
-from backend.app.services.alibaba_oauth import AlibabaOAuthError, AlibabaOAuthStore
+from backend.app.services.alibaba_oauth import (
+    AlibabaOAuthError,
+    AlibabaOAuthStore,
+    create_workspace_authorization_url,
+)
 
 
 def _oauth_settings() -> Settings:
@@ -77,6 +83,7 @@ async def test_exchange_code_uses_gop_gateway_and_stores_multiple_merchants(
     body = captured[0].content.decode()
     assert "method=%2Fauth%2Ftoken%2Fcreate" in body
     assert "code=code-a" in body
+    assert "partner_id=iop-sdk-python-20250910" in body
 
     status = store.status(settings)
     assert status["user_id"] == "222"
@@ -100,7 +107,7 @@ async def test_exchange_code_raises_on_provider_error(
         await store.exchange_code("bad-code", state, settings)
 
 
-def test_authorization_url_uses_icbu_server_flow() -> None:
+def test_new_platform_authorization_url_uses_canonical_seller_flow() -> None:
     settings = Settings(
         _env_file=None,
         alibaba_app_key="app-key",
@@ -120,8 +127,57 @@ def test_authorization_url_uses_icbu_server_flow() -> None:
         "https://merchant.example.com/api/v1/alibaba/oauth/callback"
     ]
     assert query["response_type"] == ["code"]
-    assert query["sp"] == ["ICBU"]
     assert query["state"][0]
+    assert "sp" not in query
+    assert "force_auth" not in query
+    assert "view" not in query
+    assert "force_login" not in query
+
+
+def test_legacy_authorization_url_keeps_icbu_server_parameters() -> None:
+    settings = Settings(
+        _env_file=None,
+        alibaba_app_key="app-key",
+        alibaba_app_secret="app-secret",
+        alibaba_oauth_authorize_url="https://oauth.alibaba.com/authorize",
+        alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
+    )
+
+    query = parse_qs(urlparse(AlibabaOAuthStore().create_authorization_url(settings)).query)
+
+    assert query["sp"] == ["icbu"]
+    assert query["view"] == ["web"]
+
+
+def test_workspace_authorization_url_uses_one_time_state_without_force_login(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        database_path=str(tmp_path / "oauth.db"),
+        registration_codes="INVITE",
+        token_encryption_key="test-only-token-encryption-key",
+        alibaba_app_key="app-key",
+        alibaba_app_secret="app-secret",
+        alibaba_oauth_redirect_uri="https://merchant.example.com/api/v1/alibaba/oauth/callback",
+    )
+    database = Database(settings)
+    user, _ = database.register(
+        email="owner@example.com",
+        password="strong-password",
+        display_name="Owner",
+        workspace_name="Example Trading",
+        registration_code="INVITE",
+    )
+
+    url = create_workspace_authorization_url(settings, database, user)
+    query = parse_qs(urlparse(url).query)
+
+    assert "force_login" not in query
+    assert "force_auth" not in query
+    assert "sp" not in query
+    assert "view" not in query
+    assert database.consume_oauth_state(query["state"][0]) == (user.workspace_id, user.id)
 
 
 def test_authorization_requires_server_side_app_configuration() -> None:

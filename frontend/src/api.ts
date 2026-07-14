@@ -10,10 +10,12 @@ import type {
   ImagePromptTemplate,
   ImageSlot,
   ListingFieldGroup,
+  ProductContentTranslationResponse,
   ProductImageGenerationResponse,
   ProductImagePlanResponse,
   ProductRecord,
   RegisterPayload,
+  SchemaGuidanceResult,
   StoreSettings,
 } from "./types";
 
@@ -100,6 +102,15 @@ export const syncAlibabaStore = async (storeId: string): Promise<AlibabaConnecte
     await apiFetch(`${API_ROOT}/alibaba/stores/${storeId}/sync`, { method: "POST" }),
   );
 
+export const disconnectAlibabaStore = async (storeId: string): Promise<void> => {
+  const response = await apiFetch(`${API_ROOT}/alibaba/stores/${encodeURIComponent(storeId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    await parseResponse(response);
+  }
+};
+
 export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }> =>
   parseResponse<{ authorization_url: string }>(
     await apiFetch(`${API_ROOT}/alibaba/oauth/authorize`, { method: "POST" }),
@@ -130,6 +141,27 @@ export const analyzeProductImages = async (
     }),
   );
 };
+
+export const translateProductContent = async (
+  product: ProductRecord,
+  targetLanguageCode: string,
+  targetLanguage: string,
+): Promise<ProductContentTranslationResponse> =>
+  parseResponse<ProductContentTranslationResponse>(
+    await apiFetch(`${API_ROOT}/products/translate-content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_language: "English",
+        target_language_code: targetLanguageCode,
+        target_language: targetLanguage,
+        title: product.title,
+        keywords: product.keywords,
+        selling_points: product.sellingPoints,
+        description: product.description,
+      }),
+    }),
+  );
 
 export const getImagePromptTemplates = async (): Promise<ImagePromptTemplate[]> =>
   parseResponse<ImagePromptTemplate[]>(await apiFetch(`${API_ROOT}/images/prompt-templates`));
@@ -221,6 +253,95 @@ export const uploadPhotoBankImage = async (
   );
 };
 
+export type PhotoBankGroup = {
+  id: string;
+  name: string;
+};
+
+export type PhotoBankImage = {
+  id: string;
+  name: string;
+  url: string;
+};
+
+export const listPhotoBankGroups = async (): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/photo-bank/groups?current_page=1&page_size=50`),
+  );
+
+export const listPhotoBankImages = async (
+  groupId: string,
+  page = 1,
+): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(
+      `${API_ROOT}/alibaba/photo-bank/images?group_id=${encodeURIComponent(groupId)}&current_page=${page}&page_size=40`,
+    ),
+  );
+
+const readString = (record: Record<string, unknown>, keys: string[]): string => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number") {
+      return String(value);
+    }
+  }
+  return "";
+};
+
+const collectRecords = (
+  payload: unknown,
+  matches: (record: Record<string, unknown>) => boolean,
+) => {
+  const found: Record<string, unknown>[] = [];
+  const walk = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item);
+      }
+      return;
+    }
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (matches(record)) {
+        found.push(record);
+        return;
+      }
+      for (const nested of Object.values(record)) {
+        walk(nested);
+      }
+    }
+  };
+  walk(payload);
+  return found;
+};
+
+export const findPhotoBankGroups = (payload: Record<string, unknown>): PhotoBankGroup[] =>
+  collectRecords(
+    payload,
+    (record) =>
+      Boolean(readString(record, ["id", "group_id", "groupId"])) &&
+      Boolean(readString(record, ["name", "group_name", "groupName"])),
+  ).map((record) => ({
+    id: readString(record, ["id", "group_id", "groupId"]),
+    name: readString(record, ["name", "group_name", "groupName"]),
+  }));
+
+export const findPhotoBankImages = (payload: Record<string, unknown>): PhotoBankImage[] =>
+  collectRecords(payload, (record) =>
+    ["url", "image_url", "imageUrl", "image_uri", "imageUri"].some((key) => {
+      const value = record[key];
+      return typeof value === "string" && value.startsWith("http");
+    }),
+  ).map((record, index) => ({
+    id: readString(record, ["id", "image_id", "imageId"]) || `photo-${index}`,
+    name: readString(record, ["name", "file_name", "fileName", "image_name", "imageName"]),
+    url: readString(record, ["url", "image_url", "imageUrl", "image_uri", "imageUri"]),
+  }));
+
 export const findPhotoBankUrl = (payload: Record<string, unknown>): string | null => {
   const preferredKeys = ["url", "image_url", "imageUrl", "image_uri", "imageUri"];
   for (const key of preferredKeys) {
@@ -240,9 +361,36 @@ export const findPhotoBankUrl = (payload: Record<string, unknown>): string | nul
   return null;
 };
 
+export const findPhotoBankFileId = (payload: Record<string, unknown>): string | null => {
+  const direct = readString(payload, ["file_id", "fileId", "image_id", "imageId", "id"]);
+  if (direct) {
+    return direct;
+  }
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = findPhotoBankFileId(value as Record<string, unknown>);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
+};
+
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
     await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
+  );
+
+export const getSchemaGuidance = async (
+  schemaData: Record<string, unknown> | string,
+): Promise<SchemaGuidanceResult> =>
+  parseResponse<SchemaGuidanceResult>(
+    await apiFetch(`${API_ROOT}/alibaba/schemas/guidance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schema_data: schemaData }),
+    }),
   );
 
 const trustedField = (value: unknown): DraftField => ({
@@ -260,39 +408,92 @@ const accountDefault = (value: unknown): DraftField => ({
   source: "account_default",
 });
 
-const productFields = (product: ProductRecord): Record<string, DraftField> => ({
-  category_id: confirmedField(product.facts.categoryId),
-  subject: confirmedField(product.title),
-  keywords: confirmedField(product.keywords),
-  description: confirmedField(product.description),
-  brand: trustedField(product.facts.brand),
-  model: trustedField(product.facts.model),
-  material: trustedField(product.facts.material),
-  price: trustedField(product.facts.price),
-  moq: trustedField(product.facts.moq),
-  inventory: trustedField(product.facts.stock),
-  dimensions: trustedField({
-    length: product.facts.productLength,
-    width: product.facts.productWidth,
-    height: product.facts.productHeight,
-  }),
-  weight: trustedField(product.facts.netWeight),
-  packaging: trustedField({
-    length: product.facts.packageLength,
-    width: product.facts.packageWidth,
-    height: product.facts.packageHeight,
-    grossWeight: product.facts.grossWeight,
-    unitsPerCarton: product.facts.unitsPerCarton,
-  }),
-  lead_time: trustedField(product.facts.leadTime),
-  origin: trustedField(product.facts.origin),
-  hs_code: trustedField(product.facts.hsCode),
-  certifications: trustedField(product.facts.certifications),
-  images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
-  main_image: confirmedField(
-    product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
-  ),
-});
+const listingContent = (product: ProductRecord) =>
+  product.translation?.confirmed
+    ? {
+        title: product.translation.title,
+        keywords: product.translation.keywords,
+        sellingPoints: product.translation.sellingPoints,
+        description: product.translation.description,
+      }
+    : {
+        title: product.title,
+        keywords: product.keywords,
+        sellingPoints: product.sellingPoints,
+        description: product.description,
+      };
+
+const localizedDetailImageValue = (value: unknown, text: string): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => localizedDetailImageValue(item, text));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        key === "generalText" ? text : localizedDetailImageValue(item, text),
+      ]),
+    );
+  }
+  return value;
+};
+
+const localizedSchemaFields = (product: ProductRecord): Record<string, DraftField> => {
+  const fields = { ...(product.schemaFields ?? {}) };
+  if (!product.translation?.confirmed) {
+    return fields;
+  }
+  const content = listingContent(product);
+  fields.productTitle = confirmedField(content.title);
+  fields["productKeywords.productKeywords_0"] = confirmedField(content.keywords.join(", "));
+  fields.textDesc = confirmedField(
+    content.sellingPoints.length ? content.sellingPoints.join("\n") : content.description,
+  );
+  if (fields.detailImage) {
+    fields.detailImage = confirmedField(
+      localizedDetailImageValue(fields.detailImage.value, content.description),
+    );
+  }
+  return fields;
+};
+
+const productFields = (product: ProductRecord): Record<string, DraftField> => {
+  const content = listingContent(product);
+  return {
+    ...localizedSchemaFields(product),
+    category_id: confirmedField(product.facts.categoryId),
+    subject: confirmedField(content.title),
+    keywords: confirmedField(content.keywords),
+    description: confirmedField(content.description),
+    brand: trustedField(product.facts.brand),
+    model: trustedField(product.facts.model),
+    material: trustedField(product.facts.material),
+    price: trustedField(product.facts.price),
+    moq: trustedField(product.facts.moq),
+    inventory: trustedField(product.facts.stock),
+    dimensions: trustedField({
+      length: product.facts.productLength,
+      width: product.facts.productWidth,
+      height: product.facts.productHeight,
+    }),
+    weight: trustedField(product.facts.netWeight),
+    packaging: trustedField({
+      length: product.facts.packageLength,
+      width: product.facts.packageWidth,
+      height: product.facts.packageHeight,
+      grossWeight: product.facts.grossWeight,
+      unitsPerCarton: product.facts.unitsPerCarton,
+    }),
+    lead_time: trustedField(product.facts.leadTime),
+    origin: trustedField(product.facts.origin),
+    hs_code: trustedField(product.facts.hsCode),
+    certifications: trustedField(product.facts.certifications),
+    images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
+    main_image: confirmedField(
+      product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
+    ),
+  };
+};
 
 const accountDefaults = (settings: StoreSettings): Record<string, DraftField> => ({
   currency: accountDefault(settings.currency),

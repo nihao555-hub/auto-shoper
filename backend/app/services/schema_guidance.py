@@ -1,15 +1,19 @@
+from typing import Literal
+
 from backend.app.models import (
+    FieldSource,
     ParsedSchemaField,
     SchemaFieldGuidance,
     SchemaGuidanceResult,
     SchemaOption,
     SchemaRule,
 )
-from backend.app.services.field_policy import is_manual_fact_field
+from backend.app.services.field_policy import schema_field_responsibility
 from backend.app.services.schema_rules import parse_schema_data
 
 MAX_OPTIONS_PER_FIELD = 40
 SKIPPED_TYPES = {"label", "hidden"}
+CHOICE_TYPES = {"singleCheck", "multiCheck"}
 
 
 def build_schema_guidance(
@@ -47,22 +51,71 @@ def _collect(
         and (bool(field.options) or not field.children)
     )
     if describable:
+        async_query_method = _rule_value(field.rules, "asyncQueryRule")
+        responsibility, label, reason, allowed_sources = _responsibility(
+            key, field.name or ""
+        )
+        if (
+            responsibility == "ai_candidate"
+            and field.type in CHOICE_TYPES
+            and not field.options
+            and async_query_method is None
+        ):
+            responsibility, label, reason, allowed_sources = (
+                _unsupported_choice_responsibility()
+            )
         guidance = SchemaFieldGuidance(
             field=key,
             name=field.name,
             type=field.type,
             required=field.required,
-            manual_fact=is_manual_fact_field(key),
+            manual_fact=responsibility != "ai_candidate",
+            responsibility=responsibility,
+            responsibility_label=label,
+            responsibility_reason=reason,
+            allowed_sources=allowed_sources,
+            async_options=async_query_method is not None,
+            async_query_method=async_query_method,
             max_length=_max_length(field.rules),
             tip=_tip(field.rules),
             options=field.options[:MAX_OPTIONS_PER_FIELD],
         )
-        if guidance.manual_fact:
-            manual.append(guidance)
-        else:
+        if guidance.responsibility == "ai_candidate":
             ai_fillable.append(guidance)
+        else:
+            manual.append(guidance)
     for child in field.children:
         _collect(child, ai_fillable, manual)
+
+
+def _responsibility(
+    key: str,
+    name: str,
+) -> tuple[
+    Literal["ai_candidate", "merchant", "business_system", "store_default"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    return schema_field_responsibility(f"{key}.{name}")
+
+
+def _unsupported_choice_responsibility() -> tuple[
+    Literal["merchant"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    return (
+        "merchant",
+        "客户填写",
+        "Alibaba 选择字段未返回可安全提交的选项，必须由客户选择或等待选项加载",
+        [
+            FieldSource.USER_PROVIDED,
+            FieldSource.USER_CONFIRMED,
+            FieldSource.BUSINESS_SYSTEM,
+        ],
+    )
 
 
 def _max_length(rules: list[SchemaRule]) -> int | None:
@@ -77,6 +130,13 @@ def _max_length(rules: list[SchemaRule]) -> int | None:
 def _tip(rules: list[SchemaRule]) -> str | None:
     for rule in rules:
         if rule.name == "tipRule" and rule.value:
+            return rule.value
+    return None
+
+
+def _rule_value(rules: list[SchemaRule], name: str) -> str | None:
+    for rule in rules:
+        if rule.name == name:
             return rule.value
     return None
 
