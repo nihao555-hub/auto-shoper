@@ -93,6 +93,12 @@ export type SchemaFieldGuidance = {
   type?: string;
   required: boolean;
   manual_fact: boolean;
+  responsibility: "ai_candidate" | "merchant" | "business_system" | "store_default";
+  responsibility_label: string;
+  responsibility_reason: string;
+  allowed_sources: FieldSource[];
+  async_options?: boolean;
+  async_query_method?: string;
   max_length?: number;
   tip?: string;
   options: SchemaOption[];

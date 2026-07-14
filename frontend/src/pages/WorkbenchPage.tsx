@@ -84,6 +84,44 @@ type WorkbenchPageProps = {
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
 
+const demoImageCandidates: ProductImageCandidate[] = [
+  {
+    slot: "main",
+    label: "白底主图",
+    image_url: "/products/demo-ai-white-background.webp",
+    error: null,
+    requires_confirmation: true,
+  },
+  {
+    slot: "scenario",
+    label: "使用场景图",
+    image_url: "/products/demo-ai-scene.webp",
+    error: null,
+    requires_confirmation: true,
+  },
+  {
+    slot: "detail",
+    label: "材质细节图",
+    image_url: "/products/demo-ai-detail.webp",
+    error: null,
+    requires_confirmation: true,
+  },
+  {
+    slot: "specification",
+    label: "规格展示图",
+    image_url: "/products/demo-ai-specification.webp",
+    error: null,
+    requires_confirmation: true,
+  },
+  {
+    slot: "packaging",
+    label: "包装展示图",
+    image_url: null,
+    error: "缺少包装样式与装箱数量，需客户补充后生成",
+    requires_confirmation: true,
+  },
+];
+
 const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
 const stepGuides = [
   {
@@ -306,6 +344,12 @@ export function WorkbenchPage({
   const activeIndex = activeProduct
     ? products.findIndex((product) => product.id === activeProduct.id)
     : -1;
+
+  useEffect(() => {
+    if (step === 1 && activeProduct?.isDemo && !imageCandidates.length) {
+      setImageCandidates(demoImageCandidates);
+    }
+  }, [activeProduct?.isDemo, imageCandidates.length, step]);
 
   const filteredProducts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -636,6 +680,22 @@ export function WorkbenchPage({
     );
   };
 
+  const openAiImageReview = async () => {
+    if (!products.length) {
+      notify("warning", "请先上传商品图片", "AI 套图需要至少一张真实商品参考图。");
+      return;
+    }
+    if (!analysisComplete) {
+      await analyzeAll();
+      return;
+    }
+    setMaxUnlockedStep((current) => Math.max(current, 1));
+    setStep(1);
+    if (activeProduct?.isDemo) {
+      setImageCandidates(demoImageCandidates);
+    }
+  };
+
   const confirmAi = (id: string) => {
     replaceProduct(id, (product) => ({
       ...product,
@@ -688,8 +748,19 @@ export function WorkbenchPage({
   };
 
   const generateImagesForProduct = async (slots?: ImageSlot[]) => {
-    if (!activeProduct || activeProduct.isDemo) {
-      notify("info", "演示商品不调用生图", "切换到真实商品后再生成候选图片。");
+    if (!activeProduct) {
+      return;
+    }
+    if (activeProduct.isDemo) {
+      setImageGenerationBusy(true);
+      await delay(550);
+      setImageCandidates(
+        slots?.length
+          ? demoImageCandidates.filter((candidate) => slots.includes(candidate.slot))
+          : demoImageCandidates,
+      );
+      setImageGenerationBusy(false);
+      notify("success", "演示候选图已生成", "候选图完全隔离，不调用真实图片服务或 Alibaba 店铺。");
       return;
     }
     const mainImage = getMainProductImage(activeProduct);
@@ -758,6 +829,40 @@ export function WorkbenchPage({
     );
     setImagePlan((current) => current.filter((slot) => slot.slot !== candidate.slot));
     notify("success", "已加入商品图库", `${candidate.label}可继续确认或设为主图。`);
+  };
+
+  const addGeneratedImages = (candidates: ProductImageCandidate[]) => {
+    if (!activeProduct) {
+      return;
+    }
+    const available = candidates.filter(
+      (candidate) =>
+        candidate.image_url &&
+        !activeProduct.images.some((image) => image.url === candidate.image_url),
+    );
+    if (!available.length) {
+      notify("info", "候选图已全部加入", "无需重复添加。");
+      return;
+    }
+    updateProduct({
+      ...activeProduct,
+      images: [
+        ...activeProduct.images,
+        ...available.map((candidate, index) => ({
+          id: `generated-${candidate.slot}-${Date.now()}-${index}`,
+          url: candidate.image_url ?? "",
+          name: `${candidate.label}候选`,
+          source: "generated" as const,
+        })),
+      ],
+    });
+    setAddedImageSlots((current) => [
+      ...new Set([...current, ...available.map((candidate) => candidate.slot)]),
+    ]);
+    setImagePlan((current) =>
+      current.filter((slot) => !available.some((candidate) => candidate.slot === slot.slot)),
+    );
+    notify("success", `已加入 ${available.length} 张候选图`, "仍需逐张检查产品一致性后发布。");
   };
 
   const validateAll = () => {
@@ -1278,6 +1383,7 @@ export function WorkbenchPage({
               onPickFiles={() => fileInputRef.current?.click()}
               onRemove={removeProduct}
               onMainImageChange={setMainImage}
+              onOpenAiImages={() => void openAiImageReview()}
             />
           ) : null}
 
@@ -1292,6 +1398,11 @@ export function WorkbenchPage({
               onConfirmAll={confirmAllAi}
               onChange={updateProduct}
               onMainImageChange={setMainImage}
+              imageCandidates={imageCandidates}
+              imageGenerationBusy={imageGenerationBusy}
+              onGenerateImages={() => void generateImagesForProduct()}
+              onAddGeneratedImage={addGeneratedImage}
+              onAddGeneratedImages={() => addGeneratedImages(imageCandidates)}
             />
           ) : null}
 
@@ -1490,6 +1601,7 @@ function UploadStep({
   onPickFiles,
   onRemove,
   onMainImageChange,
+  onOpenAiImages,
 }: {
   products: ProductRecord[];
   dragActive: boolean;
@@ -1509,6 +1621,7 @@ function UploadStep({
   onPickFiles: () => void;
   onRemove: (id: string) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
+  onOpenAiImages: () => void;
 }) {
   const [photoQuery, setPhotoQuery] = useState("");
   const [productQuery, setProductQuery] = useState("");
@@ -1625,6 +1738,14 @@ function UploadStep({
             </>
           )}
         </div>
+        <button type="button" className="upload-ai-entry" onClick={onOpenAiImages}>
+          <span>
+            <MagicWand size={19} weight="fill" />
+          </span>
+          <strong>AI 智能套图</strong>
+          <small>白底图 · 场景图 · 细节图 · 规格图</small>
+          <ArrowRight size={16} />
+        </button>
       </div>
 
       {sourceTab === "photobank" && photoBankAvailable ? (
@@ -1845,6 +1966,11 @@ function AiStep({
   onConfirmAll,
   onChange,
   onMainImageChange,
+  imageCandidates,
+  imageGenerationBusy,
+  onGenerateImages,
+  onAddGeneratedImage,
+  onAddGeneratedImages,
 }: {
   products: ProductRecord[];
   busy: boolean;
@@ -1855,6 +1981,11 @@ function AiStep({
   onConfirmAll: () => void;
   onChange: (product: ProductRecord) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
+  imageCandidates: ProductImageCandidate[];
+  imageGenerationBusy: boolean;
+  onGenerateImages: () => void;
+  onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
+  onAddGeneratedImages: () => void;
 }) {
   const [confirmAllChecked, setConfirmAllChecked] = useState(false);
   const pending = products.filter((product) => !product.aiConfirmed);
@@ -1989,6 +2120,94 @@ function AiStep({
                       )}
                     </span>
                   </div>
+                  <section className="ai-image-review">
+                    <div className="ai-image-review-head">
+                      <div>
+                        <span>
+                          <MagicWand size={15} weight="fill" />
+                          AI 图片候选
+                        </span>
+                        <p>加入图库前需检查外观一致性；尺寸、包装和合规事实不会由图片生成。</p>
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={onGenerateImages}
+                          disabled={imageGenerationBusy}
+                        >
+                          {imageGenerationBusy ? (
+                            <CircleNotch size={15} className="spin" />
+                          ) : (
+                            <ArrowCounterClockwise size={15} />
+                          )}
+                          {imageGenerationBusy ? "生成中" : "重新生成"}
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-dark"
+                          onClick={onAddGeneratedImages}
+                          disabled={!imageCandidates.some((candidate) => candidate.image_url)}
+                        >
+                          <CheckSquare size={15} />
+                          加入全部成功图
+                        </button>
+                      </div>
+                    </div>
+                    {imageCandidates.length ? (
+                      <div className="ai-image-candidate-grid">
+                        {imageCandidates.map((candidate) => {
+                          const added = Boolean(
+                            candidate.image_url &&
+                              product.images.some((image) => image.url === candidate.image_url),
+                          );
+                          return (
+                            <article
+                              key={candidate.slot}
+                              className={candidate.image_url ? "" : "is-error"}
+                            >
+                              {candidate.image_url ? (
+                                <img src={candidate.image_url} alt={candidate.label} />
+                              ) : (
+                                <div className="ai-image-candidate-error">
+                                  <WarningCircle size={18} />
+                                  <span>{candidate.error}</span>
+                                </div>
+                              )}
+                              <footer>
+                                <span>
+                                  <strong>{candidate.label}</strong>
+                                  <small>
+                                    {candidate.image_url ? "AI 候选·需确认" : "暂未生成"}
+                                  </small>
+                                </span>
+                                {candidate.image_url ? (
+                                  <button
+                                    type="button"
+                                    className="wb-link"
+                                    disabled={added}
+                                    onClick={() => onAddGeneratedImage(candidate)}
+                                  >
+                                    {added ? "已加入" : "加入图库"}
+                                  </button>
+                                ) : null}
+                              </footer>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ai-image-empty"
+                        onClick={onGenerateImages}
+                        disabled={imageGenerationBusy}
+                      >
+                        <MagicWand size={20} />
+                        生成白底图、场景图、细节图和规格图候选
+                      </button>
+                    )}
+                  </section>
                   <div className="ai-field-table-scroll">
                     <table className="ai-field-table">
                       <thead>
@@ -2653,6 +2872,15 @@ function WbInspector({
   const complianceNote = product.facts.certifications[0] ?? "";
   const missingFacts = getFactErrors(product);
   const requiredSchemaFields = getRequiredSchemaFields(product);
+  const responsibilityCounts = {
+    ai_candidate: 0,
+    merchant: 0,
+    business_system: 0,
+    store_default: 0,
+  };
+  for (const field of requiredSchemaFields) {
+    responsibilityCounts[field.responsibility] += 1;
+  }
   const inputSchemaFields = requiredSchemaFields.filter((field) => {
     if (isImageSchemaField(field) || isTitleSchemaField(field)) {
       return false;
@@ -2716,7 +2944,9 @@ function WbInspector({
               </button>
             </div>
             {product.isDemo ? (
-              <p className="wb-image-generation-empty">演示商品无法生成图片。</p>
+              <p className="wb-image-generation-empty">
+                演示模式使用隔离候选图，不调用真实图片服务或 Alibaba 店铺。
+              </p>
             ) : null}
             {imagePlan.length ? (
               <div className="wb-image-plan">
@@ -2873,7 +3103,46 @@ function WbInspector({
 
         {product.schemaGuidance ? (
           <section className="wb-inspector-section wb-schema-required">
-            <h3>Alibaba API 实时必填</h3>
+            <div className="wb-schema-heading">
+              <div>
+                <h3>Alibaba API 实时必填</h3>
+                <p>字段由当前叶子类目 Schema 返回，未知字段默认交给客户，不交给 AI。</p>
+              </div>
+            </div>
+            <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
+              <span className="is-ai">
+                <strong>{responsibilityCounts.ai_candidate}</strong>
+                AI 候选
+              </span>
+              <span className="is-default">
+                <strong>{responsibilityCounts.store_default}</strong>
+                店铺默认
+              </span>
+              <span className="is-system">
+                <strong>{responsibilityCounts.business_system}</strong>
+                ERP / 客户事实
+              </span>
+              <span className="is-merchant">
+                <strong>{responsibilityCounts.merchant}</strong>
+                客户填写
+              </span>
+            </div>
+            <details className="wb-schema-matrix">
+              <summary>查看全部 {requiredSchemaFields.length} 个必填字段与责任</summary>
+              <div>
+                {requiredSchemaFields.map((field) => {
+                  const value = getSchemaFieldValue(product, field);
+                  return (
+                    <p key={field.field}>
+                      <span>{schemaFieldLabel(field)}</span>
+                      <b>{schemaFieldControlLabel(field)}</b>
+                      <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                      <small>{hasSchemaValue(value) ? "已带入" : "待补充"}</small>
+                    </p>
+                  );
+                })}
+              </div>
+            </details>
             {inputSchemaFields.length ? (
               <div className="wb-schema-field-list">
                 {inputSchemaFields.map((field, index) => {
@@ -2898,18 +3167,24 @@ function WbInspector({
                         <span>
                           {schemaFieldLabel(field)}
                           <i>API 必填</i>
-                          <i className={field.manual_fact ? "is-trusted" : "is-assisted"}>
-                            {field.manual_fact ? "可信来源" : "可人工补充"}
+                          <i className="is-control">{schemaFieldControlLabel(field)}</i>
+                          <i className={`is-${field.responsibility}`}>
+                            {field.responsibility_label}
                           </i>
                         </span>
                         <small>
                           {field.tip ||
                             (hasSchemaValue(value)
                               ? "已填写，可继续修改"
-                              : "此字段由当前商品类目规则要求")}
+                              : field.responsibility_reason)}
                         </small>
                       </div>
-                      {field.options.length && field.type === "multiCheck" ? (
+                      {field.async_options && !field.options.length ? (
+                        <div className="wb-schema-dynamic-option">
+                          <WarningCircle size={15} />
+                          <span>需先选择上级属性，再从 Alibaba API 加载选项</span>
+                        </div>
+                      ) : field.options.length && field.type === "multiCheck" ? (
                         <div
                           className="wb-schema-options"
                           id={inputId}
@@ -3982,7 +4257,7 @@ function SourceBadge({
 
 function actionLabel(step: number, aiPending: number) {
   if (step === 0) {
-    return "下一步：AI 分析";
+    return "下一步：AI 内容与套图";
   }
   if (step === 1) {
     return aiPending ? `请先确认剩余 ${aiPending} 项` : "下一步：补齐可信事实";
@@ -4022,7 +4297,11 @@ function getRequiredSchemaFields(product: ProductRecord): SchemaFieldGuidance[] 
       byId.set(field, {
         field,
         required: true,
-        manual_fact: false,
+        manual_fact: true,
+        responsibility: "merchant",
+        responsibility_label: "客户填写",
+        responsibility_reason: "API 返回必填字段，但未提供可安全自动填充的依据",
+        allowed_sources: ["user_provided", "user_confirmed", "business_system"],
         options: [],
       });
     }
@@ -4223,6 +4502,29 @@ function hasSchemaValue(value: unknown): boolean {
     return Object.keys(value).length > 0;
   }
   return true;
+}
+
+function schemaFieldControlLabel(field: SchemaFieldGuidance): string {
+  if (field.type === "singleCheck") {
+    return field.async_options && !field.options.length
+      ? "动态单选"
+      : `单选 ${field.options.length} 项`;
+  }
+  if (field.type === "multiCheck") {
+    return field.async_options && !field.options.length
+      ? "动态多选"
+      : `多选 ${field.options.length} 项`;
+  }
+  if (field.type === "multiInput") {
+    return "多值输入";
+  }
+  if (field.type === "complex") {
+    return "组合字段";
+  }
+  if (field.type === "multiComplex") {
+    return "多组字段";
+  }
+  return "文本输入";
 }
 
 function schemaDefaultForField(field: SchemaFieldGuidance, settings: StoreSettings): string | null {

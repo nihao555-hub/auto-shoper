@@ -1,9 +1,12 @@
 import type {
   AlibabaConnectedStore,
   BatchRecord,
+  DraftField,
   ProductFacts,
   ProductImage,
   ProductRecord,
+  SchemaFieldGuidance,
+  SchemaGuidanceResult,
   StoreSettings,
 } from "./types";
 
@@ -90,6 +93,161 @@ const demoImage = (id: string, url: string): ProductImage => ({
   name: url.split("/").at(-1) ?? "product image",
 });
 
+const demoGuidanceField = (
+  field: string,
+  name: string,
+  type: string,
+  responsibility: SchemaFieldGuidance["responsibility"],
+  options: SchemaFieldGuidance["options"] = [],
+): SchemaFieldGuidance => {
+  const responsibilityCopy = {
+    ai_candidate: {
+      label: "AI 先填·客户确认",
+      reason: "AI 只能生成候选，客户确认后才能提交",
+      sources: ["image_extracted", "ai_generated", "user_confirmed"] as const,
+    },
+    merchant: {
+      label: "客户填写",
+      reason: "API 未证明该字段可由 AI 安全生成，默认要求客户提供真实值",
+      sources: ["user_provided", "user_confirmed", "business_system"] as const,
+    },
+    business_system: {
+      label: "ERP / 客户事实",
+      reason: "优先从 ERP、商品档案或供应链系统同步，缺失时由客户填写",
+      sources: ["business_system", "user_provided", "user_confirmed"] as const,
+    },
+    store_default: {
+      label: "店铺默认",
+      reason: "从已确认的店铺配置带入，客户只需维护一次",
+      sources: ["account_default", "user_confirmed", "business_system"] as const,
+    },
+  }[responsibility];
+  return {
+    field,
+    name,
+    type,
+    required: true,
+    manual_fact: responsibility !== "ai_candidate",
+    responsibility,
+    responsibility_label: responsibilityCopy.label,
+    responsibility_reason: responsibilityCopy.reason,
+    allowed_sources: [...responsibilityCopy.sources],
+    options,
+  };
+};
+
+const demoAiSchemaFields = [
+  demoGuidanceField("productTitle", "商品标题", "input", "ai_candidate"),
+  demoGuidanceField("icbuCatProp.application", "适用场景", "multiCheck", "ai_candidate", [
+    { display_name: "墙面涂装", value: "wall" },
+    { display_name: "木器涂装", value: "wood" },
+    { display_name: "家具翻新", value: "furniture" },
+  ]),
+];
+
+const demoManualSchemaFields = [
+  demoGuidanceField("categoryId", "最终叶子类目", "input", "merchant"),
+  demoGuidanceField("icbuCatProp.brand", "品牌", "input", "business_system"),
+  demoGuidanceField("icbuCatProp.model", "型号", "input", "business_system"),
+  demoGuidanceField("icbuCatProp.material", "刷毛材质", "singleCheck", "business_system", [
+    { display_name: "尼龙", value: "nylon" },
+    { display_name: "聚酯纤维", value: "polyester" },
+    { display_name: "天然鬃毛", value: "natural_bristle" },
+  ]),
+  demoGuidanceField("icbuCatProp.surfaceType", "适用表面", "singleCheck", "merchant", [
+    { display_name: "墙面", value: "wall" },
+    { display_name: "木材", value: "wood" },
+    { display_name: "金属", value: "metal" },
+    { display_name: "多种表面", value: "multi_surface" },
+  ]),
+  demoGuidanceField("price", "价格", "input", "business_system"),
+  demoGuidanceField("currency", "币种", "singleCheck", "store_default", [
+    { display_name: "美元 USD", value: "USD" },
+    { display_name: "欧元 EUR", value: "EUR" },
+    { display_name: "人民币 CNY", value: "CNY" },
+  ]),
+  demoGuidanceField("fobUnitType", "计量单位", "singleCheck", "store_default", [
+    { display_name: "件", value: "Piece/Pieces" },
+    { display_name: "套", value: "Set/Sets" },
+    { display_name: "箱", value: "Carton/Cartons" },
+  ]),
+  demoGuidanceField("moq", "最小起订量", "input", "business_system"),
+  demoGuidanceField("skuOuterId", "商家 SKU", "input", "business_system"),
+  demoGuidanceField("skuStock", "可售库存", "input", "business_system"),
+  demoGuidanceField("packageWeight", "包装毛重", "input", "business_system"),
+  demoGuidanceField("packageLength", "包装长度", "input", "business_system"),
+  demoGuidanceField("packageWidth", "包装宽度", "input", "business_system"),
+  demoGuidanceField("packageHeight", "包装高度", "input", "business_system"),
+  demoGuidanceField("leadTime", "交期", "input", "business_system"),
+  demoGuidanceField("placeOfOrigin", "原产地", "singleCheck", "store_default", [
+    { display_name: "中国", value: "CN" },
+    { display_name: "越南", value: "VN" },
+    { display_name: "印度", value: "IN" },
+  ]),
+];
+
+const demoSchemaGuidance: SchemaGuidanceResult = {
+  ai_fillable_fields: demoAiSchemaFields,
+  manual_fact_fields: demoManualSchemaFields,
+  required_field_ids: [...demoAiSchemaFields, ...demoManualSchemaFields].map(
+    (field) => field.field,
+  ),
+};
+
+const demoSchemaFields = (
+  sku: string,
+  productFacts: ProductFacts,
+  title: string,
+): Record<string, DraftField> => {
+  const surfaceNeedsConfirmation = ["BP-ANG-2IN", "BP-LATEX-3P", "BP-FOAM-5P"].includes(sku);
+  return {
+    productTitle: { value: title, source: "user_confirmed" },
+    "icbuCatProp.application": { value: ["wall", "wood"], source: "user_confirmed" },
+    categoryId: { value: productFacts.categoryId, source: "user_confirmed" },
+    "icbuCatProp.brand": { value: productFacts.brand, source: "business_system" },
+    ...(productFacts.model
+      ? {
+          "icbuCatProp.model": {
+            value: productFacts.model,
+            source: "business_system" as const,
+          },
+        }
+      : {}),
+    "icbuCatProp.material": { value: "nylon", source: "business_system" },
+    ...(!surfaceNeedsConfirmation
+      ? {
+          "icbuCatProp.surfaceType": {
+            value: "multi_surface",
+            source: "user_confirmed" as const,
+          },
+        }
+      : {}),
+    ...(productFacts.price
+      ? { price: { value: productFacts.price, source: "business_system" as const } }
+      : {}),
+    currency: { value: "USD", source: "account_default" },
+    fobUnitType: { value: "Set/Sets", source: "account_default" },
+    moq: { value: productFacts.moq, source: "business_system" },
+    skuOuterId: { value: sku, source: "business_system" },
+    ...(productFacts.stock
+      ? { skuStock: { value: productFacts.stock, source: "business_system" as const } }
+      : {}),
+    ...(productFacts.grossWeight
+      ? {
+          packageWeight: {
+            value: productFacts.grossWeight,
+            source: "business_system" as const,
+          },
+        }
+      : {}),
+    packageLength: { value: productFacts.packageLength, source: "business_system" },
+    packageWidth: { value: productFacts.packageWidth, source: "business_system" },
+    packageHeight: { value: productFacts.packageHeight, source: "business_system" },
+    leadTime: { value: productFacts.leadTime, source: "business_system" },
+    placeOfOrigin: { value: "CN", source: "account_default" },
+  };
+};
+
 export const getMainProductImage = (product: ProductRecord): ProductImage =>
   product.images.find((image) => image.id === product.mainImageId) ?? product.images[0];
 
@@ -109,22 +267,27 @@ const demoProduct = (input: {
   stage: ProductRecord["stage"];
   factOverrides: Partial<ProductFacts>;
   errors: string[];
-}): ProductRecord => ({
-  id: input.id,
-  reference: input.sku,
-  images: [demoImage(`${input.id}-main`, input.image)],
-  mainImageId: `${input.id}-main`,
-  title: input.title,
-  keywords: ["paint brush", "painting tools", "wall painting"],
-  sellingPoints: [input.description, "耐用结构，适合连续涂装", "握持舒适，操作省力"],
-  description: input.description,
-  visibleTraits: [],
-  aiConfirmed: input.aiConfirmed,
-  stage: input.stage,
-  facts: facts({ ...brushCategory, ...input.factOverrides }),
-  errors: input.errors,
-  isDemo: true,
-});
+}): ProductRecord => {
+  const productFacts = facts({ ...brushCategory, ...input.factOverrides });
+  return {
+    id: input.id,
+    reference: input.sku,
+    images: [demoImage(`${input.id}-main`, input.image)],
+    mainImageId: `${input.id}-main`,
+    title: input.title,
+    keywords: ["paint brush", "painting tools", "wall painting"],
+    sellingPoints: [input.description, "耐用结构，适合连续涂装", "握持舒适，操作省力"],
+    description: input.description,
+    visibleTraits: [],
+    aiConfirmed: input.aiConfirmed,
+    stage: input.stage,
+    facts: productFacts,
+    errors: input.errors,
+    schemaGuidance: demoSchemaGuidance,
+    schemaFields: demoSchemaFields(input.sku, productFacts, input.title),
+    isDemo: true,
+  };
+};
 
 export const sampleProducts: ProductRecord[] = [
   demoProduct({

@@ -192,6 +192,22 @@ async def get_schema(
     )
 
 
+@router.post("/alibaba/categories/schema-level")
+async def get_category_schema_level(
+    request: AlibabaSchemaRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "category_schema_level_get",
+        {
+            "cat_id": request.category_id,
+            "language": request.language,
+            "xml": request.xml,
+        },
+    )
+
+
 @router.post("/alibaba/products/drafts/render")
 async def render_draft(
     request: AlibabaDraftRenderRequest,

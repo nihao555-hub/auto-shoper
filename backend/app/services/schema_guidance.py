@@ -1,11 +1,14 @@
+from typing import Literal
+
 from backend.app.models import (
+    FieldSource,
     ParsedSchemaField,
     SchemaFieldGuidance,
     SchemaGuidanceResult,
     SchemaOption,
     SchemaRule,
 )
-from backend.app.services.field_policy import is_manual_fact_field
+from backend.app.services.field_policy import schema_field_responsibility
 from backend.app.services.schema_rules import parse_schema_data
 
 MAX_OPTIONS_PER_FIELD = 40
@@ -47,25 +50,55 @@ def _collect(
         and (bool(field.options) or not field.children)
     )
     if describable:
+        responsibility, label, reason, allowed_sources = _responsibility(
+            key, field.name or ""
+        )
         guidance = SchemaFieldGuidance(
             field=key,
             name=field.name,
             type=field.type,
             required=field.required,
-            manual_fact=(
-                is_manual_fact_field(key)
-                or is_manual_fact_field(field.name or "")
-            ),
+            manual_fact=responsibility != "ai_candidate",
+            responsibility=responsibility,
+            responsibility_label=label,
+            responsibility_reason=reason,
+            allowed_sources=allowed_sources,
+            async_options=_rule_value(field.rules, "asyncQueryRule") is not None,
+            async_query_method=_rule_value(field.rules, "asyncQueryRule"),
             max_length=_max_length(field.rules),
             tip=_tip(field.rules),
             options=field.options[:MAX_OPTIONS_PER_FIELD],
         )
-        if guidance.manual_fact:
-            manual.append(guidance)
-        else:
+        if guidance.responsibility == "ai_candidate":
             ai_fillable.append(guidance)
+        else:
+            manual.append(guidance)
     for child in field.children:
         _collect(child, ai_fillable, manual)
+
+
+def _responsibility(
+    key: str,
+    name: str,
+) -> tuple[
+    Literal["ai_candidate", "merchant", "business_system", "store_default"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    key_result = schema_field_responsibility(key)
+    name_result = schema_field_responsibility(name)
+    priority = {
+        "store_default": 3,
+        "business_system": 2,
+        "ai_candidate": 1,
+        "merchant": 0,
+    }
+    return (
+        key_result
+        if priority[key_result[0]] >= priority[name_result[0]]
+        else name_result
+    )
 
 
 def _max_length(rules: list[SchemaRule]) -> int | None:
@@ -80,6 +113,13 @@ def _max_length(rules: list[SchemaRule]) -> int | None:
 def _tip(rules: list[SchemaRule]) -> str | None:
     for rule in rules:
         if rule.name == "tipRule" and rule.value:
+            return rule.value
+    return None
+
+
+def _rule_value(rules: list[SchemaRule], name: str) -> str | None:
+    for rule in rules:
+        if rule.name == name:
             return rule.value
     return None
 

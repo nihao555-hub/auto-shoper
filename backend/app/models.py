@@ -323,6 +323,17 @@ class SchemaFieldGuidance(BaseModel):
     type: str | None = None
     required: bool = False
     manual_fact: bool = False
+    responsibility: Literal[
+        "ai_candidate",
+        "merchant",
+        "business_system",
+        "store_default",
+    ] = "merchant"
+    responsibility_label: str = "客户填写"
+    responsibility_reason: str = "Alibaba 类目字段，需由客户提供真实值"
+    allowed_sources: list[FieldSource] = Field(default_factory=list)
+    async_options: bool = False
+    async_query_method: str | None = None
     max_length: int | None = None
     tip: str | None = None
     options: list[SchemaOption] = Field(default_factory=list)

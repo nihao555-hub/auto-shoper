@@ -1,3 +1,5 @@
+from typing import Literal
+
 from backend.app.models import (
     DraftField,
     FieldSource,
@@ -97,6 +99,54 @@ MANUAL_FACT_ALIASES = {
 MANUAL_FIELD_KEYS = {_compact_field_name(name) for name in MANUAL_FIELD_NAMES}
 MANUAL_FACT_ALIAS_KEYS = {_compact_field_name(name) for name in MANUAL_FACT_ALIASES}
 STORE_DEFAULT_KEYS = {_compact_field_name(name) for name in STORE_DEFAULT_ALIASES}
+AI_ASSISTED_ALIASES = {
+    "application",
+    "appearance",
+    "color",
+    "colour",
+    "component",
+    "description",
+    "design",
+    "feature",
+    "image",
+    "keyword",
+    "pattern",
+    "sellingpoint",
+    "shape",
+    "style",
+    "subject",
+    "title",
+    "usage",
+    "use",
+}
+BUSINESS_SYSTEM_ALIASES = {
+    "brand",
+    "capacity",
+    "certification",
+    "composition",
+    "currency",
+    "deliverytime",
+    "dimension",
+    "hs_code",
+    "inventory",
+    "ladderprice",
+    "leadtime",
+    "logistics",
+    "material",
+    "model",
+    "moq",
+    "origin",
+    "package",
+    "port",
+    "price",
+    "shipping",
+    "sku",
+    "stock",
+    "supplyquantity",
+    "weight",
+}
+AI_ASSISTED_KEYS = {_compact_field_name(name) for name in AI_ASSISTED_ALIASES}
+BUSINESS_SYSTEM_KEYS = {_compact_field_name(name) for name in BUSINESS_SYSTEM_ALIASES}
 
 
 def validate_product_fields(
@@ -209,6 +259,82 @@ def is_manual_fact_field(field_name: str) -> bool:
             len(alias) >= 5 and alias in normalized
             for alias in MANUAL_FACT_ALIAS_KEYS
         )
+    )
+
+
+def is_ai_assisted_field(field_name: str) -> bool:
+    normalized = _compact_field_name(field_name)
+    parts = {
+        _compact_field_name(part)
+        for part in field_name.replace("/", ".").split(".")
+    }
+    return bool(
+        not is_manual_fact_field(field_name)
+        and (
+            normalized in AI_ASSISTED_KEYS
+            or parts & AI_ASSISTED_KEYS
+            or any(
+                len(alias) >= 4 and alias in normalized
+                for alias in AI_ASSISTED_KEYS
+            )
+        )
+    )
+
+
+def schema_field_responsibility(
+    field_name: str,
+) -> tuple[
+    Literal["ai_candidate", "merchant", "business_system", "store_default"],
+    str,
+    str,
+    list[FieldSource],
+]:
+    if is_store_default_field(field_name):
+        return (
+            "store_default",
+            "店铺默认",
+            "从已确认的店铺配置带入，客户只需维护一次",
+            [
+                FieldSource.ACCOUNT_DEFAULT,
+                FieldSource.USER_CONFIRMED,
+                FieldSource.BUSINESS_SYSTEM,
+            ],
+        )
+    if is_ai_assisted_field(field_name):
+        return (
+            "ai_candidate",
+            "AI 先填·客户确认",
+            "AI 只能生成候选，客户确认后才能提交",
+            [
+                FieldSource.IMAGE_EXTRACTED,
+                FieldSource.AI_GENERATED,
+                FieldSource.USER_CONFIRMED,
+            ],
+        )
+    normalized = _compact_field_name(field_name)
+    if is_manual_fact_field(field_name) or any(
+        len(alias) >= 4 and alias in normalized
+        for alias in BUSINESS_SYSTEM_KEYS
+    ):
+        return (
+            "business_system",
+            "ERP / 客户事实",
+            "优先从 ERP、商品档案或供应链系统同步，缺失时由客户填写",
+            [
+                FieldSource.BUSINESS_SYSTEM,
+                FieldSource.USER_PROVIDED,
+                FieldSource.USER_CONFIRMED,
+            ],
+        )
+    return (
+        "merchant",
+        "客户填写",
+        "API 未证明该字段可由 AI 安全生成，默认要求客户提供真实值",
+        [
+            FieldSource.USER_PROVIDED,
+            FieldSource.USER_CONFIRMED,
+            FieldSource.BUSINESS_SYSTEM,
+        ],
     )
 
 
