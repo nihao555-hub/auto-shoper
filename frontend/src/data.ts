@@ -72,10 +72,7 @@ export const requiredStoreTemplateFields: StoreTemplateField[] = [
   { key: "priceUnit", label: "计量单位", autoFilledFromStore: true },
   { key: "productGroupId", label: "商品分组", autoFilledFromStore: true },
   { key: "photoBankGroupId", label: "图片银行分组", autoFilledFromStore: true },
-  { key: "warehouseId", label: "仓库", autoFilledFromStore: true },
   { key: "shippingTemplateId", label: "运费模板", autoFilledFromStore: true },
-  { key: "inventoryCode", label: "库存地点编码", autoFilledFromStore: true },
-  { key: "companyProfile", label: "公司介绍", autoFilledFromStore: true },
 ];
 
 export const getMissingStoreTemplateFields = (settings: StoreSettings): StoreTemplateField[] =>

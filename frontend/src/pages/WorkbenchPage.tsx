@@ -1546,7 +1546,9 @@ export function WorkbenchPage({
         <div className="wb-topbar-meta">
           <span>
             当前店铺：
-            <strong>{activeStore?.login_id ?? activeStore?.account ?? "未连接店铺"}</strong>
+            <strong>
+              {activeStore?.login_id ?? activeStore?.account ?? activeStore?.id ?? "未连接店铺"}
+            </strong>
           </span>
           <span>
             批次 ID：<strong>{batchId}</strong>
