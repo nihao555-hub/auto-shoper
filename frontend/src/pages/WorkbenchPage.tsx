@@ -18,6 +18,7 @@ import {
   Plus,
   Question,
   Sparkle,
+  Translate,
   Trash,
   UploadSimple,
   Warning,
@@ -51,6 +52,7 @@ import {
   listPhotoBankImages,
   planProductImages,
   publishBatch,
+  translateProductContent,
   uploadPhotoBankImage,
 } from "../api";
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
@@ -64,6 +66,7 @@ import type {
   ImageSlotPlan,
   ProductImageCandidate,
   ProductRecord,
+  ProductTranslation,
   SchemaFieldGuidance,
   StoreSettings,
   ToastMessage,
@@ -83,6 +86,40 @@ type WorkbenchPageProps = {
   onOpenSettings: () => void;
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
+
+type TargetMarket = {
+  code: string;
+  label: string;
+  languageCode: string;
+  languageLabel: string;
+};
+
+const targetMarkets: TargetMarket[] = [
+  { code: "US", label: "美国", languageCode: "en-US", languageLabel: "英语" },
+  { code: "DE", label: "德国", languageCode: "de-DE", languageLabel: "德语" },
+  { code: "FR", label: "法国", languageCode: "fr-FR", languageLabel: "法语" },
+  { code: "ES", label: "西班牙", languageCode: "es-ES", languageLabel: "西班牙语" },
+  { code: "IT", label: "意大利", languageCode: "it-IT", languageLabel: "意大利语" },
+  { code: "JP", label: "日本", languageCode: "ja-JP", languageLabel: "日语" },
+  { code: "KR", label: "韩国", languageCode: "ko-KR", languageLabel: "韩语" },
+  { code: "SA", label: "沙特阿拉伯", languageCode: "ar-SA", languageLabel: "阿拉伯语" },
+  { code: "BR", label: "巴西", languageCode: "pt-BR", languageLabel: "葡萄牙语" },
+  { code: "MX", label: "墨西哥", languageCode: "es-MX", languageLabel: "西班牙语" },
+  { code: "ID", label: "印度尼西亚", languageCode: "id-ID", languageLabel: "印度尼西亚语" },
+  { code: "TH", label: "泰国", languageCode: "th-TH", languageLabel: "泰语" },
+  { code: "VN", label: "越南", languageCode: "vi-VN", languageLabel: "越南语" },
+  { code: "RU", label: "俄罗斯", languageCode: "ru-RU", languageLabel: "俄语" },
+];
+
+const hasMarketTranslation = (
+  product: ProductRecord,
+  market: TargetMarket | null,
+): product is ProductRecord & { translation: ProductTranslation } =>
+  Boolean(
+    market &&
+      product.translation?.targetMarketCode === market.code &&
+      product.translation.targetLanguageCode === market.languageCode,
+  );
 
 const demoImageCandidates: ProductImageCandidate[] = [
   {
@@ -122,7 +159,7 @@ const demoImageCandidates: ProductImageCandidate[] = [
   },
 ];
 
-const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
+const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "目标语言翻译", "回读发布"];
 const stepGuides = [
   {
     title: "先准备商品图片",
@@ -141,8 +178,12 @@ const stepGuides = [
     detail: "先查看校验结果，再为已选且通过校验的商品创建草稿。",
   },
   {
+    title: "翻译买家可见文案",
+    detail: "选择目标国家后翻译标题、关键词、卖点和详情；事实字段保持 API 原值。",
+  },
+  {
     title: "最后回读并发布",
-    detail: "核对商品 ID、店铺、价格和状态；正式发布前还需要再次确认。",
+    detail: "核对商品 ID、店铺、价格、目标语言和状态；正式发布前还需要再次确认。",
   },
 ];
 
@@ -208,6 +249,8 @@ export function WorkbenchPage({
   const [dragActive, setDragActive] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [targetMarketCode, setTargetMarketCode] = useState("");
+  const [translationBusy, setTranslationBusy] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
   const [imagePlan, setImagePlan] = useState<ImageSlotPlan[]>([]);
@@ -371,6 +414,19 @@ export function WorkbenchPage({
       product.stage === "publishing" ||
       product.stage === "published",
   );
+  const targetMarket = targetMarkets.find((market) => market.code === targetMarketCode) ?? null;
+  const translatedProducts = draftedProducts.filter((product) =>
+    hasMarketTranslation(product, targetMarket),
+  );
+  const confirmedTranslations = translatedProducts.filter(
+    (product) => product.translation?.confirmed,
+  );
+  const translationComplete =
+    Boolean(targetMarket) &&
+    draftedProducts.length > 0 &&
+    draftedProducts.every(
+      (product) => hasMarketTranslation(product, targetMarket) && product.translation.confirmed,
+    );
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
     (product) =>
@@ -392,6 +448,7 @@ export function WorkbenchPage({
     aiReviewComplete,
     allProductsReady,
     draftedProducts.length > 0,
+    translationComplete,
     publishedProducts.length > 0,
   ];
   const unlockedSteps = [
@@ -400,6 +457,7 @@ export function WorkbenchPage({
     maxUnlockedStep >= 2 && aiReviewComplete,
     maxUnlockedStep >= 3 && allProductsReady,
     maxUnlockedStep >= 4 && draftedProducts.length > 0,
+    maxUnlockedStep >= 5 && translationComplete,
   ];
   const maxAccessibleStep = unlockedSteps.reduce(
     (highest, unlocked, index) => (unlocked ? index : highest),
@@ -415,7 +473,22 @@ export function WorkbenchPage({
 
   const updateProduct = (nextProduct: ProductRecord) => {
     onProductsChange(
-      products.map((product) => (product.id === nextProduct.id ? nextProduct : product)),
+      products.map((product) => {
+        if (product.id !== nextProduct.id) {
+          return product;
+        }
+        const contentChanged =
+          product.title !== nextProduct.title ||
+          product.description !== nextProduct.description ||
+          product.keywords.join("\u0000") !== nextProduct.keywords.join("\u0000") ||
+          product.sellingPoints.join("\u0000") !== nextProduct.sellingPoints.join("\u0000");
+        return contentChanged && nextProduct.translation
+          ? {
+              ...nextProduct,
+              translation: { ...nextProduct.translation, confirmed: false },
+            }
+          : nextProduct;
+      }),
     );
   };
 
@@ -1010,13 +1083,171 @@ export function WorkbenchPage({
     }
   };
 
+  const translateDrafts = async () => {
+    if (!targetMarket) {
+      notify("warning", "请先选择目标国家", "系统会自动匹配该市场的主要语言。");
+      return;
+    }
+    if (!draftedProducts.length) {
+      notify("warning", "没有可翻译的草稿");
+      return;
+    }
+    if (
+      targetMarket.languageCode !== "en-US" &&
+      (!backendConnected || !capabilities?.model_credentials_configured)
+    ) {
+      notify(
+        "error",
+        !backendConnected ? "翻译服务暂不可用" : "AI 翻译服务尚未配置",
+        "可以选择美国英语保留原文，或联系管理员配置现有 AI Provider。",
+      );
+      return;
+    }
+
+    setTranslationBusy(true);
+    const results = await Promise.all(
+      draftedProducts.map(async (product) => {
+        try {
+          const response =
+            targetMarket.languageCode === "en-US"
+              ? {
+                  title: product.title,
+                  keywords: product.keywords,
+                  selling_points: product.sellingPoints,
+                  description: product.description,
+                }
+              : await translateProductContent(
+                  product,
+                  targetMarket.languageCode,
+                  targetMarket.languageLabel,
+                );
+          const translation: ProductTranslation = {
+            targetMarketCode: targetMarket.code,
+            targetMarketLabel: targetMarket.label,
+            targetLanguageCode: targetMarket.languageCode,
+            targetLanguageLabel: targetMarket.languageLabel,
+            title: response.title,
+            keywords: response.keywords,
+            sellingPoints: response.selling_points,
+            description: response.description,
+            confirmed: false,
+            translatedAt: new Date().toISOString(),
+          };
+          return { productId: product.id, translation, error: null };
+        } catch (error) {
+          return {
+            productId: product.id,
+            translation: null,
+            error: error instanceof Error ? error.message : "翻译失败",
+          };
+        }
+      }),
+    );
+    const translations = new Map(
+      results
+        .filter(
+          (
+            result,
+          ): result is {
+            productId: string;
+            translation: ProductTranslation;
+            error: null;
+          } => result.translation !== null,
+        )
+        .map((result) => [result.productId, result.translation]),
+    );
+    onProductsChange(
+      products.map((product) => {
+        const translation = translations.get(product.id);
+        return translation ? { ...product, translation } : product;
+      }),
+    );
+    const failures = results.filter((result) => result.error);
+    notify(
+      failures.length ? "warning" : "success",
+      failures.length
+        ? `翻译完成 ${translations.size}/${results.length}`
+        : `已生成 ${translations.size} 个${targetMarket.languageLabel}版本`,
+      failures.length
+        ? failures
+            .slice(0, 2)
+            .map((result) => result.error)
+            .join("；")
+        : "请逐项核对，确认后才会用于正式发布。",
+    );
+    setTranslationBusy(false);
+  };
+
+  const changeTranslation = (
+    productId: string,
+    patch: Partial<
+      Pick<ProductTranslation, "title" | "keywords" | "sellingPoints" | "description">
+    >,
+  ) => {
+    onProductsChange(
+      products.map((product) =>
+        product.id === productId && product.translation
+          ? {
+              ...product,
+              translation: {
+                ...product.translation,
+                ...patch,
+                confirmed: false,
+              },
+            }
+          : product,
+      ),
+    );
+  };
+
+  const confirmTranslation = (productId: string) => {
+    onProductsChange(
+      products.map((product) =>
+        product.id === productId && product.translation
+          ? {
+              ...product,
+              translation: { ...product.translation, confirmed: true },
+            }
+          : product,
+      ),
+    );
+  };
+
+  const confirmAllTranslations = () => {
+    if (!targetMarket || translatedProducts.length !== draftedProducts.length) {
+      notify("warning", "请先完成全部翻译");
+      return;
+    }
+    onProductsChange(
+      products.map((product) =>
+        product.translation?.targetMarketCode === targetMarket.code &&
+        product.translation.targetLanguageCode === targetMarket.languageCode
+          ? {
+              ...product,
+              translation: { ...product.translation, confirmed: true },
+            }
+          : product,
+      ),
+    );
+    setMaxUnlockedStep((current) => Math.max(current, 5));
+  };
+
+  const continueToPublish = () => {
+    if (!translationComplete) {
+      notify("warning", "翻译尚未全部确认", "所有草稿的目标语言文案确认后才能发布。");
+      return;
+    }
+    setMaxUnlockedStep((current) => Math.max(current, 5));
+    setStep(5);
+  };
+
   const confirmPublish = async () => {
     const targets = getActionProducts(products, selected).filter(
       (product) =>
         product.stage === "drafted" ||
         (product.stage === "error" && Boolean(product.draftProductId)),
     );
-    if (!publishConfirmed || !targets.length) {
+    if (!publishConfirmed || !targets.length || !translationComplete) {
       return;
     }
     if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
@@ -1248,6 +1479,10 @@ export function WorkbenchPage({
       return;
     }
     if (step === 4) {
+      continueToPublish();
+      return;
+    }
+    if (step === 5) {
       setPublishDialogOpen(true);
     }
   };
@@ -1266,6 +1501,9 @@ export function WorkbenchPage({
     `已确认 ${confirmedCount}`,
     `缺失事实 ${missingCount}`,
     `可建草稿 ${draftReadyCount}`,
+    targetMarket
+      ? `已确认 ${confirmedTranslations.length}/${draftedProducts.length}`
+      : "请选择国家",
     `待发布 ${draftedProducts.length}`,
   ];
   return (
@@ -1297,6 +1535,7 @@ export function WorkbenchPage({
                 setSelected(new Set(products.map((product) => product.id)));
                 setInspectorOpen(false);
                 setPublishDialogOpen(false);
+                setTargetMarketCode("");
               }}
             >
               <ArrowCounterClockwise size={16} />
@@ -1443,6 +1682,21 @@ export function WorkbenchPage({
           ) : null}
 
           {step === 4 ? (
+            <TranslationStep
+              products={draftedProducts}
+              targetMarkets={targetMarkets}
+              targetMarketCode={targetMarketCode}
+              busy={translationBusy}
+              onTargetMarketChange={setTargetMarketCode}
+              onTranslate={() => void translateDrafts()}
+              onChange={changeTranslation}
+              onConfirm={confirmTranslation}
+              onConfirmAll={confirmAllTranslations}
+              onContinue={continueToPublish}
+            />
+          ) : null}
+
+          {step === 5 ? (
             <PreviewStep
               products={products}
               selected={selected}
@@ -1450,6 +1704,7 @@ export function WorkbenchPage({
               storeName={activeStore?.login_id ?? activeStore?.account ?? ""}
               unit={settings.priceUnit}
               currency={settings.currency}
+              targetLanguage={targetMarket?.languageLabel ?? ""}
               onSelect={toggleSelected}
               onPublish={() => setPublishDialogOpen(true)}
               onPublishOne={(id) => {
@@ -2125,9 +2380,11 @@ function AiStep({
                       <div>
                         <span>
                           <MagicWand size={15} weight="fill" />
-                          AI 图片候选
+                          AI 智能套图
                         </span>
-                        <p>加入图库前需检查外观一致性；尺寸、包装和合规事实不会由图片生成。</p>
+                        <p>
+                          基于真实参考图生成白底图、场景图、细节图和规格图；加入图库前需人工确认。
+                        </p>
                       </div>
                       <div>
                         <button
@@ -2141,7 +2398,11 @@ function AiStep({
                           ) : (
                             <ArrowCounterClockwise size={15} />
                           )}
-                          {imageGenerationBusy ? "生成中" : "重新生成"}
+                          {imageGenerationBusy
+                            ? "生成中"
+                            : imageCandidates.length
+                              ? "重新生成套图"
+                              : "生成 AI 套图"}
                         </button>
                         <button
                           type="button"
@@ -2930,117 +3191,117 @@ function WbInspector({
           </small>
         </div>
 
-        <details className="wb-inspector-optional wb-image-generation-optional">
-          <summary>可选：生成更多商品图片</summary>
-          <section className="wb-inspector-section wb-image-generation">
-            <div className="wb-image-generation-heading">
-              <h3>智能补齐商品图</h3>
-              <button
-                type="button"
-                className="button button-secondary wb-image-generation-button"
-                onClick={onRefreshImagePlan}
-                disabled={imagePlanBusy || imageGenerationBusy || product.isDemo}
-              >
-                {imagePlanBusy ? <CircleNotch size={15} className="spin" /> : <Sparkle size={15} />}
-                {imagePlanBusy ? "检查中" : "检查缺失图种"}
-              </button>
+        <section className="wb-inspector-section wb-image-generation wb-image-generation-prominent">
+          <div className="wb-image-generation-heading">
+            <div>
+              <h3>AI 智能套图</h3>
+              <p>至少使用一张真实参考图，生成结果加入图库前必须人工确认。</p>
             </div>
-            {product.isDemo ? (
-              <p className="wb-image-generation-empty">
-                演示模式使用隔离候选图，不调用真实图片服务或 Alibaba 店铺。
-              </p>
-            ) : null}
-            {imagePlan.length ? (
-              <div className="wb-image-plan">
-                <div className="wb-image-plan-summary">
-                  <span>
-                    缺失 {imagePlan.length} 种 · 可生成{" "}
-                    {imagePlan.filter((slot) => slot.can_generate).length} 种
-                  </span>
-                  <button
-                    type="button"
-                    className="button button-secondary wb-image-generation-button"
-                    onClick={() => onGenerateImages()}
-                    disabled={imageGenerationBusy || !imagePlan.some((slot) => slot.can_generate)}
-                  >
-                    {imageGenerationBusy ? (
-                      <CircleNotch size={15} className="spin" />
-                    ) : (
-                      <MagicWand size={15} />
-                    )}
-                    {imageGenerationBusy ? "生成中" : "生成全部就绪图种"}
-                  </button>
-                </div>
-                {imagePlan.map((slot) => (
-                  <article
-                    key={slot.slot}
-                    className={`wb-image-plan-item ${slot.can_generate ? "is-ready" : "is-blocked"}`}
-                  >
-                    <div className="wb-image-plan-title">
-                      <div>
-                        <strong>{slot.label}</strong>
-                        <span>{slot.purpose}</span>
-                      </div>
-                      <small>{slot.can_generate ? "可生成" : "需要商品信息"}</small>
+            <button
+              type="button"
+              className="button button-secondary wb-image-generation-button"
+              onClick={onRefreshImagePlan}
+              disabled={imagePlanBusy || imageGenerationBusy || product.isDemo}
+            >
+              {imagePlanBusy ? <CircleNotch size={15} className="spin" /> : <Sparkle size={15} />}
+              {imagePlanBusy ? "检查中" : "检查缺失图种"}
+            </button>
+          </div>
+          {product.isDemo ? (
+            <p className="wb-image-generation-empty">
+              演示模式使用隔离候选图，不调用真实图片服务或 Alibaba 店铺。
+            </p>
+          ) : null}
+          {imagePlan.length ? (
+            <div className="wb-image-plan">
+              <div className="wb-image-plan-summary">
+                <span>
+                  缺失 {imagePlan.length} 种 · 可生成{" "}
+                  {imagePlan.filter((slot) => slot.can_generate).length} 种
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary wb-image-generation-button"
+                  onClick={() => onGenerateImages()}
+                  disabled={imageGenerationBusy || !imagePlan.some((slot) => slot.can_generate)}
+                >
+                  {imageGenerationBusy ? (
+                    <CircleNotch size={15} className="spin" />
+                  ) : (
+                    <MagicWand size={15} />
+                  )}
+                  {imageGenerationBusy ? "生成中" : "生成全部就绪图种"}
+                </button>
+              </div>
+              {imagePlan.map((slot) => (
+                <article
+                  key={slot.slot}
+                  className={`wb-image-plan-item ${slot.can_generate ? "is-ready" : "is-blocked"}`}
+                >
+                  <div className="wb-image-plan-title">
+                    <div>
+                      <strong>{slot.label}</strong>
+                      <span>{slot.purpose}</span>
                     </div>
-                    {slot.missing_user_inputs.map((requirement) => (
-                      <label key={requirement.key} className="wb-image-plan-input">
-                        <span>{requirement.label}</span>
-                        <input
-                          value={providedImageInputs[requirement.key] ?? ""}
-                          onChange={(event) =>
-                            onChangeImageInput(requirement.key, event.target.value)
-                          }
-                          placeholder={requirement.description}
-                        />
-                      </label>
-                    ))}
-                    <div className="wb-image-plan-actions">
+                    <small>{slot.can_generate ? "可生成" : "需要商品信息"}</small>
+                  </div>
+                  {slot.missing_user_inputs.map((requirement) => (
+                    <label key={requirement.key} className="wb-image-plan-input">
+                      <span>{requirement.label}</span>
+                      <input
+                        value={providedImageInputs[requirement.key] ?? ""}
+                        onChange={(event) =>
+                          onChangeImageInput(requirement.key, event.target.value)
+                        }
+                        placeholder={requirement.description}
+                      />
+                    </label>
+                  ))}
+                  <div className="wb-image-plan-actions">
+                    <button
+                      type="button"
+                      className="wb-link"
+                      onClick={() => onGenerateImages([slot.slot])}
+                      disabled={!slot.can_generate || imageGenerationBusy}
+                    >
+                      生成此图
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+          {imageCandidates.length ? (
+            <div className="wb-image-candidate-list">
+              {imageCandidates.map((candidate) => (
+                <article key={candidate.slot} className="wb-image-candidate">
+                  {candidate.image_url ? (
+                    <img src={candidate.image_url} alt={`${candidate.label}候选`} />
+                  ) : (
+                    <div className="wb-image-candidate-error">
+                      <WarningCircle size={17} />
+                      <span>{candidate.error ?? "未返回图片"}</span>
+                    </div>
+                  )}
+                  <div>
+                    <strong>{candidate.label}</strong>
+                    {candidate.image_url ? (
                       <button
                         type="button"
                         className="wb-link"
-                        onClick={() => onGenerateImages([slot.slot])}
-                        disabled={!slot.can_generate || imageGenerationBusy}
+                        onClick={() => onAddGeneratedImage(candidate)}
                       >
-                        生成此图
+                        加入图库
                       </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-            {imageCandidates.length ? (
-              <div className="wb-image-candidate-list">
-                {imageCandidates.map((candidate) => (
-                  <article key={candidate.slot} className="wb-image-candidate">
-                    {candidate.image_url ? (
-                      <img src={candidate.image_url} alt={`${candidate.label}候选`} />
                     ) : (
-                      <div className="wb-image-candidate-error">
-                        <WarningCircle size={17} />
-                        <span>{candidate.error ?? "未返回图片"}</span>
-                      </div>
+                      <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
                     )}
-                    <div>
-                      <strong>{candidate.label}</strong>
-                      {candidate.image_url ? (
-                        <button
-                          type="button"
-                          className="wb-link"
-                          onClick={() => onAddGeneratedImage(candidate)}
-                        >
-                          加入图库
-                        </button>
-                      ) : (
-                        <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </section>
-        </details>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
         <details className="wb-inspector-optional wb-content-optional">
           <summary>可选：修改已确认的标题与描述</summary>
           <section className="wb-inspector-section">
@@ -3889,6 +4150,280 @@ function DraftDetailDrawer({
   );
 }
 
+function TranslationStep({
+  products,
+  targetMarkets,
+  targetMarketCode,
+  busy,
+  onTargetMarketChange,
+  onTranslate,
+  onChange,
+  onConfirm,
+  onConfirmAll,
+  onContinue,
+}: {
+  products: ProductRecord[];
+  targetMarkets: TargetMarket[];
+  targetMarketCode: string;
+  busy: boolean;
+  onTargetMarketChange: (code: string) => void;
+  onTranslate: () => void;
+  onChange: (
+    productId: string,
+    patch: Partial<
+      Pick<ProductTranslation, "title" | "keywords" | "sellingPoints" | "description">
+    >,
+  ) => void;
+  onConfirm: (productId: string) => void;
+  onConfirmAll: () => void;
+  onContinue: () => void;
+}) {
+  const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
+  const market = targetMarkets.find((item) => item.code === targetMarketCode) ?? null;
+  const activeProduct =
+    products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
+  const matchingTranslation =
+    activeProduct && hasMarketTranslation(activeProduct, market) ? activeProduct.translation : null;
+  const translatedCount = products.filter((product) =>
+    hasMarketTranslation(product, market),
+  ).length;
+  const confirmedCount = products.filter(
+    (product) => hasMarketTranslation(product, market) && product.translation.confirmed,
+  ).length;
+  const allTranslated = products.length > 0 && translatedCount === products.length;
+  const allConfirmed = products.length > 0 && confirmedCount === products.length;
+
+  useEffect(() => {
+    if (products.length && !products.some((product) => product.id === activeProductId)) {
+      setActiveProductId(products[0].id);
+    }
+  }, [activeProductId, products]);
+
+  return (
+    <div className="step-page translation-step">
+      <div className="step-heading">
+        <div>
+          <h2>翻译为目标市场语言</h2>
+        </div>
+        <span className="quiet-stat">
+          仅翻译标题、关键词、卖点和详情；价格、SKU、物流与合规事实不变
+        </span>
+      </div>
+
+      <div className="translation-market-bar">
+        <label>
+          <span>目标国家 / 市场</span>
+          <select
+            value={targetMarketCode}
+            onChange={(event) => onTargetMarketChange(event.target.value)}
+          >
+            <option value="">请选择目标国家</option>
+            {targetMarkets.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="translation-language-readonly">
+          <small>自动匹配语言</small>
+          <strong>
+            {market ? `${market.languageLabel} · ${market.languageCode}` : "等待选择"}
+          </strong>
+        </div>
+        <div className="translation-scope">
+          <span>翻译范围</span>
+          <strong>标题 · 关键词 · 卖点 · 商品详情</strong>
+          <small>类目枚举和业务事实继续使用 Alibaba API 原值</small>
+        </div>
+        <button
+          type="button"
+          className="button button-dark translation-run"
+          onClick={onTranslate}
+          disabled={!market || busy || !products.length}
+        >
+          {busy ? <CircleNotch size={17} className="spin" /> : <Translate size={17} />}
+          {busy ? "正在翻译" : translatedCount ? "重新生成翻译" : "自动翻译全部"}
+        </button>
+      </div>
+
+      <div className="translation-status-strip">
+        <span>
+          <strong>{products.length}</strong>
+          待处理草稿
+        </span>
+        <span>
+          <strong>{translatedCount}</strong>
+          已生成翻译
+        </span>
+        <span className={allConfirmed ? "is-complete" : ""}>
+          <strong>{confirmedCount}</strong>
+          已人工确认
+        </span>
+        <p>
+          <WarningCircle size={15} weight="fill" />
+          AI 翻译不会改写数字、单位、型号、材质或认证；正式发布前仍需逐项核对。
+        </p>
+      </div>
+
+      <div className="translation-workspace">
+        <div className="translation-product-list">
+          {products.map((product) => {
+            const translation = hasMarketTranslation(product, market) ? product.translation : null;
+            return (
+              <button
+                type="button"
+                key={product.id}
+                className={product.id === activeProduct?.id ? "is-active" : ""}
+                onClick={() => setActiveProductId(product.id)}
+              >
+                <img src={getMainProductImage(product).url} alt="" />
+                <span>
+                  <strong>{product.title || product.reference}</strong>
+                  <small>{product.reference}</small>
+                </span>
+                {translation?.confirmed ? (
+                  <CheckCircle size={17} weight="fill" />
+                ) : translation ? (
+                  <WarningCircle size={17} weight="fill" />
+                ) : (
+                  <Translate size={17} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="translation-editor">
+          {activeProduct && matchingTranslation ? (
+            <>
+              <div className="translation-editor-head">
+                <span>
+                  <small>{activeProduct.reference}</small>
+                  <strong>
+                    {matchingTranslation.targetMarketLabel} ·{" "}
+                    {matchingTranslation.targetLanguageLabel}
+                  </strong>
+                </span>
+                <SourceBadge
+                  source={matchingTranslation.confirmed ? "trusted" : "ai"}
+                  label={matchingTranslation.confirmed ? "人工已确认" : "AI 翻译待确认"}
+                />
+              </div>
+              <div className="translation-field">
+                <span>商品标题</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.title}</p>
+                  <textarea
+                    rows={2}
+                    value={matchingTranslation.title}
+                    onChange={(event) => onChange(activeProduct.id, { title: event.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>关键词</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.keywords.join(" · ") || "—"}</p>
+                  <textarea
+                    rows={2}
+                    value={matchingTranslation.keywords.join(", ")}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, {
+                        keywords: event.target.value
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>核心卖点</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.sellingPoints.join("\n") || "—"}</p>
+                  <textarea
+                    rows={4}
+                    value={matchingTranslation.sellingPoints.join("\n")}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, {
+                        sellingPoints: event.target.value
+                          .split("\n")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>商品详情</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.description || "—"}</p>
+                  <textarea
+                    rows={5}
+                    value={matchingTranslation.description}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, { description: event.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-editor-actions">
+                <small>左侧为已确认原文，右侧为正式发布候选译文。</small>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => onConfirm(activeProduct.id)}
+                  disabled={!matchingTranslation.title.trim() || matchingTranslation.confirmed}
+                >
+                  <Check size={16} />
+                  {matchingTranslation.confirmed ? "当前译文已确认" : "确认当前译文"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="translation-empty">
+              <Translate size={28} />
+              <strong>{market ? `尚未生成${market.languageLabel}版本` : "先选择目标国家"}</strong>
+              <p>点击“自动翻译全部”后，在这里逐项核对原文和译文。</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="translation-bottom-bar">
+        <span>
+          {allConfirmed
+            ? "全部译文已人工确认，发布时将使用目标语言文案。"
+            : `还需确认 ${products.length - confirmedCount} 个商品的译文。`}
+        </span>
+        <div>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={onConfirmAll}
+            disabled={!allTranslated || allConfirmed}
+          >
+            <CheckSquare size={16} />
+            确认全部译文
+          </button>
+          <button
+            type="button"
+            className="button button-primary button-large"
+            onClick={onContinue}
+            disabled={!allConfirmed}
+          >
+            进入回读发布
+            <ArrowRight size={17} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PreviewStep({
   products,
   selected,
@@ -3896,6 +4431,7 @@ function PreviewStep({
   storeName,
   unit,
   currency,
+  targetLanguage,
   onSelect,
   onPublish,
   onPublishOne,
@@ -3908,6 +4444,7 @@ function PreviewStep({
   storeName: string;
   unit: string;
   currency: string;
+  targetLanguage: string;
   onSelect: (id: string) => void;
   onPublish: () => void;
   onPublishOne: (id: string) => void;
@@ -3961,7 +4498,7 @@ function PreviewStep({
       [
         product.draftProductId ?? "",
         product.reference,
-        product.title,
+        product.translation?.confirmed ? product.translation.title : product.title,
         storeName,
         product.stage === "published"
           ? "已发布"
@@ -3993,6 +4530,7 @@ function PreviewStep({
       <div className="step-heading">
         <div>
           <h2>回读草稿并发布</h2>
+          <small>发布文案：{targetLanguage || "未选择目标语言"}</small>
         </div>
         <div className="readback-head-actions">
           <button
@@ -4074,7 +4612,11 @@ function PreviewStep({
                           <div className="draft-table-product">
                             <img src={getMainProductImage(product).url} alt="" />
                             <span>
-                              <strong>{product.title || product.reference}</strong>
+                              <strong>
+                                {product.translation?.confirmed
+                                  ? product.translation.title
+                                  : product.title || product.reference}
+                              </strong>
                               <small>{product.reference}</small>
                             </span>
                           </div>

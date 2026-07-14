@@ -99,6 +99,25 @@ class ProductImageAnalysis(BaseModel):
     warnings: list[str]
 
 
+class ProductContentTranslationRequest(BaseModel):
+    source_language: str = Field(default="English", min_length=2, max_length=80)
+    target_language_code: str = Field(min_length=2, max_length=20)
+    target_language: str = Field(min_length=2, max_length=80)
+    title: str = Field(min_length=1, max_length=500)
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    selling_points: list[str] = Field(default_factory=list, max_length=20)
+    description: str = Field(default="", max_length=12000)
+
+
+class ProductContentTranslationResponse(BaseModel):
+    target_language_code: str
+    target_language: str
+    title: str
+    keywords: list[str]
+    selling_points: list[str]
+    description: str
+
+
 class ProductValidationRequest(BaseModel):
     fields: dict[str, DraftField]
     account_defaults: dict[str, DraftField] = Field(default_factory=dict)

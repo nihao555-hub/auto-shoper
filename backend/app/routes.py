@@ -39,6 +39,8 @@ from backend.app.models import (
     OfficialListingPublishRequest,
     OfficialListingValidationResult,
     ParsedSchemaField,
+    ProductContentTranslationRequest,
+    ProductContentTranslationResponse,
     ProductImageAnalysis,
     ProductImageCandidate,
     ProductImageGenerationRequest,
@@ -493,6 +495,20 @@ async def analyze_product_image(
             category_hint,
             field_guidance,
         )
+    except AIProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/products/translate-content",
+    response_model=ProductContentTranslationResponse,
+)
+async def translate_product_content(
+    request: ProductContentTranslationRequest,
+    ai_client: Annotated[AIClient, Depends(get_ai_client)],
+) -> ProductContentTranslationResponse:
+    try:
+        return await ai_client.translate_product_content(request)
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

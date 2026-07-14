@@ -3,8 +3,9 @@ import json
 import httpx
 import pytest
 
-from backend.app.clients.ai import AIClient
+from backend.app.clients.ai import AIClient, AIProviderError
 from backend.app.config import Settings
+from backend.app.models import ProductContentTranslationRequest
 
 
 def ai_settings() -> Settings:
@@ -103,6 +104,116 @@ async def test_image_generation_uses_configured_model() -> None:
     finally:
         await client.close()
     assert result["data"][0]["url"].endswith("image.png")
+
+
+@pytest.mark.asyncio
+async def test_product_translation_preserves_field_shape() -> None:
+    provider_data = {
+        "title": "Professionelles Pinselset, 12-teilig",
+        "keywords": ["Pinselset", "Künstlerpinsel"],
+        "selling_points": ["12-teilig", "Nylonborsten"],
+        "description": "Pinselset Modell PB-12 mit Nylonborsten.",
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(await request.aread())
+        prompt = payload["messages"][0]["content"]
+        assert "Do not add, remove" in prompt
+        assert "PB-12" in prompt
+        assert payload["temperature"] == 0
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(provider_data)}}]},
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.translate_product_content(
+            ProductContentTranslationRequest(
+                target_language_code="de-DE",
+                target_language="German",
+                title="Professional 12-Piece Paint Brush Set",
+                keywords=["paint brush set", "artist brushes"],
+                selling_points=["12-piece set", "nylon bristles"],
+                description="Paint brush set model PB-12 with nylon bristles.",
+            )
+        )
+    finally:
+        await client.close()
+    assert result.target_language_code == "de-DE"
+    assert result.title == provider_data["title"]
+    assert len(result.keywords) == 2
+    assert len(result.selling_points) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("keywords", "selling_points", "message"),
+    [
+        (["Pinselset"], ["12-teilig", "Nylonborsten"], "keyword count"),
+        (["Pinselset", "Künstlerpinsel"], ["12-teilig"], "selling-point count"),
+    ],
+)
+async def test_product_translation_rejects_changed_array_lengths(
+    keywords: list[str],
+    selling_points: list[str],
+    message: str,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "title": "Pinselset",
+                                    "keywords": keywords,
+                                    "selling_points": selling_points,
+                                    "description": "Beschreibung",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AIProviderError, match=message):
+            await client.translate_product_content(
+                ProductContentTranslationRequest(
+                    target_language_code="de-DE",
+                    target_language="German",
+                    title="Paint Brush Set",
+                    keywords=["paint brush set", "artist brushes"],
+                    selling_points=["12-piece set", "nylon bristles"],
+                    description="Description",
+                )
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_product_translation_rejects_invalid_provider_json() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "not-json"}}]})
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AIProviderError, match="invalid translation response"):
+            await client.translate_product_content(
+                ProductContentTranslationRequest(
+                    target_language_code="de-DE",
+                    target_language="German",
+                    title="Paint Brush Set",
+                )
+            )
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio

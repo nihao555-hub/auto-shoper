@@ -10,6 +10,7 @@ import type {
   ImagePromptTemplate,
   ImageSlot,
   ListingFieldGroup,
+  ProductContentTranslationResponse,
   ProductImageGenerationResponse,
   ProductImagePlanResponse,
   ProductRecord,
@@ -140,6 +141,27 @@ export const analyzeProductImages = async (
     }),
   );
 };
+
+export const translateProductContent = async (
+  product: ProductRecord,
+  targetLanguageCode: string,
+  targetLanguage: string,
+): Promise<ProductContentTranslationResponse> =>
+  parseResponse<ProductContentTranslationResponse>(
+    await apiFetch(`${API_ROOT}/products/translate-content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_language: "English",
+        target_language_code: targetLanguageCode,
+        target_language: targetLanguage,
+        title: product.title,
+        keywords: product.keywords,
+        selling_points: product.sellingPoints,
+        description: product.description,
+      }),
+    }),
+  );
 
 export const getImagePromptTemplates = async (): Promise<ImagePromptTemplate[]> =>
   parseResponse<ImagePromptTemplate[]>(await apiFetch(`${API_ROOT}/images/prompt-templates`));
@@ -386,40 +408,92 @@ const accountDefault = (value: unknown): DraftField => ({
   source: "account_default",
 });
 
-const productFields = (product: ProductRecord): Record<string, DraftField> => ({
-  ...(product.schemaFields ?? {}),
-  category_id: confirmedField(product.facts.categoryId),
-  subject: confirmedField(product.title),
-  keywords: confirmedField(product.keywords),
-  description: confirmedField(product.description),
-  brand: trustedField(product.facts.brand),
-  model: trustedField(product.facts.model),
-  material: trustedField(product.facts.material),
-  price: trustedField(product.facts.price),
-  moq: trustedField(product.facts.moq),
-  inventory: trustedField(product.facts.stock),
-  dimensions: trustedField({
-    length: product.facts.productLength,
-    width: product.facts.productWidth,
-    height: product.facts.productHeight,
-  }),
-  weight: trustedField(product.facts.netWeight),
-  packaging: trustedField({
-    length: product.facts.packageLength,
-    width: product.facts.packageWidth,
-    height: product.facts.packageHeight,
-    grossWeight: product.facts.grossWeight,
-    unitsPerCarton: product.facts.unitsPerCarton,
-  }),
-  lead_time: trustedField(product.facts.leadTime),
-  origin: trustedField(product.facts.origin),
-  hs_code: trustedField(product.facts.hsCode),
-  certifications: trustedField(product.facts.certifications),
-  images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
-  main_image: confirmedField(
-    product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
-  ),
-});
+const listingContent = (product: ProductRecord) =>
+  product.translation?.confirmed
+    ? {
+        title: product.translation.title,
+        keywords: product.translation.keywords,
+        sellingPoints: product.translation.sellingPoints,
+        description: product.translation.description,
+      }
+    : {
+        title: product.title,
+        keywords: product.keywords,
+        sellingPoints: product.sellingPoints,
+        description: product.description,
+      };
+
+const localizedDetailImageValue = (value: unknown, text: string): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => localizedDetailImageValue(item, text));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        key === "generalText" ? text : localizedDetailImageValue(item, text),
+      ]),
+    );
+  }
+  return value;
+};
+
+const localizedSchemaFields = (product: ProductRecord): Record<string, DraftField> => {
+  const fields = { ...(product.schemaFields ?? {}) };
+  if (!product.translation?.confirmed) {
+    return fields;
+  }
+  const content = listingContent(product);
+  fields.productTitle = confirmedField(content.title);
+  fields["productKeywords.productKeywords_0"] = confirmedField(content.keywords.join(", "));
+  fields.textDesc = confirmedField(
+    content.sellingPoints.length ? content.sellingPoints.join("\n") : content.description,
+  );
+  if (fields.detailImage) {
+    fields.detailImage = confirmedField(
+      localizedDetailImageValue(fields.detailImage.value, content.description),
+    );
+  }
+  return fields;
+};
+
+const productFields = (product: ProductRecord): Record<string, DraftField> => {
+  const content = listingContent(product);
+  return {
+    ...localizedSchemaFields(product),
+    category_id: confirmedField(product.facts.categoryId),
+    subject: confirmedField(content.title),
+    keywords: confirmedField(content.keywords),
+    description: confirmedField(content.description),
+    brand: trustedField(product.facts.brand),
+    model: trustedField(product.facts.model),
+    material: trustedField(product.facts.material),
+    price: trustedField(product.facts.price),
+    moq: trustedField(product.facts.moq),
+    inventory: trustedField(product.facts.stock),
+    dimensions: trustedField({
+      length: product.facts.productLength,
+      width: product.facts.productWidth,
+      height: product.facts.productHeight,
+    }),
+    weight: trustedField(product.facts.netWeight),
+    packaging: trustedField({
+      length: product.facts.packageLength,
+      width: product.facts.packageWidth,
+      height: product.facts.packageHeight,
+      grossWeight: product.facts.grossWeight,
+      unitsPerCarton: product.facts.unitsPerCarton,
+    }),
+    lead_time: trustedField(product.facts.leadTime),
+    origin: trustedField(product.facts.origin),
+    hs_code: trustedField(product.facts.hsCode),
+    certifications: trustedField(product.facts.certifications),
+    images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
+    main_image: confirmedField(
+      product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
+    ),
+  };
+};
 
 const accountDefaults = (settings: StoreSettings): Record<string, DraftField> => ({
   currency: accountDefault(settings.currency),

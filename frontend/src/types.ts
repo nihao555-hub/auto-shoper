@@ -110,6 +110,19 @@ export type SchemaGuidanceResult = {
   required_field_ids: string[];
 };
 
+export type ProductTranslation = {
+  targetMarketCode: string;
+  targetMarketLabel: string;
+  targetLanguageCode: string;
+  targetLanguageLabel: string;
+  title: string;
+  keywords: string[];
+  sellingPoints: string[];
+  description: string;
+  confirmed: boolean;
+  translatedAt: string;
+};
+
 export type ProductRecord = {
   id: string;
   reference: string;
@@ -136,6 +149,7 @@ export type ProductRecord = {
   schemaData?: Record<string, unknown> | string;
   schemaGuidance?: SchemaGuidanceResult;
   schemaFields?: Record<string, DraftField>;
+  translation?: ProductTranslation;
   isDemo?: boolean;
 };
 
@@ -267,6 +281,15 @@ export type ImageAnalysisResponse = {
     reason: string;
   }>;
   warnings: string[];
+};
+
+export type ProductContentTranslationResponse = {
+  target_language_code: string;
+  target_language: string;
+  title: string;
+  keywords: string[];
+  selling_points: string[];
+  description: string;
 };
 
 export type ImageSlot = "main" | "detail" | "scenario" | "specification" | "packaging";
