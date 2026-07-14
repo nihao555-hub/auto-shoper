@@ -3004,6 +3004,49 @@ tr.is-failed .bt-store small {
   font-size: 11px;
 }
 
+.wb-schema-options label.is-disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.wb-schema-value-list,
+.wb-schema-attributed-values {
+  display: grid;
+  gap: 10px;
+}
+
+.wb-schema-value-list > div,
+.wb-schema-attributed-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line, #d9d9d4);
+  border-radius: 10px;
+  background: #fafaf7;
+}
+
+.wb-schema-attributes {
+  display: grid;
+  gap: 8px;
+}
+
+.wb-schema-attributes label {
+  display: grid;
+  gap: 5px;
+}
+
+.wb-schema-attributes span {
+  color: var(--text-muted, #6f716b);
+  font-size: 12px;
+}
+
+.wb-schema-inline-error,
+.wb-schema-dynamic-option.is-blocked {
+  color: #8a321f;
+  background: #fff3ee;
+  border-color: #efc5b8;
+}
+
 .wb-schema-options input {
   width: 14px;
   height: 14px;

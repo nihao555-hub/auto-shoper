@@ -4,12 +4,14 @@ import {
   Bell,
   CaretLeft,
   CaretRight,
+  ChartBar,
   Check,
   CheckCircle,
   CheckSquare,
   CircleNotch,
   CloudArrowUp,
   FileText,
+  FloppyDisk,
   GearSix,
   Image,
   LockSimple,
@@ -38,19 +40,31 @@ import {
   type PhotoBankGroup,
   type PhotoBankImage,
   analyzeProductImages,
+  applyListingTemplate,
+  confirmListingField,
   createDraftBatch,
+  createListingTemplate,
+  deleteListingTemplate,
   findPhotoBankFileId,
   findPhotoBankGroups,
   findPhotoBankImages,
   findPhotoBankUrl,
   findSchemaData,
   generateProductImages,
+  getAsyncFieldOptions,
   getCategorySchema,
+  getListingFeatureFlags,
+  getListingMetrics,
+  getListingTasks,
   getSchemaGuidance,
+  importListingProducts,
+  listListingTemplates,
   listPhotoBankGroups,
   listPhotoBankImages,
   planProductImages,
   publishBatch,
+  recordListingMetricEvent,
+  updateListingFeatureFlags,
   uploadPhotoBankImage,
 } from "../api";
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
@@ -59,9 +73,14 @@ import type {
   CapabilityResponse,
   DataMode,
   DraftField,
+  DraftFieldDifference,
+  FieldTask,
   ImageAnalysisResponse,
   ImageSlot,
   ImageSlotPlan,
+  ListingFeatureFlags,
+  ListingMetrics,
+  ListingTemplate,
   ProductImageCandidate,
   ProductRecord,
   SchemaFieldGuidance,
@@ -82,6 +101,102 @@ type WorkbenchPageProps = {
   onResetDemo: () => void;
   onOpenSettings: () => void;
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
+};
+
+const defaultListingFeatureFlags: ListingFeatureFlags = {
+  workflow_v2: true,
+  templates: true,
+  imports: true,
+  metrics: true,
+  legacy_fallback: true,
+};
+
+const importedValue = (fields: Record<string, DraftField>, ...keys: string[]): unknown => {
+  for (const key of keys) {
+    const field = fields[key];
+    if (field?.value !== undefined && field.value !== null && field.value !== "") {
+      return field.value;
+    }
+  }
+  return undefined;
+};
+
+const importedText = (fields: Record<string, DraftField>, ...keys: string[]): string => {
+  const value = importedValue(fields, ...keys);
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+};
+
+const mergeListingFields = (
+  product: ProductRecord,
+  fields: Record<string, DraftField>,
+): ProductRecord => {
+  const dimensions = importedValue(fields, "dimensions");
+  const packaging = importedValue(fields, "packaging");
+  const dimensionValues =
+    dimensions && typeof dimensions === "object" ? (dimensions as Record<string, unknown>) : {};
+  const packagingValues =
+    packaging && typeof packaging === "object" ? (packaging as Record<string, unknown>) : {};
+  const listValue = (key: string) => {
+    const value = importedValue(fields, key);
+    return Array.isArray(value) ? value.map(String) : undefined;
+  };
+  const importedSkus = importedValue(fields, "sku_rows");
+  const skuRows = Array.isArray(importedSkus)
+    ? importedSkus.flatMap((value, index) => {
+        if (!value || typeof value !== "object") {
+          return [];
+        }
+        const row = value as Record<string, unknown>;
+        return [
+          {
+            id: String(row.id || `sku-imported-${index}`),
+            sku: String(row.sku ?? row.sku_id ?? row.code ?? ""),
+            attributes: String(row.attributes ?? row.specification ?? row.spec ?? ""),
+            price: String(row.price ?? ""),
+            stock: String(row.stock ?? row.inventory ?? ""),
+          },
+        ];
+      })
+    : product.facts.skuRows;
+  const factText = (current: string, ...keys: string[]) => importedText(fields, ...keys) || current;
+  return {
+    ...product,
+    title: factText(product.title, "subject", "title", "product_title"),
+    description: factText(product.description, "description", "detail"),
+    keywords: listValue("keywords") ?? product.keywords,
+    sellingPoints: listValue("selling_points") ?? product.sellingPoints,
+    facts: {
+      ...product.facts,
+      categoryId: factText(product.facts.categoryId, "category_id", "cat_id"),
+      brand: factText(product.facts.brand, "brand"),
+      model: factText(product.facts.model, "model"),
+      material: factText(product.facts.material, "material"),
+      price: factText(product.facts.price, "price"),
+      moq: factText(product.facts.moq, "moq"),
+      stock: factText(product.facts.stock, "inventory", "stock"),
+      leadTime: factText(product.facts.leadTime, "lead_time"),
+      origin: factText(product.facts.origin, "origin"),
+      hsCode: factText(product.facts.hsCode, "hs_code"),
+      grossWeight:
+        factText(product.facts.grossWeight, "gross_weight") ||
+        String(packagingValues.grossWeight ?? ""),
+      packageLength:
+        factText(product.facts.packageLength, "package_length") ||
+        String(packagingValues.length ?? ""),
+      packageWidth:
+        factText(product.facts.packageWidth, "package_width") ||
+        String(packagingValues.width ?? ""),
+      packageHeight:
+        factText(product.facts.packageHeight, "package_height") ||
+        String(packagingValues.height ?? ""),
+      productLength: product.facts.productLength || String(dimensionValues.length ?? ""),
+      productWidth: product.facts.productWidth || String(dimensionValues.width ?? ""),
+      productHeight: product.facts.productHeight || String(dimensionValues.height ?? ""),
+      certifications: listValue("certifications") ?? product.facts.certifications,
+      skuRows,
+    },
+    schemaFields: { ...product.schemaFields, ...fields },
+  };
 };
 
 const demoImageCandidates: ProductImageCandidate[] = [
@@ -220,11 +335,18 @@ export function WorkbenchPage({
   const [photoBankLoading, setPhotoBankLoading] = useState(false);
   const [photoBankError, setPhotoBankError] = useState("");
   const [photoSelection, setPhotoSelection] = useState<string[]>([]);
+  const [featureFlags, setFeatureFlags] = useState<ListingFeatureFlags>(defaultListingFeatureFlags);
+  const [listingTemplates, setListingTemplates] = useState<ListingTemplate[]>([]);
+  const [listingMetrics, setListingMetrics] = useState<ListingMetrics | null>(null);
+  const [templateName, setTemplateName] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [listingToolsBusy, setListingToolsBusy] = useState(false);
   const photoBankAvailable =
     dataMode === "live" &&
     backendConnected &&
     Boolean(capabilities?.alibaba_credentials_configured);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
 
   const missingTemplateFields = useMemo(
@@ -278,6 +400,38 @@ export function WorkbenchPage({
       document.body.style.overflow = previousOverflow;
     };
   }, [publishDialogOpen]);
+
+  useEffect(() => {
+    if (dataMode !== "live" || !backendConnected || !activeStore) {
+      setFeatureFlags(defaultListingFeatureFlags);
+      setListingTemplates([]);
+      setListingMetrics(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.allSettled([
+      getListingFeatureFlags(),
+      listListingTemplates(),
+      getListingMetrics(),
+    ]).then(([flagsResult, templatesResult, metricsResult]) => {
+      if (cancelled) {
+        return;
+      }
+      if (flagsResult.status === "fulfilled") {
+        setFeatureFlags(flagsResult.value);
+      }
+      if (templatesResult.status === "fulfilled") {
+        setListingTemplates(templatesResult.value);
+        setTemplateId((current) => current || templatesResult.value[0]?.id || "");
+      }
+      if (metricsResult.status === "fulfilled") {
+        setListingMetrics(metricsResult.value);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStore, backendConnected, dataMode]);
 
   useEffect(() => {
     if (step !== 0 || !photoBankAvailable || photoGroups.length) {
@@ -374,7 +528,9 @@ export function WorkbenchPage({
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
     (product) =>
-      product.stage === "drafted" || (product.stage === "error" && Boolean(product.draftProductId)),
+      (product.stage === "drafted" ||
+        (product.stage === "error" && Boolean(product.draftProductId))) &&
+      product.draftReadbackVerified,
   );
   const analysisComplete =
     products.length > 0 &&
@@ -423,6 +579,41 @@ export function WorkbenchPage({
     onProductsChange(products.map((product) => (product.id === id ? updater(product) : product)));
   };
 
+  const hydrateListingTasks = async (product: ProductRecord): Promise<ProductRecord> => {
+    if (!featureFlags.workflow_v2 && featureFlags.legacy_fallback) {
+      return { ...product, fieldTasks: undefined, fieldTaskSummary: undefined };
+    }
+    if (product.isDemo) {
+      const tasks = demoConfirmationTasks(product);
+      const confirm = tasks.filter((task) => task.status === "confirm").length;
+      return {
+        ...product,
+        aiConfirmed: confirm === 0,
+        fieldTasks: tasks,
+        fieldTaskSummary: { completed: tasks.length - confirm, confirm, fill: 0, invalid: 0 },
+      };
+    }
+    if (!product.schemaData) {
+      return product;
+    }
+    const result = await getListingTasks(product, settings);
+    if (featureFlags.metrics) {
+      void recordListingMetricEvent({
+        event_type: "task_evaluated",
+        batch_id: batchId,
+        reference: product.reference,
+        payload: result.summary,
+      });
+    }
+    const aiConfirmed = result.tasks.every((task) => task.status !== "confirm");
+    return {
+      ...product,
+      aiConfirmed,
+      fieldTasks: result.tasks,
+      fieldTaskSummary: result.summary,
+    };
+  };
+
   const handleFiles = (files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
     if (!imageFiles.length) {
@@ -453,6 +644,13 @@ export function WorkbenchPage({
       facts: createEmptyFacts(settings),
       errors: ["等待 AI 分析"],
     };
+    if (dataMode === "live" && backendConnected && featureFlags.metrics) {
+      void recordListingMetricEvent({
+        event_type: "upload_started",
+        batch_id: batchId,
+        reference: newProduct.reference,
+      });
+    }
 
     const shouldReplaceDemo = dataMode === "demo";
     const nextProducts = shouldReplaceDemo ? [newProduct] : [...products, newProduct];
@@ -545,6 +743,14 @@ export function WorkbenchPage({
         facts: createEmptyFacts(settings),
         errors: ["等待 AI 分析"],
       };
+      if (dataMode === "live" && featureFlags.metrics) {
+        void recordListingMetricEvent({
+          event_type: "upload_started",
+          batch_id: batchId,
+          reference: newProduct.reference,
+          payload: { source: "photobank" },
+        });
+      }
       const shouldReplaceDemo = dataMode === "demo";
       onProductsChange(shouldReplaceDemo ? [newProduct] : [...products, newProduct]);
       setSelected((current) =>
@@ -617,9 +823,21 @@ export function WorkbenchPage({
         }
       }
       const response = await analyzeProductImages(orderedFiles, schemaData);
-      replaceProduct(product.id, (current) =>
-        applyAnalysis(schemaData ? { ...current, schemaData } : current, response),
-      );
+      let analyzed = applyAnalysis(schemaData ? { ...product, schemaData } : product, response);
+      if (!schemaData && analyzed.facts.categoryId) {
+        try {
+          const payload = await getCategorySchema(analyzed.facts.categoryId);
+          schemaData = findSchemaData(payload) ?? undefined;
+        } catch {
+          schemaData = undefined;
+        }
+      }
+      if (schemaData) {
+        const schemaGuidance = await getSchemaGuidance(schemaData);
+        analyzed = syncProductSchemaFields({ ...analyzed, schemaData, schemaGuidance }, settings);
+        analyzed = await hydrateListingTasks(analyzed);
+      }
+      updateProduct(analyzed);
       const scenario = getFieldString(response.generated_fields, [
         "use_scenario",
         "useScenario",
@@ -696,30 +914,207 @@ export function WorkbenchPage({
     }
   };
 
-  const confirmAi = (id: string) => {
-    replaceProduct(id, (product) => ({
-      ...product,
-      aiConfirmed: true,
-      schemaFields: confirmSchemaFields(product.schemaFields),
-      stage: "facts_needed",
-      errors: getProductErrors({ ...product, aiConfirmed: true }),
-    }));
+  const confirmAiField = async (id: string, fieldPath: string) => {
+    const product = products.find((item) => item.id === id);
+    if (!product) {
+      return;
+    }
+    const task = confirmationTasks(product).find((item) => item.field_path === fieldPath);
+    if (!task || task.status !== "confirm") {
+      return;
+    }
+    setBusy(true);
+    try {
+      const schemaFields = { ...product.schemaFields };
+      if (product.isDemo) {
+        const candidate = schemaFields[fieldPath];
+        if (candidate) {
+          schemaFields[fieldPath] = {
+            ...candidate,
+            value: task.value,
+            source: "user_confirmed",
+            requires_confirmation: false,
+          };
+        }
+      } else {
+        const result = await confirmListingField(
+          batchId,
+          product,
+          fieldPath,
+          task.value,
+          schemaFields[fieldPath]?.user_edited ? "edited" : "accepted",
+        );
+        schemaFields[result.field_path] = result.field;
+      }
+      let next: ProductRecord = { ...product, schemaFields };
+      next = await hydrateListingTasks(next);
+      const aiConfirmed = (next.fieldTaskSummary?.confirm ?? 0) === 0;
+      next = {
+        ...next,
+        aiConfirmed,
+        stage: aiConfirmed ? "facts_needed" : "ai_ready",
+        errors: getProductErrors({ ...next, aiConfirmed }),
+      };
+      updateProduct(next);
+      notify("success", `已确认：${task.label}`);
+    } catch (error) {
+      notify("error", "字段确认失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const confirmAllAi = () => {
-    onProductsChange(
-      products.map((product) => ({
-        ...product,
-        aiConfirmed: true,
-        schemaFields: confirmSchemaFields(product.schemaFields),
-        stage:
-          getProductErrors({ ...product, aiConfirmed: true }).length === 0
-            ? "ready"
-            : "facts_needed",
-        errors: getProductErrors({ ...product, aiConfirmed: true }),
-      })),
-    );
-    notify("success", "已确认全部 AI 内容", "交易、履约和合规事实仍需可信数据。");
+  const onImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!backendConnected || dataMode !== "live") {
+      notify("error", "导入需要连接后端和真实工作区");
+      return;
+    }
+    setListingToolsBusy(true);
+    try {
+      const result = await importListingProducts(file);
+      const now = Date.now();
+      const importedProducts = result.rows.map((row, index) => {
+        const base: ProductRecord = {
+          id: `imported-${now}-${index}`,
+          reference: row.reference,
+          images: [],
+          mainImageId: "",
+          title: "",
+          keywords: [],
+          sellingPoints: [],
+          description: "",
+          visibleTraits: [],
+          aiConfirmed: true,
+          stage: "facts_needed",
+          facts: createEmptyFacts(settings),
+          schemaFields: row.fields,
+          errors: row.warnings,
+        };
+        const merged = mergeListingFields(base, row.fields);
+        return { ...merged, errors: [...row.warnings, ...getFactErrors(merged)] };
+      });
+      if (featureFlags.metrics) {
+        for (const product of importedProducts) {
+          void recordListingMetricEvent({
+            event_type: "upload_started",
+            batch_id: batchId,
+            reference: product.reference,
+            payload: { source: result.format },
+          });
+        }
+      }
+      if (!importedProducts.length) {
+        notify("warning", "没有可导入的商品", result.errors.join("；") || "请检查商品编码列。");
+        return;
+      }
+      onProductsChange([...products, ...importedProducts]);
+      setSelected(new Set(importedProducts.map((product) => product.id)));
+      setActiveProductId(importedProducts[0].id);
+      setMaxUnlockedStep((current) => Math.max(current, 2));
+      setStep(2);
+      notify(
+        result.errors.length ? "warning" : "success",
+        `已导入 ${importedProducts.length} 个商品`,
+        result.errors.length
+          ? result.errors.join("；")
+          : "业务数据已标记为 ERP/表格来源，请核对缺失项。",
+      );
+    } catch (error) {
+      notify("error", "商品导入失败", error instanceof Error ? error.message : undefined);
+    } finally {
+      setListingToolsBusy(false);
+    }
+  };
+
+  const saveActiveTemplate = async () => {
+    if (!activeProduct || !templateName.trim()) {
+      notify("warning", "请输入模板名称并选择一个商品");
+      return;
+    }
+    setListingToolsBusy(true);
+    try {
+      const template = await createListingTemplate(templateName.trim(), activeProduct);
+      setListingTemplates((current) => [template, ...current]);
+      setTemplateId(template.id);
+      setTemplateName("");
+      notify("success", "类目模板已保存", "模板值仍会在应用时经过实时 Schema 校验。");
+    } catch (error) {
+      notify("error", "模板保存失败", error instanceof Error ? error.message : undefined);
+    } finally {
+      setListingToolsBusy(false);
+    }
+  };
+
+  const applySelectedTemplate = async () => {
+    const targets = products.filter((product) => selected.has(product.id));
+    if (!templateId || !targets.length) {
+      notify("warning", "请选择模板和需要应用的商品");
+      return;
+    }
+    setListingToolsBusy(true);
+    try {
+      const updates = new Map<string, ProductRecord>();
+      for (const product of targets) {
+        const result = await applyListingTemplate(templateId, product, settings);
+        const merged = mergeListingFields(product, result.fields);
+        updates.set(product.id, {
+          ...merged,
+          fieldTasks: result.tasks.tasks,
+          fieldTaskSummary: result.tasks.summary,
+          errors: getProductErrors(merged),
+        });
+      }
+      onProductsChange(products.map((product) => updates.get(product.id) ?? product));
+      notify(
+        "success",
+        `模板已应用到 ${updates.size} 个商品`,
+        "已有值不会被覆盖，请继续处理校验结果。",
+      );
+    } catch (error) {
+      notify("error", "模板应用失败", error instanceof Error ? error.message : undefined);
+    } finally {
+      setListingToolsBusy(false);
+    }
+  };
+
+  const removeSelectedTemplate = async () => {
+    if (!templateId) {
+      return;
+    }
+    setListingToolsBusy(true);
+    try {
+      await deleteListingTemplate(templateId);
+      const next = listingTemplates.filter((template) => template.id !== templateId);
+      setListingTemplates(next);
+      setTemplateId(next[0]?.id ?? "");
+      notify("success", "模板已删除");
+    } catch (error) {
+      notify("error", "模板删除失败", error instanceof Error ? error.message : undefined);
+    } finally {
+      setListingToolsBusy(false);
+    }
+  };
+
+  const toggleWorkflowMode = async () => {
+    setListingToolsBusy(true);
+    try {
+      const next = await updateListingFeatureFlags({ workflow_v2: !featureFlags.workflow_v2 });
+      setFeatureFlags(next);
+      notify(
+        "success",
+        next.workflow_v2 ? "已启用新版字段任务流程" : "已切换到兼容流程",
+        "切换不会删除商品、模板或审计数据。",
+      );
+    } catch (error) {
+      notify("error", "流程切换失败", error instanceof Error ? error.message : undefined);
+    } finally {
+      setListingToolsBusy(false);
+    }
   };
 
   const refreshImagePlan = async () => {
@@ -984,6 +1379,13 @@ export function WorkbenchPage({
             stage: result.success ? "drafted" : "error",
             errors: result.success ? [] : [result.error ?? "草稿创建失败"],
             draftProductId: result.success ? getProductId(result.response) : undefined,
+            draftReadback: result.success ? getReadback(result.response) : undefined,
+            draftDifferences: result.success ? getReadbackDifferences(result.response) : undefined,
+            draftReadbackError: result.success ? getReadbackError(result.response) : undefined,
+            draftReadbackVerified:
+              result.success &&
+              Boolean(getReadback(result.response)) &&
+              !getReadbackError(result.response),
           };
         }),
       );
@@ -1094,10 +1496,12 @@ export function WorkbenchPage({
       notify("warning", "请先填写要批量套用的值");
       return;
     }
+    if (!selected.size) {
+      notify("warning", "请先勾选要批量填写的商品", "系统不会默认修改全部商品。");
+      return;
+    }
     const targetIds = new Set(
-      (selected.size ? products.filter((product) => selected.has(product.id)) : products).map(
-        (product) => product.id,
-      ),
+      products.filter((product) => selected.has(product.id)).map((product) => product.id),
     );
     let filled = 0;
     onProductsChange(
@@ -1363,6 +1767,25 @@ export function WorkbenchPage({
               </button>
             </div>
           ) : null}
+          {dataMode === "live" && backendConnected && (step === 0 || step === 2) ? (
+            <ListingOperationsPanel
+              flags={featureFlags}
+              templates={listingTemplates}
+              metrics={listingMetrics}
+              templateName={templateName}
+              templateId={templateId}
+              selectedCount={selected.size}
+              hasActiveProduct={Boolean(activeProduct)}
+              busy={listingToolsBusy}
+              onTemplateNameChange={setTemplateName}
+              onTemplateIdChange={setTemplateId}
+              onImport={() => importInputRef.current?.click()}
+              onSaveTemplate={() => void saveActiveTemplate()}
+              onApplyTemplate={() => void applySelectedTemplate()}
+              onDeleteTemplate={() => void removeSelectedTemplate()}
+              onToggleWorkflow={() => void toggleWorkflowMode()}
+            />
+          ) : null}
           {step === 0 ? (
             <UploadStep
               products={products}
@@ -1394,8 +1817,7 @@ export function WorkbenchPage({
               activeProductId={activeProduct?.id ?? ""}
               onActiveChange={setActiveProductId}
               onAnalyze={analyzeOne}
-              onConfirm={confirmAi}
-              onConfirmAll={confirmAllAi}
+              onConfirmField={(id, fieldPath) => void confirmAiField(id, fieldPath)}
               onChange={updateProduct}
               onMainImageChange={setMainImage}
               imageCandidates={imageCandidates}
@@ -1563,6 +1985,13 @@ export function WorkbenchPage({
         multiple
         onChange={onFileInput}
       />
+      <input
+        ref={importInputRef}
+        className="sr-only"
+        type="file"
+        accept=".csv,.xlsx,.json,text/csv,application/json"
+        onChange={(event) => void onImportFile(event)}
+      />
 
       {publishDialogOpen ? (
         <PublishDialog
@@ -1579,6 +2008,204 @@ export function WorkbenchPage({
         />
       ) : null}
     </div>
+  );
+}
+
+function ListingOperationsPanel({
+  flags,
+  templates,
+  metrics,
+  templateName,
+  templateId,
+  selectedCount,
+  hasActiveProduct,
+  busy,
+  onTemplateNameChange,
+  onTemplateIdChange,
+  onImport,
+  onSaveTemplate,
+  onApplyTemplate,
+  onDeleteTemplate,
+  onToggleWorkflow,
+}: {
+  flags: ListingFeatureFlags;
+  templates: ListingTemplate[];
+  metrics: ListingMetrics | null;
+  templateName: string;
+  templateId: string;
+  selectedCount: number;
+  hasActiveProduct: boolean;
+  busy: boolean;
+  onTemplateNameChange: (value: string) => void;
+  onTemplateIdChange: (value: string) => void;
+  onImport: () => void;
+  onSaveTemplate: () => void;
+  onApplyTemplate: () => void;
+  onDeleteTemplate: () => void;
+  onToggleWorkflow: () => void;
+}) {
+  return (
+    <section className="listing-operations" aria-label="批量效率工具">
+      <header className="listing-operations-head">
+        <div>
+          <span>批量效率工具</span>
+          <strong>{flags.workflow_v2 ? "新版字段任务流程" : "兼容流程"}</strong>
+        </div>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={onToggleWorkflow}
+          disabled={busy}
+        >
+          <ArrowCounterClockwise size={16} />
+          {flags.workflow_v2 ? "切换兼容流程" : "恢复新版流程"}
+        </button>
+      </header>
+      <div className="listing-operations-grid">
+        <article>
+          <UploadSimple size={21} />
+          <div>
+            <strong>导入商品资料</strong>
+            <p>支持 CSV、XLSX 和 ERP JSON；导入值标记为业务系统来源。</p>
+          </div>
+          <button
+            type="button"
+            className="button button-dark"
+            onClick={onImport}
+            disabled={busy || !flags.imports}
+          >
+            选择文件
+          </button>
+        </article>
+        <article className="listing-template-tools">
+          <FloppyDisk size={21} />
+          <div>
+            <strong>类目模板</strong>
+            <p>保存当前商品的人工与 ERP 字段，应用时不会覆盖已有值。</p>
+          </div>
+          <div className="listing-template-row">
+            <input
+              value={templateName}
+              onChange={(event) => onTemplateNameChange(event.target.value)}
+              placeholder="新模板名称"
+              aria-label="新模板名称"
+            />
+            <button
+              type="button"
+              onClick={onSaveTemplate}
+              disabled={busy || !hasActiveProduct || !flags.templates}
+            >
+              保存
+            </button>
+          </div>
+          <div className="listing-template-row">
+            <select
+              value={templateId}
+              onChange={(event) => onTemplateIdChange(event.target.value)}
+              aria-label="选择类目模板"
+            >
+              <option value="">选择模板</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                  {template.category_id ? ` · ${template.category_id}` : " · 通用"}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={onApplyTemplate}
+              disabled={busy || !templateId || !selectedCount}
+            >
+              应用到 {selectedCount}
+            </button>
+            <button
+              type="button"
+              className="is-danger"
+              onClick={onDeleteTemplate}
+              disabled={busy || !templateId}
+            >
+              删除
+            </button>
+          </div>
+        </article>
+        <article className="listing-metrics-summary">
+          <ChartBar size={21} />
+          <div>
+            <strong>运行质量</strong>
+            <p>数据来自当前工作区的真实操作事件。</p>
+          </div>
+          {flags.metrics && metrics ? (
+            <dl>
+              <div>
+                <dt>首次草稿通过率</dt>
+                <dd>
+                  {metrics.first_pass_draft_rate === null
+                    ? "—"
+                    : `${Math.round(metrics.first_pass_draft_rate * 100)}%`}
+                </dd>
+              </div>
+              <div>
+                <dt>草稿中位耗时</dt>
+                <dd>
+                  {metrics.median_draft_duration_ms === null
+                    ? "—"
+                    : `${(metrics.median_draft_duration_ms / 1000).toFixed(1)}s`}
+                </dd>
+              </div>
+              <div>
+                <dt>失败事件</dt>
+                <dd>
+                  {(metrics.counters.draft_failed ?? 0) + (metrics.counters.publish_failed ?? 0)}
+                </dd>
+              </div>
+              <div>
+                <dt>AI 安全完成率</dt>
+                <dd>
+                  {metrics.ai_safe_completion_rate === null
+                    ? "—"
+                    : `${Math.round(metrics.ai_safe_completion_rate * 100)}%`}
+                </dd>
+              </div>
+              <div>
+                <dt>平均人工字段</dt>
+                <dd>
+                  {metrics.average_manual_field_count === null
+                    ? "—"
+                    : metrics.average_manual_field_count.toFixed(1)}
+                </dd>
+              </div>
+              <div>
+                <dt>错误定位率</dt>
+                <dd>
+                  {metrics.error_localization_rate === null
+                    ? "—"
+                    : `${Math.round(metrics.error_localization_rate * 100)}%`}
+                </dd>
+              </div>
+              <div>
+                <dt>AI 确认修改率</dt>
+                <dd>
+                  {metrics.ai_confirmation_edit_rate === null
+                    ? "—"
+                    : `${Math.round(metrics.ai_confirmation_edit_rate * 100)}%`}
+                </dd>
+              </div>
+              <div>
+                <dt>发布失败率</dt>
+                <dd>
+                  {metrics.publish_failure_rate === null
+                    ? "—"
+                    : `${Math.round(metrics.publish_failure_rate * 100)}%`}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="listing-empty-metric">尚无运行数据</p>
+          )}
+        </article>
+      </div>
+    </section>
   );
 }
 
@@ -1962,8 +2589,7 @@ function AiStep({
   activeProductId,
   onActiveChange,
   onAnalyze,
-  onConfirm,
-  onConfirmAll,
+  onConfirmField,
   onChange,
   onMainImageChange,
   imageCandidates,
@@ -1977,8 +2603,7 @@ function AiStep({
   activeProductId: string;
   onActiveChange: (id: string) => void;
   onAnalyze: (product: ProductRecord) => Promise<{ success: boolean }>;
-  onConfirm: (id: string) => void;
-  onConfirmAll: () => void;
+  onConfirmField: (id: string, fieldPath: string) => void;
   onChange: (product: ProductRecord) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
   imageCandidates: ProductImageCandidate[];
@@ -1987,8 +2612,6 @@ function AiStep({
   onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
   onAddGeneratedImages: () => void;
 }) {
-  const [confirmAllChecked, setConfirmAllChecked] = useState(false);
-  const pending = products.filter((product) => !product.aiConfirmed);
   const analyzable = products.filter((product) => product.stage !== "analyzing");
   const active = products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
   const formatAnalyzedAt = (iso?: string) => {
@@ -2208,6 +2831,12 @@ function AiStep({
                       </button>
                     )}
                   </section>
+                  <AiConfirmationTasks
+                    product={product}
+                    busy={busy}
+                    onConfirmField={onConfirmField}
+                    onChange={onChange}
+                  />
                   <div className="ai-field-table-scroll">
                     <table className="ai-field-table">
                       <thead>
@@ -2362,15 +2991,16 @@ function AiStep({
                   <button
                     type="button"
                     className={`button ${product.aiConfirmed ? "button-success" : "button-dark"}`}
-                    onClick={() => onConfirm(product.id)}
-                    disabled={product.stage === "analyzing" || product.stage === "uploaded"}
+                    disabled
                   >
                     {product.aiConfirmed ? (
                       <CheckCircle size={18} weight="fill" />
                     ) : (
                       <Check size={18} />
                     )}
-                    {product.aiConfirmed ? "已确认" : "确认内容"}
+                    {product.aiConfirmed
+                      ? "已逐项确认"
+                      : `请逐项确认（${product.fieldTaskSummary?.confirm ?? 0}）`}
                   </button>
                 </div>
               </article>
@@ -2380,14 +3010,7 @@ function AiStep({
       </div>
 
       <div className="ai-bottom-bar">
-        <label className="ai-bottom-check">
-          <input
-            type="checkbox"
-            checked={confirmAllChecked}
-            onChange={(event) => setConfirmAllChecked(event.target.checked)}
-          />
-          <span>一键确认全部（将全部未确认内容默认视为“采用”）</span>
-        </label>
+        <span className="ai-bottom-check">AI 候选必须逐项确认，经营和合规事实不会由 AI 填写。</span>
         <div className="ai-bottom-actions">
           <button
             type="button"
@@ -2402,19 +3025,253 @@ function AiStep({
             <MagicWand size={17} />
             重新分析全部
           </button>
-          <button
-            type="button"
-            className="button button-primary"
-            onClick={onConfirmAll}
-            disabled={!pending.length || busy || !confirmAllChecked}
-          >
-            <CheckSquare size={18} />
-            一键确认全部（{pending.length}）
-          </button>
         </div>
       </div>
     </div>
   );
+}
+
+function AiConfirmationTasks({
+  product,
+  busy,
+  onConfirmField,
+  onChange,
+}: {
+  product: ProductRecord;
+  busy: boolean;
+  onConfirmField: (id: string, fieldPath: string) => void;
+  onChange: (product: ProductRecord) => void;
+}) {
+  const tasks = confirmationTasks(product);
+  if (!tasks.length) {
+    return product.aiConfirmed ? (
+      <div className="ai-confirmation-complete">
+        <CheckCircle size={16} weight="fill" />
+        所有 AI 候选均已逐项确认
+      </div>
+    ) : null;
+  }
+  return (
+    <section className="ai-confirmation-tasks" aria-label="待确认 AI 字段">
+      <header>
+        <div>
+          <strong>请逐项确认</strong>
+          <span>还剩 {tasks.length} 项，采用前可查看来源与证据</span>
+        </div>
+      </header>
+      <div>
+        {tasks.map((task) => (
+          <article key={task.field_path}>
+            <span className="ai-confirmation-task-copy">
+              <strong>{task.question}</strong>
+              <small>{task.explanation}</small>
+              {task.evidence ? <em>证据：{task.evidence}</em> : null}
+            </span>
+            <span className="ai-confirmation-task-value">
+              {task.field_path === "category_id" ? (
+                taskValueText(task)
+              ) : Array.isArray(task.value) ? (
+                <textarea
+                  rows={2}
+                  value={task.value.map(String).join("\n")}
+                  aria-label={`修改${task.label}`}
+                  onChange={(event) =>
+                    onChange(
+                      updateAiTaskValue(
+                        product,
+                        task,
+                        event.target.value
+                          .split("\n")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      ),
+                    )
+                  }
+                />
+              ) : (
+                <textarea
+                  rows={2}
+                  value={String(task.value ?? "")}
+                  aria-label={`修改${task.label}`}
+                  onChange={(event) =>
+                    onChange(updateAiTaskValue(product, task, event.target.value))
+                  }
+                />
+              )}
+            </span>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => onConfirmField(product.id, task.field_path)}
+              disabled={busy}
+            >
+              <Check size={15} />
+              采用
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function confirmationTasks(product: ProductRecord): FieldTask[] {
+  if (product.fieldTasks) {
+    return product.fieldTasks.filter((task) => task.status === "confirm");
+  }
+  return product.isDemo ? demoConfirmationTasks(product) : [];
+}
+
+function demoConfirmationTasks(product: ProductRecord): FieldTask[] {
+  return (product.schemaGuidance?.ai_fillable_fields ?? []).map((guidance) => {
+    const field = product.schemaFields?.[guidance.field];
+    const confirmed = field?.source === "user_confirmed";
+    return {
+      field_path: guidance.field,
+      label: guidance.name || guidance.field,
+      question: `请确认“${guidance.name || guidance.field}”是否准确。`,
+      explanation: guidance.responsibility_reason,
+      control_type: guidance.type || "text",
+      status: confirmed ? "completed" : "confirm",
+      responsibility: guidance.responsibility,
+      responsibility_label: guidance.responsibility_label,
+      allowed_sources: guidance.allowed_sources,
+      value: field?.value,
+      display_value_zh: field?.display_value_zh,
+      source: field?.source,
+      confidence: field?.confidence,
+      evidence: field?.evidence,
+      required: guidance.required,
+      blocking: !confirmed,
+      validation_errors: [],
+      options: guidance.options,
+      async_options: Boolean(guidance.async_options),
+      async_query_method: guidance.async_query_method,
+      max_length: guidance.max_length,
+    };
+  });
+}
+
+function taskValueText(task: FieldTask): string {
+  if (Array.isArray(task.value)) {
+    return task.value.map(String).join("、") || "暂无候选值";
+  }
+  if (task.value && typeof task.value === "object") {
+    return JSON.stringify(task.value);
+  }
+  return String(task.value ?? "暂无候选值");
+}
+
+function updateAiTaskValue(product: ProductRecord, task: FieldTask, value: unknown): ProductRecord {
+  const schemaFields = {
+    ...product.schemaFields,
+    [task.field_path]: {
+      ...(product.schemaFields?.[task.field_path] ?? {
+        source: task.source ?? "ai_generated",
+      }),
+      value,
+      user_edited: true,
+      requires_confirmation: true,
+    },
+  };
+  const fieldTasks = product.fieldTasks?.map((item) =>
+    item.field_path === task.field_path ? { ...item, value } : item,
+  );
+  const semantic = task.field_path.toLowerCase();
+  return {
+    ...product,
+    schemaFields,
+    fieldTasks,
+    title:
+      semantic.includes("subject") || semantic.includes("title")
+        ? String(value ?? "")
+        : product.title,
+    description: semantic.includes("description") ? String(value ?? "") : product.description,
+    keywords: semantic.includes("keyword")
+      ? Array.isArray(value)
+        ? value.map(String)
+        : String(value ?? "")
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+      : product.keywords,
+    sellingPoints: semantic.includes("selling")
+      ? Array.isArray(value)
+        ? value.map(String)
+        : [String(value ?? "")]
+      : product.sellingPoints,
+  };
+}
+
+function updateTaskValueLocally(
+  product: ProductRecord,
+  fieldPath: string,
+  value: unknown,
+): ProductRecord {
+  if (!product.fieldTasks) {
+    return product;
+  }
+  const hasValue = value !== null && value !== "" && (!Array.isArray(value) || value.length > 0);
+  const fieldTasks = product.fieldTasks.map((task) =>
+    task.field_path === fieldPath
+      ? {
+          ...task,
+          value,
+          source: "user_provided" as const,
+          status: hasValue
+            ? ("completed" as const)
+            : task.required
+              ? ("fill" as const)
+              : ("completed" as const),
+          blocking: task.required && !hasValue,
+          validation_errors: [],
+        }
+      : task,
+  );
+  const fieldTaskSummary = { completed: 0, confirm: 0, fill: 0, invalid: 0 };
+  for (const task of fieldTasks) {
+    fieldTaskSummary[task.status] += 1;
+  }
+  return { ...product, fieldTasks, fieldTaskSummary };
+}
+
+function updateRepeatableGroupLocally(
+  product: ProductRecord,
+  groupPath: string,
+  rows: Array<Record<string, unknown>>,
+): ProductRecord {
+  if (!product.fieldTasks) {
+    return product;
+  }
+  const fieldTasks = product.fieldTasks.map((task) => {
+    if (task.repeatable_group !== groupPath) {
+      return task;
+    }
+    const relativePath = task.field_path.slice(groupPath.length + 1).split(".");
+    const values = rows.map((row) => getNestedRecordValue(row, relativePath));
+    const complete =
+      rows.length > 0 &&
+      values.every(
+        (value) => value !== null && value !== "" && (!Array.isArray(value) || value.length > 0),
+      );
+    return {
+      ...task,
+      value: values,
+      source: "user_provided" as const,
+      status: complete
+        ? ("completed" as const)
+        : task.required
+          ? ("fill" as const)
+          : ("completed" as const),
+      blocking: task.required && !complete,
+      validation_errors: [],
+    };
+  });
+  const fieldTaskSummary = { completed: 0, confirm: 0, fill: 0, invalid: 0 };
+  for (const task of fieldTasks) {
+    fieldTaskSummary[task.status] += 1;
+  }
+  return { ...product, fieldTasks, fieldTaskSummary };
 }
 
 function AiFieldTags({ values, emptyLabel }: { values: string[]; emptyLabel: string }) {
@@ -2605,6 +3462,15 @@ function FactsStep({
     return checkFilter === "all" || getCheckState(product) === checkFilter;
   });
   const remainingCount = allProducts.filter((product) => getFactErrors(product).length > 0).length;
+  const taskTotals = allProducts.reduce(
+    (totals, product) => ({
+      completed: totals.completed + (product.fieldTaskSummary?.completed ?? 0),
+      confirm: totals.confirm + (product.fieldTaskSummary?.confirm ?? 0),
+      fill: totals.fill + (product.fieldTaskSummary?.fill ?? 0),
+      invalid: totals.invalid + (product.fieldTaskSummary?.invalid ?? 0),
+    }),
+    { completed: 0, confirm: 0, fill: 0, invalid: 0 },
+  );
 
   return (
     <div className="wb-facts">
@@ -2616,7 +3482,13 @@ function FactsStep({
             系统会自动带入图片、AI 已确认内容和店铺默认值；右侧只显示 API 判定仍需你提供的真实信息。
           </p>
         </div>
-        <span>{remainingCount ? `${remainingCount} 个商品待补充` : "已全部完成"}</span>
+        <div className="wb-task-summary" aria-label="字段任务状态">
+          <span className="is-completed">AI 已完成 {taskTotals.completed}</span>
+          <span className="is-confirm">请确认 {taskTotals.confirm}</span>
+          <span className="is-fill">请填写 {taskTotals.fill}</span>
+          <span className="is-invalid">需要修正 {taskTotals.invalid}</span>
+          <b>{remainingCount ? `${remainingCount} 个商品待补充` : "已全部完成"}</b>
+        </div>
       </div>
       <div className="wb-toolbar">
         <label className="wb-select">
@@ -2653,7 +3525,7 @@ function FactsStep({
       <div className="wb-bulk-fill">
         <strong>相同信息可一次填写（可选）</strong>
         <small>
-          {selectedCount ? `套用到选中的 ${selectedCount} 个商品` : "未勾选时套用到全部商品"}
+          {selectedCount ? `套用到选中的 ${selectedCount} 个商品` : "请先勾选需要套用的商品"}
           ，只填空缺、不覆盖已有值；不同商品请直接点击该商品填写
         </small>
         <label>
@@ -2688,7 +3560,12 @@ function FactsStep({
             placeholder="如 12.5"
           />
         </label>
-        <button type="button" className="button button-dark" onClick={() => onBulkFill(bulkValues)}>
+        <button
+          type="button"
+          className="button button-dark"
+          disabled={!selectedCount}
+          onClick={() => onBulkFill(bulkValues)}
+        >
           批量填充空缺
         </button>
       </div>
@@ -2851,54 +3728,126 @@ function WbInspector({
   onGenerateImages: (slots?: ImageSlot[]) => void;
   onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
 }) {
+  const [asyncOptionField, setAsyncOptionField] = useState("");
+  const [asyncOptionError, setAsyncOptionError] = useState("");
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
     onChange({ ...product, facts: { ...product.facts, [key]: value } });
   };
-  const setSchemaField = (field: SchemaFieldGuidance, value: unknown) => {
-    const factKey = schemaFactKey(field);
-    const factValue = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+  const setSkuRows = (skuRows: NonNullable<ProductRecord["facts"]["skuRows"]>) => {
     onChange({
       ...product,
-      facts: factKey ? { ...product.facts, [factKey]: factValue } : product.facts,
+      facts: { ...product.facts, skuRows },
       schemaFields: {
         ...product.schemaFields,
-        [field.field]: {
-          value,
-          source: "user_provided",
-        },
+        sku_rows: { value: skuRows, source: "user_provided" },
       },
     });
   };
+  const setSchemaField = (field: SchemaFieldGuidance, value: unknown) => {
+    const factKey = schemaFactKey(field);
+    const factValue = schemaFactTextValue(value);
+    onChange(
+      updateTaskValueLocally(
+        {
+          ...product,
+          facts:
+            factKey && factValue !== null
+              ? { ...product.facts, [factKey]: factValue }
+              : product.facts,
+          schemaFields: {
+            ...product.schemaFields,
+            [field.field]: {
+              value,
+              source: "user_provided",
+            },
+          },
+        },
+        field.field,
+        value,
+      ),
+    );
+  };
+  const setRepeatableGroup = (groupPath: string, value: Array<Record<string, unknown>>) => {
+    onChange(
+      updateRepeatableGroupLocally(
+        {
+          ...product,
+          schemaFields: {
+            ...product.schemaFields,
+            [groupPath]: { value, source: "user_provided" },
+          },
+        },
+        groupPath,
+        value,
+      ),
+    );
+  };
+  const loadAsyncOptions = async (field: SchemaFieldGuidance) => {
+    setAsyncOptionField(field.field);
+    setAsyncOptionError("");
+    try {
+      const result = await getAsyncFieldOptions(product, settings, field.field);
+      const returnedFields = [...result.ai_fillable_fields, ...result.manual_fact_fields];
+      const targetLeaf = field.field.split(".").at(-1);
+      const returned = returnedFields.find(
+        (item) => item.field === field.field || item.field.split(".").at(-1) === targetLeaf,
+      );
+      if (!returned?.options.length) {
+        throw new Error("Alibaba 暂未返回可选项，请先填写或选择上级属性");
+      }
+      const replaceGuidance = (item: SchemaFieldGuidance) =>
+        item.field === field.field ? { ...item, options: returned.options } : item;
+      onChange({
+        ...product,
+        schemaGuidance: product.schemaGuidance
+          ? {
+              ...product.schemaGuidance,
+              ai_fillable_fields: product.schemaGuidance.ai_fillable_fields.map(replaceGuidance),
+              manual_fact_fields: product.schemaGuidance.manual_fact_fields.map(replaceGuidance),
+            }
+          : product.schemaGuidance,
+        fieldTasks: product.fieldTasks?.map((task) =>
+          task.field_path === field.field ? { ...task, options: returned.options } : task,
+        ),
+      });
+    } catch (error) {
+      setAsyncOptionError(error instanceof Error ? error.message : "无法加载 Alibaba 选项");
+    } finally {
+      setAsyncOptionField("");
+    }
+  };
   const complianceNote = product.facts.certifications[0] ?? "";
   const missingFacts = getFactErrors(product);
-  const requiredSchemaFields = getRequiredSchemaFields(product);
+  const allSchemaFields = getAllSchemaFields(product);
+  const requiredSchemaFields = allSchemaFields.filter((field) => field.required);
+  const taskByField = new Map((product.fieldTasks ?? []).map((task) => [task.field_path, task]));
   const responsibilityCounts = {
     ai_candidate: 0,
     merchant: 0,
     business_system: 0,
     store_default: 0,
   };
-  for (const field of requiredSchemaFields) {
+  for (const field of allSchemaFields) {
     responsibilityCounts[field.responsibility] += 1;
   }
   const aiCandidateCount = responsibilityCounts.ai_candidate;
-  const humanFactCount = requiredSchemaFields.length - aiCandidateCount;
-  const inputSchemaFields = requiredSchemaFields.filter((field) => {
+  const humanFactCount = allSchemaFields.length - aiCandidateCount;
+  const repeatableGroups = new Map<string, SchemaFieldGuidance[]>();
+  for (const field of allSchemaFields) {
+    if (field.repeatable_group) {
+      const grouped = repeatableGroups.get(field.repeatable_group) ?? [];
+      grouped.push(field);
+      repeatableGroups.set(field.repeatable_group, grouped);
+    }
+  }
+  const inputSchemaFields = allSchemaFields.filter((field) => {
+    if (field.repeatable_group) {
+      return false;
+    }
     if (isImageSchemaField(field) || isTitleSchemaField(field)) {
       return false;
     }
-    const schemaField = product.schemaFields?.[field.field];
-    if (
-      schemaField?.source === "account_default" ||
-      schemaField?.source === "user_confirmed" ||
-      schemaField?.source === "business_system"
-    ) {
-      return false;
-    }
-    if (schemaFactKey(field)) {
-      return true;
-    }
-    return !hasSchemaValue(schemaField?.value) || schemaField?.source === "user_provided";
+    return true;
   });
 
   return (
@@ -2929,6 +3878,14 @@ function WbInspector({
               : ""}
           </small>
         </div>
+
+        <details
+          className="wb-inspector-optional wb-sku-optional"
+          open={Boolean(product.facts.skuRows?.length)}
+        >
+          <summary>SKU 规格、价格与库存（{product.facts.skuRows?.length ?? 0}）</summary>
+          <SkuTableEditor rows={product.facts.skuRows ?? []} onChange={setSkuRows} />
+        </details>
 
         <details className="wb-inspector-optional wb-image-generation-optional">
           <summary>可选：生成更多商品图片</summary>
@@ -3137,10 +4094,12 @@ function WbInspector({
               </span>
             </div>
             <details className="wb-schema-matrix">
-              <summary>查看全部 {requiredSchemaFields.length} 个必填字段与责任</summary>
+              <summary>
+                查看全部 {allSchemaFields.length} 个字段与责任（必填 {requiredSchemaFields.length}）
+              </summary>
               <div>
                 <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
-                {requiredSchemaFields
+                {allSchemaFields
                   .filter((field) => field.responsibility === "ai_candidate")
                   .map((field) => {
                     const value = getSchemaFieldValue(product, field);
@@ -3154,7 +4113,7 @@ function WbInspector({
                     );
                   })}
                 <h4>AI 不得填写（{humanFactCount}）</h4>
-                {requiredSchemaFields
+                {allSchemaFields
                   .filter((field) => field.responsibility !== "ai_candidate")
                   .map((field) => {
                     const value = getSchemaFieldValue(product, field);
@@ -3169,130 +4128,89 @@ function WbInspector({
                   })}
               </div>
             </details>
+            {[...repeatableGroups.entries()].map(([groupPath, fields]) => (
+              <MultiComplexEditor
+                key={groupPath}
+                groupPath={groupPath}
+                fields={fields}
+                value={repeatableGroupValue(product, groupPath)}
+                onChange={(value) => setRepeatableGroup(groupPath, value)}
+              />
+            ))}
             {inputSchemaFields.length ? (
               <div className="wb-schema-field-list">
                 {inputSchemaFields.map((field, index) => {
+                  const task = taskByField.get(field.field);
                   const value = getSchemaFieldValue(product, field);
-                  const controlValue = Array.isArray(value)
-                    ? String(value[0] ?? "")
-                    : typeof value === "string"
-                      ? value
-                      : "";
-                  const controlValues = Array.isArray(value)
-                    ? value.map((item) => String(item))
-                    : controlValue
-                      ? [controlValue]
-                      : [];
                   const inputId = `schema-${product.id}-${index}`;
                   return (
                     <div
                       key={field.field}
-                      className={`wb-schema-field ${hasSchemaValue(value) ? "is-complete" : ""}`}
+                      className={`wb-schema-field is-${task?.status ?? "fill"} ${hasSchemaValue(value) ? "is-complete" : ""}`}
                     >
                       <div className="wb-schema-field-heading" id={`${inputId}-label`}>
                         <span>
-                          {schemaFieldLabel(field)}
-                          <i>API 必填</i>
+                          {task?.question || schemaFieldLabel(field)}
+                          <i>{field.required ? "API 必填" : "API 选填"}</i>
                           <i className="is-control">{schemaFieldControlLabel(field)}</i>
                           <i className={`is-${field.responsibility}`}>
                             {field.responsibility_label}
                           </i>
                         </span>
                         <small>
-                          {field.tip ||
+                          {task?.validation_errors?.[0] ||
+                            task?.explanation ||
+                            field.tip ||
                             (hasSchemaValue(value)
                               ? "已填写，可继续修改"
                               : field.responsibility_reason)}
                         </small>
                       </div>
-                      {field.async_options && !field.options.length ? (
+                      {field.supported === false ? (
+                        <div className="wb-schema-dynamic-option is-blocked" role="alert">
+                          <WarningCircle size={15} />
+                          <span>{field.support_message || "该字段暂时无法安全填写"}</span>
+                        </div>
+                      ) : field.async_options && !field.options.length ? (
                         <div className="wb-schema-dynamic-option">
                           <WarningCircle size={15} />
-                          <span>需先选择上级属性，再从 Alibaba API 加载选项</span>
+                          <span>
+                            {asyncOptionError || "需先选择上级属性，再从 Alibaba API 加载选项"}
+                          </span>
+                          <button
+                            type="button"
+                            className="button button-secondary"
+                            disabled={asyncOptionField === field.field}
+                            onClick={() => void loadAsyncOptions(field)}
+                          >
+                            {asyncOptionField === field.field ? (
+                              <CircleNotch size={14} className="spin" />
+                            ) : null}
+                            {asyncOptionField === field.field ? "加载中" : "加载 Alibaba 选项"}
+                          </button>
                         </div>
-                      ) : field.options.length && field.type === "multiCheck" ? (
-                        <div
-                          className="wb-schema-options"
-                          id={inputId}
-                          role="group"
-                          aria-labelledby={`${inputId}-label`}
-                        >
-                          {field.options.map((option) => {
-                            const checked = controlValues.includes(option.value);
-                            return (
-                              <label key={option.value}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() =>
-                                    setSchemaField(
-                                      field,
-                                      checked
-                                        ? controlValues.filter((item) => item !== option.value)
-                                        : [...controlValues, option.value],
-                                    )
-                                  }
-                                />
-                                <span>{option.display_name || option.value}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      ) : field.options.length ? (
-                        <select
-                          id={inputId}
-                          aria-labelledby={`${inputId}-label`}
-                          value={controlValue}
-                          onChange={(event) => setSchemaField(field, event.target.value)}
-                        >
-                          <option value="">请选择</option>
-                          {field.options.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.display_name || option.value}
-                            </option>
-                          ))}
-                        </select>
-                      ) : field.type === "multiInput" ? (
-                        <textarea
-                          id={inputId}
-                          aria-labelledby={`${inputId}-label`}
-                          rows={3}
-                          value={controlValues.join("\n")}
-                          maxLength={field.max_length}
-                          onChange={(event) =>
-                            setSchemaField(
-                              field,
-                              event.target.value
-                                .split("\n")
-                                .map((item) => item.trim())
-                                .filter(Boolean),
-                            )
-                          }
-                          placeholder="每行填写一个值"
-                        />
                       ) : (
-                        <input
-                          id={inputId}
-                          aria-labelledby={`${inputId}-label`}
-                          value={controlValue}
-                          maxLength={field.max_length}
-                          onChange={(event) => setSchemaField(field, event.target.value)}
-                          placeholder="请输入真实信息"
+                        <SchemaValueControl
+                          field={field}
+                          value={value}
+                          inputId={inputId}
+                          placeholder={task?.example ? `示例：${task.example}` : "请输入真实信息"}
+                          onChange={(nextValue) => setSchemaField(field, nextValue)}
                         />
                       )}
                     </div>
                   );
                 })}
               </div>
-            ) : (
+            ) : repeatableGroups.size === 0 ? (
               <div className="wb-schema-complete">
                 <CheckCircle size={18} weight="fill" />
                 <span>当前类目要求的必填项已全部完成</span>
               </div>
-            )}
+            ) : null}
             <p className="wb-schema-note">
-              共 {requiredSchemaFields.length} 个 API 必填项；系统会隐藏已从图片、AI
-              确认结果或店铺设置带入的字段。
+              共 {allSchemaFields.length} 个 API 字段，其中必填 {requiredSchemaFields.length}
+              个；所有可编辑字段均保留入口，已带入的值也可复核修改。
             </p>
           </section>
         ) : (
@@ -3502,6 +4420,503 @@ function getDraftCheckStatus(product: ProductRecord): DraftCheckStatus {
     return "missing";
   }
   return "ok";
+}
+
+function SkuTableEditor({
+  rows,
+  onChange,
+}: {
+  rows: NonNullable<ProductRecord["facts"]["skuRows"]>;
+  onChange: (rows: NonNullable<ProductRecord["facts"]["skuRows"]>) => void;
+}) {
+  const update = (id: string, key: "sku" | "attributes" | "price" | "stock", value: string) => {
+    onChange(rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)));
+  };
+  const add = () => {
+    onChange([
+      ...rows,
+      {
+        id: `sku-${Date.now()}-${rows.length}`,
+        sku: "",
+        attributes: "",
+        price: "",
+        stock: "",
+      },
+    ]);
+  };
+  return (
+    <section className="wb-sku-editor">
+      <header>
+        <div>
+          <strong>每一行是一种可销售规格</strong>
+          <p>例如：红色 / 20 cm。价格和库存必须来自 ERP 或人工确认。</p>
+        </div>
+        <button type="button" className="button button-secondary" onClick={add}>
+          <Plus size={14} /> 添加 SKU
+        </button>
+      </header>
+      {rows.length ? (
+        <div className="wb-sku-table">
+          <div className="wb-sku-table-head">
+            <span>SKU 编码</span>
+            <span>规格组合</span>
+            <span>价格</span>
+            <span>库存</span>
+            <span />
+          </div>
+          {rows.map((row, index) => {
+            const id = row.id || `sku-imported-${index}`;
+            return (
+              <div key={id} className="wb-sku-table-row">
+                <input
+                  value={row.sku ?? ""}
+                  onChange={(event) => update(id, "sku", event.target.value)}
+                  aria-label={`第 ${index + 1} 行 SKU 编码`}
+                />
+                <input
+                  value={row.attributes ?? ""}
+                  onChange={(event) => update(id, "attributes", event.target.value)}
+                  placeholder="颜色: 红色 / 尺寸: M"
+                  aria-label={`第 ${index + 1} 行规格组合`}
+                />
+                <input
+                  value={row.price ?? ""}
+                  inputMode="decimal"
+                  onChange={(event) => update(id, "price", event.target.value)}
+                  aria-label={`第 ${index + 1} 行价格`}
+                />
+                <input
+                  value={row.stock ?? ""}
+                  inputMode="numeric"
+                  onChange={(event) => update(id, "stock", event.target.value)}
+                  aria-label={`第 ${index + 1} 行库存`}
+                />
+                <button
+                  type="button"
+                  onClick={() => onChange(rows.filter((item) => item.id !== id))}
+                  aria-label={`删除第 ${index + 1} 行 SKU`}
+                >
+                  <Trash size={15} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="wb-sku-empty">单规格商品可以不添加；多规格商品请逐行填写。</p>
+      )}
+    </section>
+  );
+}
+
+function MultiComplexEditor({
+  groupPath,
+  fields,
+  value,
+  onChange,
+}: {
+  groupPath: string;
+  fields: SchemaFieldGuidance[];
+  value: Array<Record<string, unknown>>;
+  onChange: (value: Array<Record<string, unknown>>) => void;
+}) {
+  const rows = value.length ? value : [{}];
+  const updateRow = (index: number, field: SchemaFieldGuidance, nextValue: unknown) => {
+    const relativePath = field.field.slice(groupPath.length + 1).split(".");
+    const nextRows = rows.map((row, rowIndex) =>
+      rowIndex === index ? setNestedRecordValue(row, relativePath, nextValue) : row,
+    );
+    onChange(nextRows);
+  };
+  return (
+    <section className="wb-multi-complex">
+      <header>
+        <div>
+          <strong>{groupPath.split(".").at(-1) || "多组信息"}</strong>
+          <span>Alibaba 多组字段；每一行代表一组真实 SKU 或属性组合</span>
+        </div>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => onChange([...rows, {}])}
+        >
+          <Plus size={14} />
+          添加一组
+        </button>
+      </header>
+      <div className="wb-multi-complex-table">
+        {rows.map((row, rowIndex) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: repeatable rows are positional Schema values and carry no publishable client id
+          <article key={`${groupPath}-${rowIndex}`}>
+            <b>第 {rowIndex + 1} 组</b>
+            {fields.map((field) => {
+              const relativePath = field.field.slice(groupPath.length + 1).split(".");
+              const currentValue = getNestedRecordValue(row, relativePath);
+              const inputId = `multi-${groupPath}-${rowIndex}-${field.field}`;
+              return (
+                <label key={field.field} htmlFor={inputId}>
+                  <span>{field.name || relativePath.at(-1)}</span>
+                  {field.supported === false ? (
+                    <span className="wb-schema-inline-error">
+                      {field.support_message || "该字段暂时无法安全填写"}
+                    </span>
+                  ) : (
+                    <SchemaValueControl
+                      field={field}
+                      value={currentValue}
+                      inputId={inputId}
+                      placeholder="请输入真实信息"
+                      onChange={(nextValue) => updateRow(rowIndex, field, nextValue)}
+                    />
+                  )}
+                </label>
+              );
+            })}
+            <button
+              type="button"
+              className="wb-link is-danger"
+              disabled={rows.length === 1}
+              onClick={() => onChange(rows.filter((_, index) => index !== rowIndex))}
+            >
+              删除本组
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SchemaValueControl({
+  field,
+  value,
+  inputId,
+  placeholder,
+  onChange,
+}: {
+  field: SchemaFieldGuidance;
+  value: unknown;
+  inputId: string;
+  placeholder: string;
+  onChange: (value: unknown) => void;
+}) {
+  if (field.value_attributes?.length) {
+    return (
+      <SchemaAttributedValueControl
+        field={field}
+        value={value}
+        inputId={inputId}
+        placeholder={placeholder}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.type === "multiCheck" && field.options.length) {
+    const selected = Array.isArray(value) ? value.map(schemaScalarText) : [];
+    return (
+      <div className="wb-schema-options" id={inputId} role="group">
+        {field.options.map((option) => {
+          const checked = selected.includes(option.value);
+          return (
+            <label key={option.value} className={option.valid === false ? "is-disabled" : ""}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={option.valid === false}
+                onChange={() =>
+                  onChange(
+                    checked
+                      ? selected.filter((item) => item !== option.value)
+                      : [...selected, option.value],
+                  )
+                }
+              />
+              <span>
+                {option.display_name || option.value}
+                {option.valid === false ? "（当前不可用）" : ""}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    );
+  }
+  if (field.options.length) {
+    return (
+      <select
+        id={inputId}
+        value={schemaScalarText(value)}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">请选择</option>
+        {field.options.map((option) => (
+          <option key={option.value} value={option.value} disabled={option.valid === false}>
+            {option.display_name || option.value}
+            {option.valid === false ? "（当前不可用）" : ""}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  if (field.type === "multiInput") {
+    const values = Array.isArray(value) ? value.map(schemaScalarText) : [];
+    const rows = values.length ? values : [""];
+    return (
+      <div className="wb-schema-value-list" id={inputId}>
+        {rows.map((item, index) => (
+          <div key={`${field.field}-${index}`}>
+            <SchemaScalarInput
+              field={field}
+              value={item}
+              inputId={`${inputId}-${index}`}
+              placeholder={placeholder}
+              onChange={(nextValue) => {
+                const next = rows.map((current, rowIndex) =>
+                  rowIndex === index ? nextValue : current,
+                );
+                onChange(next.filter((current) => current !== ""));
+              }}
+            />
+            <button
+              type="button"
+              className="wb-link is-danger"
+              disabled={rows.length === 1}
+              onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="button button-secondary"
+          disabled={field.max_input_num !== undefined && rows.length >= field.max_input_num}
+          onClick={() => onChange([...rows, ""])}
+        >
+          <Plus size={14} /> 添加一项
+        </button>
+      </div>
+    );
+  }
+  return (
+    <SchemaScalarInput
+      field={field}
+      value={schemaScalarText(value)}
+      inputId={inputId}
+      placeholder={placeholder}
+      onChange={onChange}
+    />
+  );
+}
+
+function SchemaScalarInput({
+  field,
+  value,
+  inputId,
+  placeholder,
+  onChange,
+}: {
+  field: SchemaFieldGuidance;
+  value: string;
+  inputId: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  if (field.value_type === "textarea" || field.value_type === "html") {
+    return (
+      <textarea
+        id={inputId}
+        rows={field.value_type === "html" ? 6 : 3}
+        value={value}
+        maxLength={field.max_length}
+        placeholder={field.value_type === "html" ? "请输入 Alibaba 接受的 HTML 内容" : placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+  const numeric = ["decimal", "integer", "long"].includes(field.value_type || "");
+  return (
+    <input
+      id={inputId}
+      type={field.value_type === "date" ? "date" : field.value_type === "url" ? "url" : "text"}
+      inputMode={numeric ? (field.value_type === "decimal" ? "decimal" : "numeric") : undefined}
+      value={value}
+      minLength={field.min_length}
+      maxLength={field.max_length}
+      placeholder={placeholder}
+      title={field.pattern ? `需符合 Alibaba 格式规则：${field.pattern}` : undefined}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function SchemaAttributedValueControl({
+  field,
+  value,
+  inputId,
+  placeholder,
+  onChange,
+}: {
+  field: SchemaFieldGuidance;
+  value: unknown;
+  inputId: string;
+  placeholder: string;
+  onChange: (value: unknown) => void;
+}) {
+  const multiple = field.type === "multiInput" || field.type === "multiCheck";
+  const source = multiple ? (Array.isArray(value) ? value : []) : [value];
+  const rows = (source.length ? source : [""]).map(schemaAttributedValue);
+  const valueAttributes = field.value_attributes ?? [];
+  const update = (index: number, next: { value: string; attributes: Record<string, string> }) => {
+    const nextRows = rows.map((row, rowIndex) => (rowIndex === index ? next : row));
+    onChange(multiple ? nextRows.filter((row) => row.value) : nextRows[0]);
+  };
+  return (
+    <div className="wb-schema-attributed-values" id={inputId}>
+      {rows.map((row, index) => (
+        <div className="wb-schema-attributed-row" key={`${field.field}-${index}`}>
+          {field.options.length ? (
+            <select
+              value={row.value}
+              onChange={(event) => {
+                const option = field.options.find((item) => item.value === event.target.value);
+                const attributes = { ...row.attributes };
+                for (const attribute of valueAttributes) {
+                  if (option?.attributes?.[attribute]) {
+                    attributes[attribute] = option.attributes[attribute];
+                  }
+                }
+                update(index, { value: event.target.value, attributes });
+              }}
+            >
+              <option value="">请选择</option>
+              {field.options.map((option) => (
+                <option key={option.value} value={option.value} disabled={option.valid === false}>
+                  {option.display_name || option.value}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <SchemaScalarInput
+              field={field}
+              value={row.value}
+              inputId={`${inputId}-${index}-value`}
+              placeholder={placeholder}
+              onChange={(nextValue) => update(index, { ...row, value: nextValue })}
+            />
+          )}
+          <div className="wb-schema-attributes">
+            {valueAttributes.map((attribute) => (
+              <label key={attribute}>
+                <span>Alibaba 值属性：{attribute}</span>
+                <input
+                  value={row.attributes[attribute] || ""}
+                  placeholder={`请输入 ${attribute}`}
+                  onChange={(event) =>
+                    update(index, {
+                      ...row,
+                      attributes: { ...row.attributes, [attribute]: event.target.value },
+                    })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+          {multiple ? (
+            <button
+              type="button"
+              className="wb-link is-danger"
+              disabled={rows.length === 1}
+              onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
+            >
+              删除本项
+            </button>
+          ) : null}
+        </div>
+      ))}
+      {multiple ? (
+        <button
+          type="button"
+          className="button button-secondary"
+          disabled={field.max_input_num !== undefined && rows.length >= field.max_input_num}
+          onClick={() => onChange([...rows, schemaAttributedValue("")])}
+        >
+          <Plus size={14} /> 添加一项
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function schemaScalarText(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value) && "value" in value) {
+    return String((value as { value?: unknown }).value ?? "");
+  }
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function schemaAttributedValue(value: unknown): {
+  value: string;
+  attributes: Record<string, string>;
+} {
+  if (value && typeof value === "object" && !Array.isArray(value) && "value" in value) {
+    const record = value as { value?: unknown; attributes?: unknown };
+    return {
+      value: String(record.value ?? ""),
+      attributes:
+        record.attributes &&
+        typeof record.attributes === "object" &&
+        !Array.isArray(record.attributes)
+          ? Object.fromEntries(
+              Object.entries(record.attributes).map(([key, item]) => [key, String(item)]),
+            )
+          : {},
+    };
+  }
+  return { value: schemaScalarText(value), attributes: {} };
+}
+
+function repeatableGroupValue(
+  product: ProductRecord,
+  groupPath: string,
+): Array<Record<string, unknown>> {
+  const value = product.schemaFields?.[groupPath]?.value;
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === "object"),
+      )
+    : [];
+}
+
+function setNestedRecordValue(
+  source: Record<string, unknown>,
+  path: string[],
+  value: unknown,
+): Record<string, unknown> {
+  if (!path.length) {
+    return source;
+  }
+  const [head, ...tail] = path;
+  if (!tail.length) {
+    return { ...source, [head]: value };
+  }
+  const current = source[head];
+  const child = current && typeof current === "object" && !Array.isArray(current) ? current : {};
+  return {
+    ...source,
+    [head]: setNestedRecordValue(child as Record<string, unknown>, tail, value),
+  };
+}
+
+function getNestedRecordValue(source: Record<string, unknown>, path: string[]): unknown {
+  let value: unknown = source;
+  for (const part of path) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    value = (value as Record<string, unknown>)[part];
+  }
+  return value;
 }
 
 function DraftStep({
@@ -4050,7 +5465,7 @@ function PreviewStep({
               </thead>
               <tbody>
                 {rows.map((product) => {
-                  const canPublish = product.stage === "drafted";
+                  const canPublish = product.stage === "drafted" && product.draftReadbackVerified;
                   const isFailed = product.stage === "error";
                   const isExpanded = expanded.has(product.id);
                   const productUrl =
@@ -4159,15 +5574,18 @@ function PreviewStep({
                                 </div>
                               </div>
                             ) : (
-                              <div className="readback-preview">
-                                <img src={getMainProductImage(product).url} alt="" />
-                                <div>
-                                  <h3>{product.title || product.reference}</h3>
-                                  <p>{product.facts.categoryLabel || "类目待定"}</p>
-                                  <p className="readback-preview-points">
-                                    {product.sellingPoints.slice(0, 3).join(" · ")}
-                                  </p>
+                              <div className="readback-detail-grid">
+                                <div className="readback-preview">
+                                  <img src={getMainProductImage(product).url} alt="" />
+                                  <div>
+                                    <h3>{product.title || product.reference}</h3>
+                                    <p>{product.facts.categoryLabel || "类目待定"}</p>
+                                    <p className="readback-preview-points">
+                                      {product.sellingPoints.slice(0, 3).join(" · ")}
+                                    </p>
+                                  </div>
                                 </div>
+                                <ReadbackDiff product={product} />
                               </div>
                             )}
                           </td>
@@ -4311,10 +5729,7 @@ function getRequiredSchemaFields(product: ProductRecord): SchemaFieldGuidance[] 
     return [];
   }
   const requiredIds = new Set(product.schemaGuidance.required_field_ids);
-  const fields = [
-    ...product.schemaGuidance.ai_fillable_fields,
-    ...product.schemaGuidance.manual_fact_fields,
-  ];
+  const fields = getAllSchemaFields(product);
   const byId = new Map(
     fields.filter((field) => requiredIds.has(field.field)).map((field) => [field.field, field]),
   );
@@ -4329,10 +5744,25 @@ function getRequiredSchemaFields(product: ProductRecord): SchemaFieldGuidance[] 
         responsibility_reason: "API 返回必填字段，但未提供可安全自动填充的依据",
         allowed_sources: ["user_provided", "user_confirmed", "business_system"],
         options: [],
+        value_attributes: [],
+        conditional_disable: [],
+        supported: false,
+        support_message: "API 返回必填字段，但缺少可渲染的字段定义，请重新拉取实时 Schema",
       });
     }
   }
   return Array.from(byId.values());
+}
+
+function getAllSchemaFields(product: ProductRecord): SchemaFieldGuidance[] {
+  if (!product.schemaGuidance) {
+    return [];
+  }
+  const fields = [
+    ...product.schemaGuidance.ai_fillable_fields,
+    ...product.schemaGuidance.manual_fact_fields,
+  ];
+  return Array.from(new Map(fields.map((field) => [field.field, field])).values());
 }
 
 function getFactErrors(product: ProductRecord): string[] {
@@ -4476,6 +5906,10 @@ function schemaFactKey(field: SchemaFieldGuidance): keyof ProductRecord["facts"]
 }
 
 function getSchemaFieldValue(product: ProductRecord, field: SchemaFieldGuidance): unknown {
+  const schemaValue = product.schemaFields?.[field.field]?.value;
+  if (hasSchemaValue(schemaValue)) {
+    return schemaValue;
+  }
   const factKey = schemaFactKey(field);
   if (factKey) {
     return product.facts[factKey];
@@ -4490,7 +5924,17 @@ function getSchemaFieldValue(product: ProductRecord, field: SchemaFieldGuidance)
   if (text.includes("categoryid") || text.includes("catid") || text.includes("叶子类目")) {
     return product.facts.categoryId;
   }
-  return product.schemaFields?.[field.field]?.value;
+  return schemaValue;
+}
+
+function schemaFactTextValue(value: unknown): string | null {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (Array.isArray(value) && (typeof value[0] === "string" || typeof value[0] === "number")) {
+    return String(value[0]);
+  }
+  return null;
 }
 
 function isTitleSchemaField(field: SchemaFieldGuidance): boolean {
@@ -4531,6 +5975,9 @@ function hasSchemaValue(value: unknown): boolean {
 }
 
 function schemaFieldControlLabel(field: SchemaFieldGuidance): string {
+  if (field.supported === false) {
+    return "需处理";
+  }
   if (field.type === "singleCheck") {
     return field.async_options && !field.options.length
       ? "动态单选"
@@ -4550,7 +5997,17 @@ function schemaFieldControlLabel(field: SchemaFieldGuidance): string {
   if (field.type === "multiComplex") {
     return "多组字段";
   }
-  return "文本输入";
+  const valueTypeLabels: Record<string, string> = {
+    decimal: "小数",
+    integer: "整数",
+    long: "长整数",
+    date: "日期",
+    url: "网址",
+    textarea: "多行文本",
+    html: "HTML 内容",
+    text: "文本输入",
+  };
+  return valueTypeLabels[field.value_type || "text"] || "未知类型";
 }
 
 function schemaDefaultForField(field: SchemaFieldGuidance, settings: StoreSettings): string | null {
@@ -4640,7 +6097,8 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
     }
     schemaFields[field.field] = {
       value: field.type === "multiCheck" && !Array.isArray(value) ? [value] : value,
-      source: isTitleSchemaField(field) ? "user_confirmed" : "user_provided",
+      source: field.responsibility === "ai_candidate" ? "ai_generated" : "user_provided",
+      requires_confirmation: field.responsibility === "ai_candidate",
     };
   }
   return { ...product, schemaFields };
@@ -4683,22 +6141,6 @@ function schemaImageValue(field: SchemaFieldGuidance, product: ProductRecord): u
     value: image.url,
     attributes: { fileId: image.fileId },
   }));
-}
-
-function confirmSchemaFields(
-  fields: Record<string, DraftField> | undefined,
-): Record<string, DraftField> | undefined {
-  if (!fields) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(fields).map(([field, value]) => [
-      field,
-      value.source === "ai_generated" || value.source === "image_extracted"
-        ? { ...value, source: "user_confirmed", requires_confirmation: false }
-        : value,
-    ]),
-  );
 }
 
 function factErrorLabel(key: keyof ProductRecord["facts"]): string {
@@ -4752,6 +6194,18 @@ function applyAnalysis(product: ProductRecord, response: ImageAnalysisResponse):
     ? translatedVisibleTraits
     : product.visibleTraitsZh;
   const categorySuggestion = response.category_suggestions[0];
+  const subjectCandidate = findDraftField(generated, ["subject", "title", "english_title"]);
+  const keywordCandidate = findDraftField(generated, ["keywords", "keyword"]);
+  const descriptionCandidate = findDraftField(generated, [
+    "description",
+    "detail",
+    "product_description",
+  ]);
+  const sellingPointCandidate = findDraftField(generated, [
+    "selling_points",
+    "sellingPoints",
+    "highlights",
+  ]);
   const category = normalizeFieldValue(categorySuggestion);
   const categoryZh = normalizeDisplayValue(categorySuggestion);
   const categoryLabel =
@@ -4792,6 +6246,39 @@ function applyAnalysis(product: ProductRecord, response: ImageAnalysisResponse):
       ...product.schemaFields,
       ...observed,
       ...generated,
+      ...(subjectCandidate
+        ? { subject: { ...subjectCandidate, value: title, display_value_zh: titleZh } }
+        : {}),
+      ...(keywordCandidate
+        ? { keywords: { ...keywordCandidate, value: keywords, display_value_zh: keywordsZh } }
+        : {}),
+      ...(descriptionCandidate
+        ? {
+            description: {
+              ...descriptionCandidate,
+              value: description,
+              display_value_zh: descriptionZh,
+            },
+          }
+        : {}),
+      ...(sellingPointCandidate
+        ? {
+            selling_points: {
+              ...sellingPointCandidate,
+              value: sellingPoints,
+              display_value_zh: sellingPointsZh,
+            },
+          }
+        : {}),
+      ...(categorySuggestion && categoryId
+        ? {
+            category_id: {
+              ...categorySuggestion,
+              value: categoryId,
+              display_value_zh: categoryZh,
+            },
+          }
+        : {}),
     },
     facts: {
       ...product.facts,
@@ -4801,6 +6288,18 @@ function applyAnalysis(product: ProductRecord, response: ImageAnalysisResponse):
     },
     errors: [...response.warnings, "AI 内容尚未确认"],
   };
+}
+
+function findDraftField(
+  fields: Record<string, DraftField>,
+  keys: string[],
+): DraftField | undefined {
+  for (const key of keys) {
+    if (fields[key]) {
+      return fields[key];
+    }
+  }
+  return undefined;
 }
 
 function getFieldDisplayString(fields: Record<string, DraftField>, keys: string[]): string {
@@ -4891,6 +6390,77 @@ function getProductId(response?: Record<string, unknown>): string | undefined {
     }
   }
   return undefined;
+}
+
+function getReadback(response?: Record<string, unknown>): Record<string, unknown> | undefined {
+  const readback = response?._readback;
+  return readback && typeof readback === "object" && !Array.isArray(readback)
+    ? (readback as Record<string, unknown>)
+    : undefined;
+}
+
+function getReadbackDifferences(
+  response?: Record<string, unknown>,
+): DraftFieldDifference[] | undefined {
+  const differences = response?._differences;
+  if (!Array.isArray(differences)) {
+    return undefined;
+  }
+  return differences.filter((item): item is DraftFieldDifference =>
+    Boolean(
+      item &&
+        typeof item === "object" &&
+        "field_path" in item &&
+        "status" in item &&
+        ((item as { status?: unknown }).status === "changed" ||
+          (item as { status?: unknown }).status === "matched"),
+    ),
+  );
+}
+
+function getReadbackError(response?: Record<string, unknown>): string | undefined {
+  const error = response?._readback_error;
+  return typeof error === "string" && error.trim() ? error : undefined;
+}
+
+function ReadbackDiff({ product }: { product: ProductRecord }) {
+  if (product.draftReadbackError) {
+    return (
+      <div className="readback-diff is-error">
+        <strong>平台回读失败，暂不可正式发布</strong>
+        <p>{product.draftReadbackError}</p>
+      </div>
+    );
+  }
+  const differences = product.draftDifferences ?? [];
+  const changed = differences.filter((item) => item.status === "changed");
+  return (
+    <div className={`readback-diff ${changed.length ? "has-changes" : "is-verified"}`}>
+      <strong>
+        {changed.length ? `Alibaba 保存后有 ${changed.length} 项变化` : "已完成 Alibaba 草稿回读"}
+      </strong>
+      {changed.length ? (
+        <ul>
+          {changed.map((item) => (
+            <li key={item.field_path}>
+              <b>{item.field_path}</b>
+              <span>本地：{readbackValue(item.local_value)}</span>
+              <span>平台：{readbackValue(item.platform_value)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>当前可比对字段未发现平台转换；正式发布仍需人工确认。</p>
+      )}
+    </div>
+  );
+}
+
+function readbackValue(value: unknown): string {
+  if (value && typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value ?? "—");
 }
 
 const delay = (milliseconds: number) =>

@@ -24,9 +24,11 @@ def build_schema_xml(
     errors: list[SchemaValidationIssue] = []
     warnings: list[SchemaValidationIssue] = []
     fields = _field_children(root)
+    field_options = _field_option_values(fields)
     field_by_id = {
         field.attrib["id"]: field for field in fields if field.attrib.get("id")
     }
+    context_values = dict(values)
 
     for field_id in values:
         if field_id not in field_by_id:
@@ -46,6 +48,8 @@ def build_schema_xml(
             errors=errors,
             warnings=warnings,
             top_level=True,
+            context_values=context_values,
+            field_options=field_options,
         )
 
     return SchemaBuildResult(
@@ -82,17 +86,28 @@ def _validate_and_fill(
     errors: list[SchemaValidationIssue],
     warnings: list[SchemaValidationIssue],
     top_level: bool = False,
+    context_values: dict[str, object] | None = None,
+    field_options: dict[str, set[str]] | None = None,
 ) -> None:
     field_key = ".".join(part for part in path if part)
     field_type = field.attrib.get("type", "input")
     rules = _rules(field)
     value = _with_option_attributes(field, value, rules)
 
-    if _rule_is_true(rules, "disableRule") and supplied:
-        errors.append(_issue(field_key, "disableRule", "Disabled field must not be submitted"))
+    if _rule_disables_field(
+        field,
+        rules,
+        context_values or {},
+        field_options or {},
+    ):
+        if supplied:
+            errors.append(_issue(field_key, "disableRule", "Disabled field must not be submitted"))
         return
-    if _rule_is_true(rules, "readOnlyRule") and supplied:
-        errors.append(_issue(field_key, "readOnlyRule", "Read-only field must not be submitted"))
+    if _rule_is_true(rules, "readOnlyRule"):
+        if supplied:
+            errors.append(
+                _issue(field_key, "readOnlyRule", "Read-only field must not be submitted")
+            )
         return
 
     if _rule_is_true(rules, "requiredRule") and _is_empty(value):
@@ -108,6 +123,8 @@ def _validate_and_fill(
             errors=errors,
             warnings=warnings,
             top_level=top_level,
+            context_values=context_values or {},
+            field_options=field_options or {},
         )
         return
 
@@ -128,6 +145,8 @@ def _validate_and_fill_complex(
     errors: list[SchemaValidationIssue],
     warnings: list[SchemaValidationIssue],
     top_level: bool,
+    context_values: dict[str, object],
+    field_options: dict[str, set[str]],
 ) -> None:
     field_key = ".".join(part for part in path if part)
     field_type = field.attrib.get("type")
@@ -153,6 +172,8 @@ def _validate_and_fill_complex(
                     [*path, f"[{index}]"],
                     errors,
                     warnings,
+                    context_values,
+                    field_options,
                 )
             )
         if not any(issue.field == field_key for issue in errors):
@@ -173,6 +194,8 @@ def _validate_and_fill_complex(
         path,
         errors,
         warnings,
+        context_values,
+        field_options,
     )
     if supplied and not any(
         issue.field == field_key or issue.field.startswith(f"{field_key}.")
@@ -187,6 +210,8 @@ def _build_complex_instance(
     path: list[str],
     errors: list[SchemaValidationIssue],
     warnings: list[SchemaValidationIssue],
+    context_values: dict[str, object],
+    field_options: dict[str, set[str]],
 ) -> ElementTree.Element:
     instance = ElementTree.Element("instance")
     children_by_id = {
@@ -204,6 +229,7 @@ def _build_complex_instance(
         child_id = child.attrib.get("id", "")
         supplied = child_id in values
         value = values.get(child_id)
+        child_context = {**context_values, **{str(key): item for key, item in values.items()}}
         working_field = deepcopy(child)
         output = ElementTree.Element("field", working_field.attrib)
         _validate_and_fill(
@@ -213,6 +239,8 @@ def _build_complex_instance(
             path=[*path, child_id],
             errors=errors,
             warnings=warnings,
+            context_values=child_context,
+            field_options=field_options,
         )
         _copy_direct_values(working_field, output)
         instance.append(output)
@@ -287,7 +315,7 @@ def _validate_text_rules(
 ) -> None:
     for rule in rules.get("valueTypeRule", []):
         value_type = rule.get("value")
-        if value_type == "long":
+        if value_type in {"integer", "long"}:
             try:
                 int(text)
             except ValueError:
@@ -320,7 +348,7 @@ def _validate_text_rules(
                     )
                 )
 
-    for rule in rules.get("regexRule", []):
+    for rule in [*rules.get("regxRule", []), *rules.get("regexRule", [])]:
         pattern = rule.get("value")
         if not pattern:
             continue
@@ -330,7 +358,7 @@ def _validate_text_rules(
             continue
         should_match = rule.get("exProperty") != "not include"
         if matched != should_match:
-            errors.append(_issue(field_key, "regexRule", "Value does not satisfy pattern rule"))
+            errors.append(_issue(field_key, "regxRule", "Value does not satisfy pattern rule"))
 
     try:
         numeric_value = Decimal(text)
@@ -456,6 +484,101 @@ def _rules(field: ElementTree.Element) -> dict[str, list[dict[str, str]]]:
 
 def _rule_is_true(rules: dict[str, list[dict[str, str]]], name: str) -> bool:
     return any(rule.get("value") == "true" for rule in rules.get(name, []))
+
+
+def _rule_disables_field(
+    field: ElementTree.Element,
+    rules: dict[str, list[dict[str, str]]],
+    values: dict[str, object],
+    field_options: dict[str, set[str]],
+) -> bool:
+    if not _rule_is_true(rules, "disableRule"):
+        return False
+    groups: list[ElementTree.Element] = []
+    for rules_element in _children_named(field, "rules"):
+        for rule in _children_named(rules_element, "rule"):
+            if rule.attrib.get("name") == "disableRule" and rule.attrib.get("value") == "true":
+                groups.extend(_children_named(rule, "depend-group"))
+    if not groups:
+        return True
+    return any(
+        _dependency_group_matches(group, values, field_options)
+        for group in groups
+    )
+
+
+def _dependency_group_matches(
+    group: ElementTree.Element,
+    values: dict[str, object],
+    field_options: dict[str, set[str]],
+) -> bool:
+    matches = [
+        _dependency_matches(expression, values, field_options)
+        for expression in _children_named(group, "depend-express")
+    ]
+    if not matches:
+        return False
+    return any(matches) if group.attrib.get("operator") == "or" else all(matches)
+
+
+def _dependency_matches(
+    expression: ElementTree.Element,
+    values: dict[str, object],
+    field_options: dict[str, set[str]],
+) -> bool:
+    field_id = expression.attrib.get("fieldId", "")
+    actual = values.get(field_id)
+    expected = expression.attrib.get("value", "")
+    symbol = expression.attrib.get("symbol", "==")
+    comparable = actual.get("value") if isinstance(actual, dict) else actual
+    if symbol == "is null":
+        return _is_empty(comparable)
+    if symbol in {"contains", "not contains"}:
+        contains = expected in comparable if isinstance(comparable, str | list) else False
+        return contains if symbol == "contains" else not contains
+    if symbol in {"==", "!="}:
+        equal = str(comparable) == expected
+        return equal if symbol == "==" else not equal
+    if symbol in {">", "<", ">=", "<="}:
+        try:
+            left = Decimal(str(comparable))
+            right = Decimal(expected)
+        except InvalidOperation:
+            return False
+        return {
+            ">": left > right,
+            "<": left < right,
+            ">=": left >= right,
+            "<=": left <= right,
+        }[symbol]
+    if symbol in {
+        "this field's value in fieldOptions",
+        "this field’s value in fieldOptions",
+        "this field's value not in fieldOptions",
+        "this field’s value not in fieldOptions",
+    }:
+        allowed = field_options.get(field_id, set())
+        actual_values = comparable if isinstance(comparable, list) else [comparable]
+        in_options = bool(actual_values) and all(
+            not _is_empty(item) and str(item) in allowed
+            for item in actual_values
+        )
+        return not in_options if " not in " in symbol else in_options
+    return False
+
+
+def _field_option_values(
+    fields: list[ElementTree.Element],
+) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for field in fields:
+        field_id = field.attrib.get("id")
+        if field_id:
+            result.setdefault(field_id, set()).update(_option_values(field))
+        nested = _field_option_values(_nested_field_children(field))
+        for nested_id, values in nested.items():
+            result.setdefault(nested_id, set()).update(values)
+    return result
 
 
 def _option_values(field: ElementTree.Element) -> set[str]:

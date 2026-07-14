@@ -45,6 +45,10 @@ export type DraftField = {
   confidence?: number;
   requires_confirmation?: boolean;
   evidence?: string;
+  confirmation_id?: string;
+  confirmed_at?: string;
+  confirmed_by?: string;
+  user_edited?: boolean;
 };
 
 export type ProductFacts = {
@@ -70,6 +74,15 @@ export type ProductFacts = {
   origin: string;
   hsCode: string;
   certifications: string[];
+  skuRows?: ProductSkuRow[];
+};
+
+export type ProductSkuRow = {
+  id: string;
+  sku: string;
+  attributes: string;
+  price: string;
+  stock: string;
 };
 
 export type ProductImage = {
@@ -85,6 +98,17 @@ export type ProductImage = {
 export type SchemaOption = {
   display_name?: string;
   value: string;
+  valid?: boolean;
+  attributes?: Record<string, string>;
+};
+
+export type SchemaDependencyGroup = {
+  operator: "and" | "or";
+  expressions: Array<{
+    field_id: string;
+    value?: string;
+    symbol: string;
+  }>;
 };
 
 export type SchemaFieldGuidance = {
@@ -99,15 +123,83 @@ export type SchemaFieldGuidance = {
   allowed_sources: FieldSource[];
   async_options?: boolean;
   async_query_method?: string;
+  value_type?: string;
   max_length?: number;
+  min_length?: number;
+  min_value?: string;
+  max_value?: string;
+  min_input_num?: number;
+  max_input_num?: number;
+  pattern?: string;
+  value_attributes?: string[];
+  conditional_disable?: SchemaDependencyGroup[];
+  supported?: boolean;
+  support_message?: string;
   tip?: string;
   options: SchemaOption[];
+  parent_path?: string;
+  repeatable_group?: string;
 };
 
 export type SchemaGuidanceResult = {
   ai_fillable_fields: SchemaFieldGuidance[];
   manual_fact_fields: SchemaFieldGuidance[];
   required_field_ids: string[];
+};
+
+export type FieldTaskStatus = "completed" | "confirm" | "fill" | "invalid";
+
+export type FieldTask = {
+  field_path: string;
+  parent_path?: string;
+  label: string;
+  question: string;
+  explanation?: string;
+  example?: string;
+  unit?: string;
+  control_type: string;
+  status: FieldTaskStatus;
+  responsibility: "ai_candidate" | "merchant" | "business_system" | "store_default";
+  responsibility_label: string;
+  allowed_sources: FieldSource[];
+  value: unknown;
+  display_value_zh?: unknown;
+  source?: FieldSource;
+  confidence?: number;
+  evidence?: string;
+  required: boolean;
+  blocking: boolean;
+  validation_errors: string[];
+  options: SchemaOption[];
+  async_options: boolean;
+  async_query_method?: string;
+  value_type?: string;
+  max_length?: number;
+  min_length?: number;
+  min_value?: string;
+  max_value?: string;
+  min_input_num?: number;
+  max_input_num?: number;
+  pattern?: string;
+  value_attributes?: string[];
+  supported?: boolean;
+  support_message?: string;
+  repeatable_group?: string;
+};
+
+export type FieldTaskSummary = Record<FieldTaskStatus, number>;
+
+export type FieldTaskResult = {
+  tasks: FieldTask[];
+  summary: FieldTaskSummary;
+  ready_to_draft: boolean;
+};
+
+export type DraftFieldDifference = {
+  field_path: string;
+  local_value: unknown;
+  platform_value: unknown;
+  status: "changed" | "matched";
 };
 
 export type ProductRecord = {
@@ -133,9 +225,15 @@ export type ProductRecord = {
   facts: ProductFacts;
   errors: string[];
   draftProductId?: string;
+  draftReadback?: Record<string, unknown>;
+  draftDifferences?: DraftFieldDifference[];
+  draftReadbackError?: string;
+  draftReadbackVerified?: boolean;
   schemaData?: Record<string, unknown> | string;
   schemaGuidance?: SchemaGuidanceResult;
   schemaFields?: Record<string, DraftField>;
+  fieldTasks?: FieldTask[];
+  fieldTaskSummary?: FieldTaskSummary;
   isDemo?: boolean;
 };
 
@@ -322,6 +420,48 @@ export type BatchApiResult = {
   success: boolean;
   response?: Record<string, unknown>;
   error?: string;
+};
+
+export type ListingTemplate = {
+  id: string;
+  store_connection_id: string;
+  name: string;
+  category_id: string | null;
+  fields: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ListingImportResult = {
+  format: "csv" | "xlsx" | "erp_json";
+  rows: Array<{
+    row_number: number;
+    reference: string;
+    fields: Record<string, DraftField>;
+    warnings: string[];
+  }>;
+  errors: string[];
+};
+
+export type ListingFeatureFlags = {
+  workflow_v2: boolean;
+  templates: boolean;
+  imports: boolean;
+  metrics: boolean;
+  legacy_fallback: boolean;
+};
+
+export type ListingMetrics = {
+  total_events: number;
+  counters: Record<string, number>;
+  failure_reasons: Record<string, number>;
+  median_draft_duration_ms: number | null;
+  first_pass_draft_rate: number | null;
+  ai_safe_completion_rate: number | null;
+  average_manual_field_count: number | null;
+  ai_confirmation_edit_rate: number | null;
+  publish_failure_rate: number | null;
+  error_localization_rate: number | null;
 };
 
 export type ToastMessage = {

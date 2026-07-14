@@ -9,7 +9,7 @@ from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.main import app
 from backend.app.models import ProductImageAnalysis
 
-SCHEMA_XML = "<itemSchema><field id=\"productTitle\" type=\"input\" /></itemSchema>"
+SCHEMA_XML = '<itemSchema><field id="productTitle" type="input" /></itemSchema>'
 
 pytestmark = pytest.mark.usefixtures("authenticated_app")
 
@@ -21,6 +21,27 @@ class FakeAlibabaClient:
         parameters: dict[str, object] | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> dict[str, object]:
+        if "category/schema/level/get" in operation:
+            return {
+                "result": {
+                    "data": """
+                    <itemSchema>
+                      <field id="icbuCatProp" type="complex">
+                        <fields>
+                          <field id="supplyType" name="Supply type" type="singleCheck">
+                            <rules>
+                              <rule name="requiredRule" value="true"/>
+                              <rule name="asyncQueryRule"
+                                value="top.tmall.post.item.query.subProp.schema.get"/>
+                            </rules>
+                            <options><option displayName="OEM" value="oem"/></options>
+                          </field>
+                        </fields>
+                      </field>
+                    </itemSchema>
+                    """
+                }
+            }
         return {
             "success": True,
             "operation": operation,
@@ -252,9 +273,7 @@ def test_oauth_callback_redirects_missing_code_or_state_to_frontend() -> None:
     response = client.get("/api/v1/alibaba/oauth/callback", params={"code": "code-only"})
 
     assert response.status_code == 307
-    assert response.headers["location"].endswith(
-        "?alibaba=error&reason=missing_callback_data"
-    )
+    assert response.headers["location"].endswith("?alibaba=error&reason=missing_callback_data")
 
 
 def test_publish_requires_explicit_confirmation() -> None:
@@ -316,7 +335,7 @@ def test_batch_drafts_return_one_result_per_item() -> None:
             "/api/v1/alibaba/products/batch/drafts",
             json={
                 "batch_id": "test-batch-drafts",
-                    "items": [
+                "items": [
                     {"reference": "A", "category_id": "123", "xml": SCHEMA_XML},
                     {"reference": "B", "category_id": "123", "xml": SCHEMA_XML},
                 ],
@@ -326,9 +345,10 @@ def test_batch_drafts_return_one_result_per_item() -> None:
         assert response.status_code == 200
         assert [item["reference"] for item in response.json()] == ["A", "B"]
         assert all(item["success"] for item in response.json())
-        assert response.json()[0]["response"]["parameters"][
-            "param_product_top_publish_request"
-        ]["xml"] == SCHEMA_XML
+        assert (
+            response.json()[0]["response"]["parameters"]["param_product_top_publish_request"]["xml"]
+            == SCHEMA_XML
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -361,7 +381,7 @@ def test_batch_requires_unique_references() -> None:
                 "items": [
                     {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
                     {"reference": "duplicate", "category_id": "123", "xml": SCHEMA_XML},
-                ]
+                ],
             },
         )
         assert response.status_code == 422
@@ -517,7 +537,44 @@ def test_parse_schema_extracts_official_rules_and_manual_fields() -> None:
     assert body["fields"][1]["options"][0] == {
         "display_name": "Piece/Pieces",
         "value": "100000015",
+        "valid": True,
+        "attributes": {},
     }
+
+
+def test_parse_schema_preserves_conditional_disable_and_option_metadata() -> None:
+    client = TestClient(app)
+    schema_xml = """
+    <schema>
+      <field id="mode" type="singleCheck">
+        <options>
+          <option displayName="可用" value="1" valid="true" code="A"/>
+          <option displayName="停用" value="2" valid="false"/>
+        </options>
+      </field>
+      <field id="startDate" type="input">
+        <rules>
+          <rule name="valueTypeRule" value="date"/>
+          <rule name="disableRule" value="true">
+            <depend-group operator="and">
+              <depend-express fieldId="mode" value="1" symbol="!="/>
+            </depend-group>
+          </rule>
+        </rules>
+      </field>
+    </schema>
+    """
+    response = client.post("/api/v1/alibaba/schemas/parse", json={"schema_data": schema_xml})
+    assert response.status_code == 200
+    fields = {field["id"]: field for field in response.json()["fields"]}
+    assert fields["startDate"]["disabled"] is False
+    assert fields["startDate"]["conditional_disable"][0]["expressions"][0] == {
+        "field_id": "mode",
+        "value": "1",
+        "symbol": "!=",
+    }
+    assert fields["mode"]["options"][0]["attributes"] == {"code": "A"}
+    assert fields["mode"]["options"][1]["valid"] is False
 
 
 def test_validate_product_uses_schema_xml_required_and_manual_policy() -> None:
@@ -574,6 +631,43 @@ def test_official_listing_flow_documents_backend_sequence() -> None:
     }
 
 
+def test_official_listing_async_options_use_controlled_schema_level_api() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        schema_xml = """
+        <itemSchema>
+          <field id="icbuCatProp" type="complex">
+            <fields>
+              <field id="supplyType" name="Supply type" type="singleCheck">
+                <rules>
+                  <rule name="requiredRule" value="true"/>
+                  <rule name="asyncQueryRule" value="top.tmall.post.item.query.subProp.schema.get"/>
+                </rules>
+              </field>
+            </fields>
+          </field>
+        </itemSchema>
+        """
+        response = client.post(
+            "/api/v1/products/official-listing/options",
+            json={
+                "category_id": "333",
+                "field_path": "icbuCatProp.supplyType",
+                "schema_data": schema_xml,
+                "fields": {"category_id": {"value": "333", "source": "user_confirmed"}},
+            },
+        )
+        assert response.status_code == 200
+        fields = response.json()["manual_fact_fields"]
+        supply_type = next(item for item in fields if item["field"].endswith("supplyType"))
+        assert supply_type["options"] == [
+            {"display_name": "OEM", "value": "oem", "valid": True, "attributes": {}}
+        ]
+    finally:
+        app.dependency_overrides.pop(get_alibaba_client, None)
+
+
 def test_listing_field_matrix_separates_store_and_product_inputs() -> None:
     client = TestClient(app)
     response = client.get("/api/v1/alibaba/listing-field-matrix")
@@ -582,10 +676,7 @@ def test_listing_field_matrix_separates_store_and_product_inputs() -> None:
     assert groups["store_ai_assisted"]["scope"] == "store"
     assert groups["product_ai_assisted"]["scope"] == "product"
     assert groups["product_trusted_facts"]["input_mode"] == "trusted_only"
-    assert any(
-        field["name"] == "price"
-        for field in groups["product_trusted_facts"]["fields"]
-    )
+    assert any(field["name"] == "price" for field in groups["product_trusted_facts"]["fields"])
 
 
 def test_prepare_official_listing_merges_trusted_store_defaults() -> None:
@@ -807,6 +898,8 @@ def test_official_listing_batch_isolates_source_validation_failures() -> None:
             "ai-candidate",
         ]
         assert response.json()[0]["success"] is True
+        assert response.json()[0]["response"]["_readback"]["success"] is True
+        assert response.json()[0]["response"]["_differences"] == []
         assert response.json()[1]["success"] is False
         assert '"confirmation_fields":["productTitle"]' in response.json()[1]["error"]
 
@@ -820,3 +913,34 @@ def test_official_listing_batch_isolates_source_validation_failures() -> None:
         assert unconfirmed.status_code == 409
     finally:
         app.dependency_overrides.clear()
+
+
+def test_official_listing_import_endpoint_normalizes_csv() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/products/official-listing/import",
+        files={
+            "file": (
+                "products.csv",
+                "商品编码,标题,库存\nCSV-1,Imported title,42\n".encode(),
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "csv"
+    assert payload["rows"][0]["reference"] == "CSV-1"
+    assert payload["rows"][0]["fields"]["inventory"] == {
+        "value": "42",
+        "display_value_zh": None,
+        "source": "business_system",
+        "confidence": None,
+        "requires_confirmation": False,
+        "evidence": None,
+        "confirmation_id": None,
+        "confirmed_at": None,
+        "confirmed_by": None,
+    }

@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
 import json
+import zipfile
 from collections.abc import Mapping
+from time import perf_counter
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -26,11 +29,29 @@ from backend.app.models import (
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
+    AsyncSchemaOptionsRequest,
     DraftField,
+    DraftFieldDifference,
+    DraftSnapshotResult,
+    FieldConfirmationRequest,
+    FieldConfirmationResult,
+    FieldSource,
+    FieldTaskRequest,
+    FieldTaskResult,
     ImageGenerationRequest,
     ImagePromptTemplate,
     ImageSlot,
+    ListingFeatureFlags,
+    ListingFeatureFlagsUpdate,
     ListingFieldGroup,
+    ListingImportResult,
+    ListingMetricEventRequest,
+    ListingMetricsResult,
+    ListingTemplateApplyRequest,
+    ListingTemplateApplyResult,
+    ListingTemplateCreateRequest,
+    ListingTemplateResult,
+    ListingTemplateUpdateRequest,
     OfficialListingBatchPublishRequest,
     OfficialListingBatchRequest,
     OfficialListingFlowResponse,
@@ -58,6 +79,11 @@ from backend.app.services.field_policy import (
     get_listing_field,
     validate_product_fields,
 )
+from backend.app.services.field_tasks import (
+    build_field_tasks,
+    confirmable_ai_field,
+    is_confirmable_category,
+)
 from backend.app.services.image_templates import (
     SLOT_TEMPLATES,
     build_slot_plan,
@@ -65,6 +91,7 @@ from backend.app.services.image_templates import (
     list_prompt_templates,
     resolve_slots,
 )
+from backend.app.services.listing_imports import parse_listing_import
 from backend.app.services.official_listing import (
     build_official_checklist,
     listing_field_groups,
@@ -149,6 +176,217 @@ async def get_official_listing_flow() -> OfficialListingFlowResponse:
 @router.get("/alibaba/listing-field-matrix", response_model=list[ListingFieldGroup])
 async def get_listing_field_matrix() -> list[ListingFieldGroup]:
     return listing_field_groups()
+
+
+def _active_store_id(user: AuthenticatedUser, database: Database) -> str:
+    store = database.get_active_store(user.workspace_id)
+    if store is None or store.expired:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前工作区没有可用的 Alibaba 店铺",
+        )
+    return store.id
+
+
+def _require_listing_feature(
+    user: AuthenticatedUser,
+    database: Database,
+    feature: str,
+) -> None:
+    if not database.get_listing_feature_flags(user.workspace_id).get(feature, False):
+        raise HTTPException(status_code=409, detail=f"{feature} 功能当前已关闭")
+
+
+@router.get("/products/official-listing/templates", response_model=list[ListingTemplateResult])
+async def list_listing_templates(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+    category_id: str | None = None,
+) -> list[dict[str, object]]:
+    store_id = _active_store_id(user, database)
+    return database.list_listing_templates(user.workspace_id, store_id, category_id)
+
+
+@router.post(
+    "/products/official-listing/templates",
+    response_model=ListingTemplateResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_listing_template(
+    request: ListingTemplateCreateRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, object]:
+    _require_listing_feature(user, database, "templates")
+    if not request.fields:
+        raise HTTPException(status_code=422, detail="模板至少需要一个字段")
+    store_id = _active_store_id(user, database)
+    return database.create_listing_template(
+        workspace_id=user.workspace_id,
+        store_connection_id=store_id,
+        name=request.name,
+        category_id=request.category_id,
+        fields=request.fields,
+    )
+
+
+@router.put(
+    "/products/official-listing/templates/{template_id}",
+    response_model=ListingTemplateResult,
+)
+async def update_listing_template(
+    template_id: str,
+    request: ListingTemplateUpdateRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, object]:
+    _require_listing_feature(user, database, "templates")
+    store_id = _active_store_id(user, database)
+    template = database.update_listing_template(
+        workspace_id=user.workspace_id,
+        store_connection_id=store_id,
+        template_id=template_id,
+        name=request.name,
+        category_id=request.category_id,
+        fields=request.fields,
+    )
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return template
+
+
+@router.delete(
+    "/products/official-listing/templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_listing_template(
+    template_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> None:
+    _require_listing_feature(user, database, "templates")
+    store_id = _active_store_id(user, database)
+    if not database.delete_listing_template(user.workspace_id, store_id, template_id):
+        raise HTTPException(status_code=404, detail="模板不存在")
+
+
+@router.post(
+    "/products/official-listing/templates/{template_id}/apply",
+    response_model=ListingTemplateApplyResult,
+)
+async def apply_listing_template(
+    template_id: str,
+    request: ListingTemplateApplyRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> ListingTemplateApplyResult:
+    _require_listing_feature(user, database, "templates")
+    store_id = _active_store_id(user, database)
+    template = database.get_listing_template(user.workspace_id, store_id, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    merged = dict(request.fields)
+    raw_fields = template["fields"]
+    if isinstance(raw_fields, dict):
+        for field_path, raw_value in raw_fields.items():
+            current = merged.get(str(field_path))
+            if current is not None and current.value not in (None, "", []):
+                continue
+            value = raw_value.get("value") if isinstance(raw_value, dict) else raw_value
+            merged[str(field_path)] = DraftField(
+                value=value,
+                source=FieldSource.USER_PROVIDED,
+                evidence=f"模板：{template['name']}",
+            )
+    tasks = build_field_tasks(request.schema_data, merged, request.account_defaults)
+    if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
+        database.record_listing_metric_event(
+            workspace_id=user.workspace_id,
+            event_type="template_applied",
+            payload={"template_id": template_id, "field_count": len(merged)},
+        )
+    return ListingTemplateApplyResult(fields=merged, tasks=tasks)
+
+
+@router.post(
+    "/products/official-listing/import",
+    response_model=ListingImportResult,
+)
+async def import_listing_products(
+    file: Annotated[UploadFile, File()],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> ListingImportResult:
+    flags = database.get_listing_feature_flags(user.workspace_id)
+    if not flags["imports"]:
+        raise HTTPException(status_code=409, detail="商品导入功能当前已关闭")
+    data = await file.read(get_settings().max_upload_bytes + 1)
+    if len(data) > get_settings().max_upload_bytes:
+        raise HTTPException(status_code=413, detail="导入文件超过大小限制")
+    try:
+        result = parse_listing_import(file.filename or "", data)
+    except (ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if flags["metrics"]:
+        database.record_listing_metric_event(
+            workspace_id=user.workspace_id,
+            event_type="import_completed",
+            payload={
+                "format": result.format,
+                "rows": len(result.rows),
+                "errors": len(result.errors),
+            },
+        )
+    return result
+
+
+@router.get("/products/official-listing/feature-flags", response_model=ListingFeatureFlags)
+async def get_listing_feature_flags(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, bool]:
+    return database.get_listing_feature_flags(user.workspace_id)
+
+
+@router.patch("/products/official-listing/feature-flags", response_model=ListingFeatureFlags)
+async def update_listing_feature_flags(
+    request: ListingFeatureFlagsUpdate,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, bool]:
+    return database.update_listing_feature_flags(
+        user.workspace_id,
+        request.model_dump(exclude_none=True),
+    )
+
+
+@router.post(
+    "/products/official-listing/metrics/events",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def record_listing_metric_event(
+    request: ListingMetricEventRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> None:
+    if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
+        database.record_listing_metric_event(
+            workspace_id=user.workspace_id,
+            event_type=request.event_type,
+            batch_id=request.batch_id,
+            reference=request.reference,
+            duration_ms=request.duration_ms,
+            reason=request.reason,
+            payload=request.payload,
+        )
+
+
+@router.get("/products/official-listing/metrics", response_model=ListingMetricsResult)
+async def get_listing_metrics(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> dict[str, object]:
+    return database.get_listing_metrics(user.workspace_id)
 
 
 @router.get("/alibaba/categories/{category_id}")
@@ -536,6 +774,129 @@ async def build_guidance(request: SchemaParseRequest) -> SchemaGuidanceResult:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/products/official-listing/tasks", response_model=FieldTaskResult)
+async def build_official_listing_tasks(request: FieldTaskRequest) -> FieldTaskResult:
+    try:
+        return build_field_tasks(
+            request.schema_data,
+            request.fields,
+            request.account_defaults,
+            request.category_id,
+        )
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/products/official-listing/options",
+    response_model=SchemaGuidanceResult,
+)
+async def load_official_listing_options(
+    request: AsyncSchemaOptionsRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> SchemaGuidanceResult:
+    try:
+        if request.schema_data is None:
+            raise HTTPException(status_code=422, detail="schema_data is required")
+        guidance = build_schema_guidance(request.schema_data)
+        target = next(
+            (
+                field
+                for field in guidance.ai_fillable_fields + guidance.manual_fact_fields
+                if field.field == request.field_path
+            ),
+            None,
+        )
+        if target is None or not target.async_options or not target.async_query_method:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The requested field does not declare asyncQueryRule",
+            )
+        if "subprop.schema.get" not in target.async_query_method.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Unsupported Alibaba async option query method",
+            )
+        effective = effective_listing_fields(request.fields, request.account_defaults)
+        built = build_schema_xml(
+            request.schema_data,
+            {field_path: field.value for field_path, field in effective.items()},
+        )
+        response = await _alibaba_call(
+            client,
+            "category_schema_level_get",
+            {
+                "cat_id": request.category_id,
+                "language": request.language,
+                "xml": built.xml,
+            },
+        )
+        return build_schema_guidance(response)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/products/official-listing/fields/confirm",
+    response_model=FieldConfirmationResult,
+)
+async def confirm_official_listing_field(
+    request: FieldConfirmationRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> FieldConfirmationResult:
+    try:
+        guidance = confirmable_ai_field(request.schema_data, request.field_path)
+    except SchemaParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    category_confirmation = is_confirmable_category(request.field_path)
+    if guidance is None and not category_confirmation:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only fields classified as ai_candidate can use the AI confirmation endpoint",
+        )
+    _bind_batch_to_active_store(request.batch_id, user, database)
+    schema_payload = (
+        request.schema_data
+        if isinstance(request.schema_data, str)
+        else json.dumps(request.schema_data, ensure_ascii=False, sort_keys=True)
+    )
+    confirmation = database.record_field_confirmation(
+        workspace_id=user.workspace_id,
+        batch_id=request.batch_id,
+        reference=request.reference,
+        field_path=guidance.field if guidance else "category_id",
+        value=request.value,
+        original_source=request.original_source,
+        action=request.action,
+        evidence=request.evidence,
+        schema_fingerprint=hashlib.sha256(schema_payload.encode()).hexdigest(),
+        confirmed_by_user_id=user.id,
+    )
+    if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
+        database.record_listing_metric_event(
+            workspace_id=user.workspace_id,
+            event_type="field_edited" if request.action == "edited" else "field_confirmed",
+            batch_id=request.batch_id,
+            reference=request.reference,
+            payload={"field_path": guidance.field if guidance else "category_id"},
+        )
+    return FieldConfirmationResult(
+        field_path=guidance.field if guidance else "category_id",
+        field=DraftField(
+            value=request.value,
+            display_value_zh=request.display_value_zh,
+            source=FieldSource.USER_CONFIRMED,
+            confidence=request.confidence,
+            requires_confirmation=False,
+            evidence=request.evidence,
+            confirmation_id=confirmation.id,
+            confirmed_at=confirmation.created_at.isoformat(),
+            confirmed_by=user.id,
+        ),
+    )
+
+
 @router.post("/products/validate", response_model=ProductValidationResult)
 async def validate_product(request: ProductValidationRequest) -> ProductValidationResult:
     try:
@@ -628,7 +989,48 @@ async def create_official_listing_batch_drafts(
     database: Annotated[Database, Depends(get_database)],
 ) -> list[AlibabaBatchResult]:
     _bind_batch_to_active_store(request.batch_id, user, database)
-    return await _batch_official_listing_call(client, "draft_create", request)
+    started_at = perf_counter()
+    results = await _batch_official_listing_call(client, "draft_create", request)
+    await _capture_draft_snapshots(client, request, results, user, database)
+    duration_ms = round((perf_counter() - started_at) * 1000)
+    if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
+        for result in results:
+            database.record_listing_metric_event(
+                workspace_id=user.workspace_id,
+                event_type="draft_succeeded" if result.success else "draft_failed",
+                batch_id=request.batch_id,
+                reference=result.reference,
+                duration_ms=duration_ms,
+                reason=result.error,
+            )
+    return results
+
+
+@router.get(
+    "/products/official-listing/batches/{batch_id}/snapshots",
+    response_model=list[DraftSnapshotResult],
+)
+async def list_official_listing_snapshots(
+    batch_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> list[DraftSnapshotResult]:
+    _bind_batch_to_active_store(batch_id, user, database)
+    return [
+        DraftSnapshotResult(
+            id=snapshot.id,
+            batch_id=snapshot.batch_id,
+            reference=snapshot.reference,
+            product_id=snapshot.product_id,
+            request_fields=snapshot.request_fields,
+            platform_response=snapshot.platform_response,
+            differences=[
+                DraftFieldDifference.model_validate(item) for item in snapshot.differences
+            ],
+            created_at=snapshot.created_at.isoformat(),
+        )
+        for snapshot in database.list_draft_snapshots(user.workspace_id, batch_id)
+    ]
 
 
 @router.post("/products/official-listing/publish")
@@ -671,7 +1073,17 @@ async def publish_official_listing_batch(
             detail="Batch publishing requires confirmed_by_user=true",
         )
     _bind_batch_to_active_store(request.batch_id, user, database)
-    return await _batch_official_listing_call(client, "publish", request)
+    results = await _batch_official_listing_call(client, "publish", request)
+    if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
+        for result in results:
+            database.record_listing_metric_event(
+                workspace_id=user.workspace_id,
+                event_type="publish_succeeded" if result.success else "publish_failed",
+                batch_id=request.batch_id,
+                reference=result.reference,
+                reason=result.error,
+            )
+    return results
 
 
 @router.post("/images/generate")
@@ -721,9 +1133,7 @@ async def plan_product_images(
     if product_id != request.product_id:
         raise HTTPException(status_code=400, detail="商品 ID 与请求内容不一致")
     slots = [
-        slot
-        for slot in resolve_slots(request.slots)
-        if slot not in set(request.existing_slots)
+        slot for slot in resolve_slots(request.slots) if slot not in set(request.existing_slots)
     ]
     return ProductImagePlanResponse(
         product_id=product_id,
@@ -898,10 +1308,7 @@ def _validated_submission_xml(xml: str) -> str:
     result = validate_filled_schema_xml(xml)
     if result.ready_to_submit:
         return result.xml
-    details = "; ".join(
-        f"{issue.field}: {issue.message}"
-        for issue in result.errors
-    )
+    details = "; ".join(f"{issue.field}: {issue.message}" for issue in result.errors)
     raise SchemaParseError(f"Alibaba Schema validation failed: {details}")
 
 
@@ -935,11 +1342,7 @@ def _prepare_official_listing(
         invalid_defaults.append("category_id")
     values = _schema_values(parsed.fields, effective)
     schema = build_schema_xml(request.schema_data, values)
-    ready = (
-        validation.ready_to_publish
-        and not category_mismatch
-        and schema.ready_to_submit
-    )
+    ready = validation.ready_to_publish and not category_mismatch and schema.ready_to_submit
     return OfficialListingPreparationResult(
         ready_to_publish=ready,
         ready_to_draft=ready,
@@ -1060,6 +1463,138 @@ async def _batch_official_listing_call(
         *(process_item(index) for index in range(len(request.items)))
     )
     return [result for _, result in sorted(indexed_results)]
+
+
+async def _capture_draft_snapshots(
+    client: AlibabaClient,
+    request: OfficialListingBatchRequest,
+    results: list[AlibabaBatchResult],
+    user: AuthenticatedUser,
+    database: Database,
+) -> None:
+    items = {item.reference: item for item in request.items}
+    for result in results:
+        if not result.success or result.response is None:
+            continue
+        item = items[result.reference]
+        product_id = _find_product_id(result.response)
+        platform_response = result.response
+        readback_error: str | None = None
+        if product_id:
+            try:
+                platform_response = await client.call(
+                    OPERATIONS["draft_render"].operation,
+                    {
+                        "language": item.language,
+                        "cat_id": item.category_id,
+                        "product_id": product_id,
+                    },
+                )
+            except AlibabaAPIError as exc:
+                readback_error = str(exc)
+        differences = _field_differences(item.fields, platform_response)
+        enriched_response = {
+            **result.response,
+            "_readback": platform_response,
+            "_differences": differences,
+        }
+        if readback_error:
+            enriched_response["_readback_error"] = readback_error
+        result.response = enriched_response
+        database.save_draft_snapshot(
+            workspace_id=user.workspace_id,
+            batch_id=request.batch_id,
+            reference=item.reference,
+            product_id=product_id,
+            request_fields={
+                field_path: field.model_dump(mode="json")
+                for field_path, field in item.fields.items()
+            },
+            platform_response=platform_response,
+            differences=differences,
+        )
+
+
+def _find_product_id(payload: object) -> str | None:
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            compact = "".join(char.lower() for char in str(key) if char.isalnum())
+            if compact in {"productid", "productidlist"}:
+                if isinstance(value, list) and value:
+                    return str(value[0])
+                if value not in (None, ""):
+                    return str(value)
+        for value in payload.values():
+            found = _find_product_id(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _find_product_id(value)
+            if found:
+                return found
+    return None
+
+
+def _field_differences(
+    fields: dict[str, DraftField],
+    platform_response: dict[str, Any],
+) -> list[dict[str, Any]]:
+    platform_values = _flatten_response(platform_response)
+    differences: list[dict[str, Any]] = []
+    for field_path, field in fields.items():
+        candidates = {
+            _compact_comparison_key(field_path),
+            _compact_comparison_key(field_path.rsplit(".", 1)[-1]),
+        }
+        platform_value = next(
+            (value for key, value in platform_values.items() if key in candidates),
+            None,
+        )
+        if platform_value is None:
+            continue
+        status_value = (
+            "matched"
+            if _comparable_value(field.value) == _comparable_value(platform_value)
+            else "changed"
+        )
+        differences.append(
+            {
+                "field_path": field_path,
+                "local_value": field.value,
+                "platform_value": platform_value,
+                "status": status_value,
+            }
+        )
+    return differences
+
+
+def _flatten_response(payload: object) -> dict[str, object]:
+    flattened: dict[str, object] = {}
+
+    def visit(value: object) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if isinstance(child, Mapping | list):
+                    visit(child)
+                else:
+                    flattened[_compact_comparison_key(str(key))] = child
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return flattened
+
+
+def _compact_comparison_key(value: str) -> str:
+    return "".join(char.lower() for char in value if char.isalnum())
+
+
+def _comparable_value(value: object) -> str:
+    if isinstance(value, dict | list):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return str(value).strip()
 
 
 def _preparation_error(prepared: OfficialListingPreparationResult) -> str:

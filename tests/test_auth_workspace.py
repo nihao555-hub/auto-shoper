@@ -234,9 +234,75 @@ def test_store_tokens_are_encrypted_and_workspace_scoped(workspace_database: Dat
         another_store.id,
         "BATCH-STORE-LOCK",
     )
-    assert workspace_database.list_batches(first_user.workspace_id)[0][
-        "store_connection_id"
-    ] == first_store.id
+    assert (
+        workspace_database.list_batches(first_user.workspace_id)[0]["store_connection_id"]
+        == first_store.id
+    )
+
+
+def test_listing_confirmation_and_snapshot_are_persisted(workspace_database: Database) -> None:
+    user, _ = workspace_database.register(
+        email="audit@example.com",
+        password="strong-password",
+        display_name="Audit User",
+        workspace_name="Audit Workspace",
+        registration_code="CODE-A",
+    )
+    store = workspace_database.upsert_store(
+        workspace_id=user.workspace_id,
+        provider_user_id="audit-merchant",
+        login_id="audit@example.com",
+        account="audit",
+        access_token="audit-access-token",
+        refresh_token=None,
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        refresh_expires_at=None,
+    )
+    assert workspace_database.ensure_batch(user.workspace_id, store.id, "batch-audit")
+
+    confirmation = workspace_database.record_field_confirmation(
+        workspace_id=user.workspace_id,
+        batch_id="batch-audit",
+        reference="SKU-001",
+        field_path="subject",
+        value="Professional Brush",
+        original_source="ai_generated",
+        action="accepted",
+        evidence="Visible brush",
+        schema_fingerprint="a" * 64,
+        confirmed_by_user_id=user.id,
+    )
+    saved_confirmations = workspace_database.list_field_confirmations(
+        user.workspace_id,
+        "batch-audit",
+        "SKU-001",
+    )
+    assert [item.id for item in saved_confirmations] == [confirmation.id]
+    assert saved_confirmations[0].value == "Professional Brush"
+
+    snapshot = workspace_database.save_draft_snapshot(
+        workspace_id=user.workspace_id,
+        batch_id="batch-audit",
+        reference="SKU-001",
+        product_id="123456",
+        request_fields={"subject": {"value": "Professional Brush"}},
+        platform_response={"subject": "Professional Brush"},
+        differences=[
+            {
+                "field_path": "subject",
+                "local_value": "Professional Brush",
+                "platform_value": "Professional Brush",
+                "status": "matched",
+            }
+        ],
+    )
+    saved_snapshots = workspace_database.list_draft_snapshots(
+        user.workspace_id,
+        "batch-audit",
+    )
+    assert [item.id for item in saved_snapshots] == [snapshot.id]
+    assert saved_snapshots[0].product_id == "123456"
+    assert saved_snapshots[0].differences[0]["status"] == "matched"
 
 
 def test_oauth_state_is_workspace_bound_and_one_time(workspace_database: Database) -> None:
@@ -360,3 +426,111 @@ def test_existing_sqlite_database_adds_disconnect_marker(tmp_path: Path) -> None
     with sqlite3.connect(database_path) as connection:
         columns = connection.execute("PRAGMA table_info(store_connections)").fetchall()
     assert "disconnected_at" in {str(column[1]) for column in columns}
+
+
+def test_listing_templates_flags_and_metrics_are_workspace_scoped(
+    workspace_database: Database,
+) -> None:
+    user, _ = workspace_database.register(
+        email="listing-owner@example.com",
+        password="strong-password",
+        display_name="Listing Owner",
+        workspace_name="Listing Trading",
+        registration_code="CODE-A",
+    )
+    store = workspace_database.upsert_store(
+        workspace_id=user.workspace_id,
+        provider_user_id="listing-merchant",
+        login_id="listing@example.com",
+        account="listing",
+        access_token="listing-access-token",
+        refresh_token=None,
+        expires_at=None,
+        refresh_expires_at=None,
+    )
+    template = workspace_database.create_listing_template(
+        workspace_id=user.workspace_id,
+        store_connection_id=store.id,
+        name="Paint brush defaults",
+        category_id="1001",
+        fields={"material": "nylon", "origin": "CN"},
+    )
+
+    assert (
+        workspace_database.list_listing_templates(user.workspace_id, store.id, "1001")[0]["id"]
+        == template["id"]
+    )
+    assert (
+        workspace_database.update_listing_template(
+            workspace_id=user.workspace_id,
+            store_connection_id=store.id,
+            template_id=str(template["id"]),
+            name="Updated defaults",
+            category_id="1001",
+            fields={"material": "polyester"},
+        )["name"]
+        == "Updated defaults"
+    )  # type: ignore[index]
+
+    flags = workspace_database.update_listing_feature_flags(
+        user.workspace_id,
+        {"workflow_v2": False, "unknown": False},
+    )
+    assert flags["workflow_v2"] is False
+    assert flags["legacy_fallback"] is True
+
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="draft_failed",
+        batch_id="batch-1",
+        reference="sku-1",
+        reason="gateway timeout",
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="draft_succeeded",
+        batch_id="batch-1",
+        reference="sku-1",
+        duration_ms=1200,
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="draft_succeeded",
+        batch_id="batch-1",
+        reference="sku-2",
+        duration_ms=800,
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="task_evaluated",
+        payload={"completed": 6, "confirm": 1, "fill": 2, "invalid": 1},
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="field_confirmed",
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="field_edited",
+    )
+    workspace_database.record_listing_metric_event(
+        workspace_id=user.workspace_id,
+        event_type="publish_failed",
+        reason="invalid field: price",
+    )
+    metrics = workspace_database.get_listing_metrics(user.workspace_id)
+    counters = metrics["counters"]
+    assert isinstance(counters, dict)
+    assert counters["draft_failed"] == 1
+    assert counters["draft_succeeded"] == 2
+    assert metrics["failure_reasons"] == {"gateway timeout": 1, "invalid field: price": 1}
+    assert metrics["median_draft_duration_ms"] == 1200
+    assert metrics["first_pass_draft_rate"] == 0.5
+    assert metrics["ai_safe_completion_rate"] == 0.6
+    assert metrics["average_manual_field_count"] == 4
+    assert metrics["ai_confirmation_edit_rate"] == 0.5
+    assert metrics["publish_failure_rate"] == 1
+    assert metrics["error_localization_rate"] == 0.5
+    assert workspace_database.delete_listing_template(
+        user.workspace_id, store.id, str(template["id"])
+    )

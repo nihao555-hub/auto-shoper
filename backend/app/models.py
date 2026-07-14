@@ -69,6 +69,9 @@ class DraftField(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     requires_confirmation: bool = False
     evidence: str | None = None
+    confirmation_id: str | None = None
+    confirmed_at: str | None = None
+    confirmed_by: str | None = None
 
 
 class ManualRequirement(BaseModel):
@@ -292,9 +295,22 @@ class SchemaRule(BaseModel):
     unit: str | None = None
 
 
+class SchemaDependencyExpression(BaseModel):
+    field_id: str
+    value: str | None = None
+    symbol: str
+
+
+class SchemaDependencyGroup(BaseModel):
+    operator: Literal["and", "or"] = "and"
+    expressions: list[SchemaDependencyExpression] = Field(default_factory=list)
+
+
 class SchemaOption(BaseModel):
     display_name: str | None = None
     value: str
+    valid: bool = True
+    attributes: dict[str, str] = Field(default_factory=dict)
 
 
 class ParsedSchemaField(BaseModel):
@@ -306,6 +322,7 @@ class ParsedSchemaField(BaseModel):
     disabled: bool = False
     read_only: bool = False
     value_type: str | None = None
+    conditional_disable: list[SchemaDependencyGroup] = Field(default_factory=list)
     rules: list[SchemaRule] = Field(default_factory=list)
     options: list[SchemaOption] = Field(default_factory=list)
     children: list["ParsedSchemaField"] = Field(default_factory=list)
@@ -334,15 +351,130 @@ class SchemaFieldGuidance(BaseModel):
     allowed_sources: list[FieldSource] = Field(default_factory=list)
     async_options: bool = False
     async_query_method: str | None = None
+    value_type: str | None = None
     max_length: int | None = None
+    min_length: int | None = None
+    min_value: str | None = None
+    max_value: str | None = None
+    min_input_num: int | None = None
+    max_input_num: int | None = None
+    pattern: str | None = None
+    value_attributes: list[str] = Field(default_factory=list)
+    conditional_disable: list[SchemaDependencyGroup] = Field(default_factory=list)
+    supported: bool = True
+    support_message: str | None = None
     tip: str | None = None
     options: list[SchemaOption] = Field(default_factory=list)
+    parent_path: str | None = None
+    repeatable_group: str | None = None
 
 
 class SchemaGuidanceResult(BaseModel):
     ai_fillable_fields: list[SchemaFieldGuidance]
     manual_fact_fields: list[SchemaFieldGuidance]
     required_field_ids: list[str]
+
+
+class FieldTask(BaseModel):
+    field_path: str
+    parent_path: str | None = None
+    label: str
+    question: str
+    explanation: str | None = None
+    example: str | None = None
+    unit: str | None = None
+    control_type: str
+    status: Literal["completed", "confirm", "fill", "invalid"]
+    responsibility: Literal[
+        "ai_candidate",
+        "merchant",
+        "business_system",
+        "store_default",
+    ]
+    responsibility_label: str
+    allowed_sources: list[FieldSource] = Field(default_factory=list)
+    value: Any | None = None
+    display_value_zh: Any | None = None
+    source: FieldSource | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    evidence: str | None = None
+    required: bool = False
+    blocking: bool = False
+    validation_errors: list[str] = Field(default_factory=list)
+    options: list[SchemaOption] = Field(default_factory=list)
+    async_options: bool = False
+    async_query_method: str | None = None
+    value_type: str | None = None
+    max_length: int | None = None
+    min_length: int | None = None
+    min_value: str | None = None
+    max_value: str | None = None
+    min_input_num: int | None = None
+    max_input_num: int | None = None
+    pattern: str | None = None
+    value_attributes: list[str] = Field(default_factory=list)
+    supported: bool = True
+    support_message: str | None = None
+    repeatable_group: str | None = None
+
+
+class FieldTaskSummary(BaseModel):
+    completed: int = 0
+    confirm: int = 0
+    fill: int = 0
+    invalid: int = 0
+
+
+class FieldTaskRequest(ProductValidationRequest):
+    category_id: str | None = None
+
+
+class AsyncSchemaOptionsRequest(FieldTaskRequest):
+    category_id: str
+    field_path: str = Field(min_length=1, max_length=500)
+    language: Literal["en_US", "zh", "zh_TW"] = "en_US"
+
+
+class FieldTaskResult(BaseModel):
+    tasks: list[FieldTask]
+    summary: FieldTaskSummary
+    ready_to_draft: bool
+
+
+class FieldConfirmationRequest(BaseModel):
+    batch_id: str = Field(min_length=8, max_length=100)
+    reference: str = Field(min_length=1, max_length=200)
+    field_path: str = Field(min_length=1, max_length=500)
+    value: Any
+    display_value_zh: Any | None = None
+    original_source: Literal["image_extracted", "ai_generated"]
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    evidence: str | None = None
+    schema_data: dict[str, Any] | str
+    action: Literal["accepted", "edited"] = "accepted"
+
+
+class FieldConfirmationResult(BaseModel):
+    field_path: str
+    field: DraftField
+
+
+class DraftFieldDifference(BaseModel):
+    field_path: str
+    local_value: Any | None = None
+    platform_value: Any | None = None
+    status: Literal["changed", "matched"]
+
+
+class DraftSnapshotResult(BaseModel):
+    id: str
+    batch_id: str
+    reference: str
+    product_id: str | None = None
+    request_fields: dict[str, Any]
+    platform_response: dict[str, Any]
+    differences: list[DraftFieldDifference]
+    created_at: str
 
 
 class ListingChecklistItem(BaseModel):
@@ -433,3 +565,96 @@ class AlibabaOperation(BaseModel):
     purpose: str
     safety: str
     live_verification_required: bool = True
+
+
+class ListingTemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    category_id: str | None = Field(default=None, max_length=100)
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListingTemplateUpdateRequest(ListingTemplateCreateRequest):
+    pass
+
+
+class ListingTemplateResult(BaseModel):
+    id: str
+    store_connection_id: str
+    name: str
+    category_id: str | None = None
+    fields: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class ListingTemplateApplyRequest(BaseModel):
+    schema_data: dict[str, Any] | str
+    fields: dict[str, DraftField] = Field(default_factory=dict)
+    account_defaults: dict[str, DraftField] = Field(default_factory=dict)
+
+
+class ListingTemplateApplyResult(BaseModel):
+    fields: dict[str, DraftField]
+    tasks: FieldTaskResult
+
+
+class ListingImportRow(BaseModel):
+    row_number: int
+    reference: str
+    fields: dict[str, DraftField]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ListingImportResult(BaseModel):
+    format: Literal["csv", "xlsx", "erp_json"]
+    rows: list[ListingImportRow]
+    errors: list[str] = Field(default_factory=list)
+
+
+class ListingFeatureFlags(BaseModel):
+    workflow_v2: bool = True
+    templates: bool = True
+    imports: bool = True
+    metrics: bool = True
+    legacy_fallback: bool = True
+
+
+class ListingFeatureFlagsUpdate(BaseModel):
+    workflow_v2: bool | None = None
+    templates: bool | None = None
+    imports: bool | None = None
+    metrics: bool | None = None
+    legacy_fallback: bool | None = None
+
+
+class ListingMetricEventRequest(BaseModel):
+    event_type: Literal[
+        "upload_started",
+        "task_evaluated",
+        "import_completed",
+        "template_applied",
+        "field_confirmed",
+        "field_edited",
+        "draft_succeeded",
+        "draft_failed",
+        "publish_succeeded",
+        "publish_failed",
+    ]
+    batch_id: str | None = Field(default=None, max_length=100)
+    reference: str | None = Field(default=None, max_length=200)
+    duration_ms: int | None = Field(default=None, ge=0)
+    reason: str | None = Field(default=None, max_length=1000)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListingMetricsResult(BaseModel):
+    total_events: int
+    counters: dict[str, int]
+    failure_reasons: dict[str, int]
+    median_draft_duration_ms: int | None = None
+    first_pass_draft_rate: float | None = None
+    ai_safe_completion_rate: float | None = None
+    average_manual_field_count: float | None = None
+    ai_confirmation_edit_rate: float | None = None
+    publish_failure_rate: float | None = None
+    error_localization_rate: float | None = None

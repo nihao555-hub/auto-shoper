@@ -45,6 +45,14 @@ def _int_value(value: object) -> int:
 
 DatabaseRow = sqlite3.Row | Mapping[str, object]
 
+DEFAULT_LISTING_FEATURE_FLAGS: dict[str, bool] = {
+    "workflow_v2": True,
+    "templates": True,
+    "imports": True,
+    "metrics": True,
+    "legacy_fallback": True,
+}
+
 
 class DatabaseResult(Protocol):
     @property
@@ -249,6 +257,65 @@ CREATE TABLE IF NOT EXISTS merchant_assets (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (workspace_id, store_connection_id)
 );
+CREATE TABLE IF NOT EXISTS listing_field_confirmations (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    field_path TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    original_source TEXT NOT NULL,
+    action TEXT NOT NULL,
+    evidence TEXT,
+    schema_fingerprint TEXT NOT NULL,
+    confirmed_by_user_id TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_field_confirmations_lookup
+    ON listing_field_confirmations(workspace_id, batch_id, reference, field_path, created_at);
+CREATE TABLE IF NOT EXISTS listing_draft_snapshots (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    product_id TEXT,
+    request_fields_json TEXT NOT NULL,
+    platform_response_json TEXT NOT NULL,
+    differences_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_draft_snapshots_lookup
+    ON listing_draft_snapshots(workspace_id, batch_id, reference, created_at);
+CREATE TABLE IF NOT EXISTS listing_templates (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    store_connection_id TEXT NOT NULL REFERENCES store_connections(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    category_id TEXT,
+    fields_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listing_templates_lookup
+    ON listing_templates(workspace_id, store_connection_id, category_id, updated_at);
+CREATE TABLE IF NOT EXISTS listing_feature_flags (
+    workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+    flags_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS listing_metric_events (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    batch_id TEXT,
+    reference TEXT,
+    duration_ms INTEGER,
+    reason TEXT,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listing_metric_events_lookup
+    ON listing_metric_events(workspace_id, event_type, created_at);
 """
 
 
@@ -377,6 +444,89 @@ OCEANBASE_SCHEMA = (
             REFERENCES store_connections(id) ON DELETE CASCADE
     ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
     """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_field_confirmations (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        batch_id VARCHAR(100) NOT NULL,
+        reference VARCHAR(200) NOT NULL,
+        field_path VARCHAR(500) NOT NULL,
+        value_json LONGTEXT NOT NULL,
+        original_source VARCHAR(32) NOT NULL,
+        action VARCHAR(32) NOT NULL,
+        evidence TEXT,
+        schema_fingerprint VARCHAR(64) NOT NULL,
+        confirmed_by_user_id VARCHAR(36) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_field_confirmations_lookup (
+            workspace_id, batch_id, reference, field_path(191), created_at
+        ),
+        CONSTRAINT fk_field_confirmations_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE,
+        CONSTRAINT fk_field_confirmations_user FOREIGN KEY (confirmed_by_user_id)
+            REFERENCES users(id)
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_draft_snapshots (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        batch_id VARCHAR(100) NOT NULL,
+        reference VARCHAR(200) NOT NULL,
+        product_id VARCHAR(255),
+        request_fields_json LONGTEXT NOT NULL,
+        platform_response_json LONGTEXT NOT NULL,
+        differences_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_draft_snapshots_lookup (workspace_id, batch_id, reference, created_at),
+        CONSTRAINT fk_draft_snapshots_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_templates (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        store_connection_id VARCHAR(36) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        category_id VARCHAR(100),
+        fields_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_listing_templates_lookup (
+            workspace_id, store_connection_id, category_id, updated_at
+        ),
+        CONSTRAINT fk_listing_templates_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE,
+        CONSTRAINT fk_listing_templates_store FOREIGN KEY (store_connection_id)
+            REFERENCES store_connections(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_feature_flags (
+        workspace_id VARCHAR(36) PRIMARY KEY,
+        flags_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        CONSTRAINT fk_listing_flags_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_metric_events (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        event_type VARCHAR(64) NOT NULL,
+        batch_id VARCHAR(100),
+        reference VARCHAR(200),
+        duration_ms BIGINT,
+        reason TEXT,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_listing_metric_events_lookup (workspace_id, event_type, created_at),
+        CONSTRAINT fk_listing_metrics_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
 )
 
 
@@ -429,6 +579,35 @@ class MerchantAssets:
     origin: str
     brand: str
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ListingFieldConfirmation:
+    id: str
+    workspace_id: str
+    batch_id: str
+    reference: str
+    field_path: str
+    value: object
+    original_source: str
+    action: str
+    evidence: str | None
+    schema_fingerprint: str
+    confirmed_by_user_id: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ListingDraftSnapshot:
+    id: str
+    workspace_id: str
+    batch_id: str
+    reference: str
+    product_id: str | None
+    request_fields: dict[str, object]
+    platform_response: dict[str, object]
+    differences: list[dict[str, object]]
+    created_at: datetime
 
 
 class TokenCipher:
@@ -1145,6 +1324,476 @@ class Database:
             )
         return True
 
+    def record_field_confirmation(
+        self,
+        *,
+        workspace_id: str,
+        batch_id: str,
+        reference: str,
+        field_path: str,
+        value: object,
+        original_source: str,
+        action: str,
+        evidence: str | None,
+        schema_fingerprint: str,
+        confirmed_by_user_id: str,
+    ) -> ListingFieldConfirmation:
+        confirmation = ListingFieldConfirmation(
+            id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            reference=reference,
+            field_path=field_path,
+            value=value,
+            original_source=original_source,
+            action=action,
+            evidence=evidence,
+            schema_fingerprint=schema_fingerprint,
+            confirmed_by_user_id=confirmed_by_user_id,
+            created_at=_now(),
+        )
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO listing_field_confirmations(
+                    id, workspace_id, batch_id, reference, field_path, value_json,
+                    original_source, action, evidence, schema_fingerprint,
+                    confirmed_by_user_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation.id,
+                    confirmation.workspace_id,
+                    confirmation.batch_id,
+                    confirmation.reference,
+                    confirmation.field_path,
+                    json.dumps(confirmation.value, ensure_ascii=False, separators=(",", ":")),
+                    confirmation.original_source,
+                    confirmation.action,
+                    confirmation.evidence,
+                    confirmation.schema_fingerprint,
+                    confirmation.confirmed_by_user_id,
+                    _iso(confirmation.created_at),
+                ),
+            )
+        return confirmation
+
+    def list_field_confirmations(
+        self,
+        workspace_id: str,
+        batch_id: str,
+        reference: str,
+    ) -> list[ListingFieldConfirmation]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM listing_field_confirmations
+                WHERE workspace_id = ? AND batch_id = ? AND reference = ?
+                ORDER BY created_at ASC
+                """,
+                (workspace_id, batch_id, reference),
+            ).fetchall()
+        return [self._field_confirmation_from_row(row) for row in rows]
+
+    def save_draft_snapshot(
+        self,
+        *,
+        workspace_id: str,
+        batch_id: str,
+        reference: str,
+        product_id: str | None,
+        request_fields: dict[str, object],
+        platform_response: dict[str, object],
+        differences: list[dict[str, object]],
+    ) -> ListingDraftSnapshot:
+        snapshot = ListingDraftSnapshot(
+            id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            reference=reference,
+            product_id=product_id,
+            request_fields=request_fields,
+            platform_response=platform_response,
+            differences=differences,
+            created_at=_now(),
+        )
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO listing_draft_snapshots(
+                    id, workspace_id, batch_id, reference, product_id,
+                    request_fields_json, platform_response_json, differences_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot.id,
+                    snapshot.workspace_id,
+                    snapshot.batch_id,
+                    snapshot.reference,
+                    snapshot.product_id,
+                    json.dumps(snapshot.request_fields, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(
+                        snapshot.platform_response, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    json.dumps(snapshot.differences, ensure_ascii=False, separators=(",", ":")),
+                    _iso(snapshot.created_at),
+                ),
+            )
+        return snapshot
+
+    def list_draft_snapshots(
+        self,
+        workspace_id: str,
+        batch_id: str,
+    ) -> list[ListingDraftSnapshot]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM listing_draft_snapshots
+                WHERE workspace_id = ? AND batch_id = ?
+                ORDER BY created_at DESC
+                """,
+                (workspace_id, batch_id),
+            ).fetchall()
+        return [self._draft_snapshot_from_row(row) for row in rows]
+
+    def create_listing_template(
+        self,
+        *,
+        workspace_id: str,
+        store_connection_id: str,
+        name: str,
+        category_id: str | None,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        template_id = str(uuid.uuid4())
+        now = _iso()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO listing_templates(
+                    id, workspace_id, store_connection_id, name, category_id,
+                    fields_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id,
+                    workspace_id,
+                    store_connection_id,
+                    name,
+                    category_id,
+                    json.dumps(fields, ensure_ascii=False, separators=(",", ":")),
+                    now,
+                    now,
+                ),
+            )
+        return {
+            "id": template_id,
+            "store_connection_id": store_connection_id,
+            "name": name,
+            "category_id": category_id,
+            "fields": fields,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def list_listing_templates(
+        self,
+        workspace_id: str,
+        store_connection_id: str,
+        category_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        query = """
+            SELECT * FROM listing_templates
+            WHERE workspace_id = ? AND store_connection_id = ?
+        """
+        parameters: tuple[object, ...] = (workspace_id, store_connection_id)
+        if category_id:
+            query += " AND (category_id = ? OR category_id IS NULL)"
+            parameters += (category_id,)
+        query += " ORDER BY updated_at DESC"
+        with self._lock:
+            rows = self._connection.execute(query, parameters).fetchall()
+        return [self._listing_template_from_row(row) for row in rows]
+
+    def get_listing_template(
+        self,
+        workspace_id: str,
+        store_connection_id: str,
+        template_id: str,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM listing_templates
+                WHERE id = ? AND workspace_id = ? AND store_connection_id = ?
+                """,
+                (template_id, workspace_id, store_connection_id),
+            ).fetchone()
+        return self._listing_template_from_row(row) if row is not None else None
+
+    def update_listing_template(
+        self,
+        *,
+        workspace_id: str,
+        store_connection_id: str,
+        template_id: str,
+        name: str,
+        category_id: str | None,
+        fields: dict[str, object],
+    ) -> dict[str, object] | None:
+        now = _iso()
+        with self._lock, self._connection:
+            result = self._connection.execute(
+                """
+                UPDATE listing_templates
+                SET name = ?, category_id = ?, fields_json = ?, updated_at = ?
+                WHERE id = ? AND workspace_id = ? AND store_connection_id = ?
+                """,
+                (
+                    name,
+                    category_id,
+                    json.dumps(fields, ensure_ascii=False, separators=(",", ":")),
+                    now,
+                    template_id,
+                    workspace_id,
+                    store_connection_id,
+                ),
+            )
+        if result.rowcount == 0:
+            return None
+        return self.get_listing_template(workspace_id, store_connection_id, template_id)
+
+    def delete_listing_template(
+        self,
+        workspace_id: str,
+        store_connection_id: str,
+        template_id: str,
+    ) -> bool:
+        with self._lock, self._connection:
+            result = self._connection.execute(
+                """
+                DELETE FROM listing_templates
+                WHERE id = ? AND workspace_id = ? AND store_connection_id = ?
+                """,
+                (template_id, workspace_id, store_connection_id),
+            )
+        return result.rowcount > 0
+
+    def get_listing_feature_flags(self, workspace_id: str) -> dict[str, bool]:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT flags_json FROM listing_feature_flags WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+        if row is None:
+            return dict(DEFAULT_LISTING_FEATURE_FLAGS)
+        raw = json.loads(str(row["flags_json"]))
+        return {
+            key: bool(raw.get(key, default)) if isinstance(raw, dict) else default
+            for key, default in DEFAULT_LISTING_FEATURE_FLAGS.items()
+        }
+
+    def update_listing_feature_flags(
+        self,
+        workspace_id: str,
+        updates: Mapping[str, bool],
+    ) -> dict[str, bool]:
+        flags = self.get_listing_feature_flags(workspace_id)
+        flags.update({key: bool(value) for key, value in updates.items() if key in flags})
+        now = _iso()
+        serialized = json.dumps(flags, separators=(",", ":"))
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT workspace_id FROM listing_feature_flags WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+            if existing is None:
+                self._connection.execute(
+                    """
+                    INSERT INTO listing_feature_flags(workspace_id, flags_json, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (workspace_id, serialized, now),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    UPDATE listing_feature_flags SET flags_json = ?, updated_at = ?
+                    WHERE workspace_id = ?
+                    """,
+                    (serialized, now, workspace_id),
+                )
+        return flags
+
+    def record_listing_metric_event(
+        self,
+        *,
+        workspace_id: str,
+        event_type: str,
+        batch_id: str | None = None,
+        reference: str | None = None,
+        duration_ms: int | None = None,
+        reason: str | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO listing_metric_events(
+                    id, workspace_id, event_type, batch_id, reference,
+                    duration_ms, reason, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    workspace_id,
+                    event_type,
+                    batch_id,
+                    reference,
+                    duration_ms,
+                    reason,
+                    json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")),
+                    _iso(),
+                ),
+            )
+
+    def get_listing_metrics(self, workspace_id: str) -> dict[str, object]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT event_type, batch_id, reference, duration_ms, reason,
+                       payload_json, created_at
+                FROM listing_metric_events
+                WHERE workspace_id = ? ORDER BY created_at ASC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        counters: dict[str, int] = {}
+        reasons: dict[str, int] = {}
+        durations: list[int] = []
+        draft_attempts: dict[tuple[str, str], list[str]] = {}
+        upload_started_at: dict[tuple[str, str], datetime] = {}
+        evaluated_products = 0
+        evaluated_tasks = 0
+        completed_tasks = 0
+        manual_tasks = 0
+        failure_events = 0
+        localized_failures = 0
+        for row in rows:
+            event_type = str(row["event_type"])
+            batch_id = str(row["batch_id"] or "")
+            reference = str(row["reference"] or "")
+            key = (batch_id, reference)
+            counters[event_type] = counters.get(event_type, 0) + 1
+            if row["reason"]:
+                reason = str(row["reason"])
+                reasons[reason] = reasons.get(reason, 0) + 1
+            if event_type == "upload_started":
+                upload_started_at.setdefault(key, datetime.fromisoformat(str(row["created_at"])))
+            if event_type == "draft_succeeded":
+                if key in upload_started_at:
+                    finished = datetime.fromisoformat(str(row["created_at"]))
+                    durations.append(
+                        round((finished - upload_started_at[key]).total_seconds() * 1000)
+                    )
+                elif row["duration_ms"] is not None:
+                    durations.append(_int_value(row["duration_ms"]))
+            if event_type in {"draft_succeeded", "draft_failed"}:
+                draft_attempts.setdefault(key, []).append(event_type)
+            if event_type == "task_evaluated":
+                payload = json.loads(str(row["payload_json"]))
+                if isinstance(payload, dict):
+                    completed = int(payload.get("completed", 0))
+                    confirm = int(payload.get("confirm", 0))
+                    fill = int(payload.get("fill", 0))
+                    invalid = int(payload.get("invalid", 0))
+                    evaluated_products += 1
+                    completed_tasks += completed
+                    manual_tasks += confirm + fill + invalid
+                    evaluated_tasks += completed + confirm + fill + invalid
+            if event_type in {"draft_failed", "publish_failed"}:
+                failure_events += 1
+                reason = str(row["reason"] or "").lower()
+                if any(
+                    marker in reason
+                    for marker in ("field", "missing", "invalid", "schema", "字段", "必填")
+                ):
+                    localized_failures += 1
+        durations.sort()
+        median = durations[len(durations) // 2] if durations else None
+        first_pass = sum(events[0] == "draft_succeeded" for events in draft_attempts.values())
+        rate = first_pass / len(draft_attempts) if draft_attempts else None
+        confirmation_total = counters.get("field_confirmed", 0) + counters.get("field_edited", 0)
+        publish_total = counters.get("publish_succeeded", 0) + counters.get("publish_failed", 0)
+        return {
+            "total_events": len(rows),
+            "counters": counters,
+            "failure_reasons": reasons,
+            "median_draft_duration_ms": median,
+            "first_pass_draft_rate": rate,
+            "ai_safe_completion_rate": (
+                completed_tasks / evaluated_tasks if evaluated_tasks else None
+            ),
+            "average_manual_field_count": (
+                manual_tasks / evaluated_products if evaluated_products else None
+            ),
+            "ai_confirmation_edit_rate": (
+                counters.get("field_edited", 0) / confirmation_total if confirmation_total else None
+            ),
+            "publish_failure_rate": (
+                counters.get("publish_failed", 0) / publish_total if publish_total else None
+            ),
+            "error_localization_rate": (
+                localized_failures / failure_events if failure_events else None
+            ),
+        }
+
+    @staticmethod
+    def _listing_template_from_row(row: DatabaseRow) -> dict[str, object]:
+        fields = json.loads(str(row["fields_json"]))
+        return {
+            "id": str(row["id"]),
+            "store_connection_id": str(row["store_connection_id"]),
+            "name": str(row["name"]),
+            "category_id": str(row["category_id"]) if row["category_id"] else None,
+            "fields": fields if isinstance(fields, dict) else {},
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    @staticmethod
+    def _field_confirmation_from_row(row: DatabaseRow) -> ListingFieldConfirmation:
+        return ListingFieldConfirmation(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            batch_id=str(row["batch_id"]),
+            reference=str(row["reference"]),
+            field_path=str(row["field_path"]),
+            value=json.loads(str(row["value_json"])),
+            original_source=str(row["original_source"]),
+            action=str(row["action"]),
+            evidence=str(row["evidence"]) if row["evidence"] else None,
+            schema_fingerprint=str(row["schema_fingerprint"]),
+            confirmed_by_user_id=str(row["confirmed_by_user_id"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _draft_snapshot_from_row(row: DatabaseRow) -> ListingDraftSnapshot:
+        return ListingDraftSnapshot(
+            id=str(row["id"]),
+            workspace_id=str(row["workspace_id"]),
+            batch_id=str(row["batch_id"]),
+            reference=str(row["reference"]),
+            product_id=str(row["product_id"]) if row["product_id"] else None,
+            request_fields=json.loads(str(row["request_fields_json"])),
+            platform_response=json.loads(str(row["platform_response_json"])),
+            differences=json.loads(str(row["differences_json"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
     def list_batches(self, workspace_id: str) -> list[dict[str, str]]:
         with self._lock:
             rows = self._connection.execute(
@@ -1184,9 +1833,7 @@ class Database:
             account=str(row["account"]) if row["account"] else None,
             access_token=self._cipher.decrypt(str(row["access_token_encrypted"])) or "",
             refresh_token=self._cipher.decrypt(
-                str(row["refresh_token_encrypted"])
-                if row["refresh_token_encrypted"]
-                else None
+                str(row["refresh_token_encrypted"]) if row["refresh_token_encrypted"] else None
             ),
             expires_at=datetime.fromisoformat(str(row["expires_at"]))
             if row["expires_at"]

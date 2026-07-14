@@ -134,6 +134,29 @@ def test_guidance_prompt_lists_options_and_manual_fields() -> None:
     assert "Never fill these human/business fact fields" in prompt
 
 
+def test_guidance_returns_all_options_but_keeps_large_enum_out_of_ai_prompt() -> None:
+    options = "".join(
+        f'<option displayName="Option {index}" value="v{index}"/>'
+        for index in range(65)
+    )
+    schema = (
+        "<itemSchema>"
+        '<field id="productTitle" name="Product title" type="singleCheck">'
+        f"<options>{options}</options>"
+        "</field>"
+        "</itemSchema>"
+    )
+    guidance = build_schema_guidance(schema)
+    field = guidance.ai_fillable_fields[0]
+
+    assert len(field.options) == 65
+    assert field.options[-1].value == "v64"
+    prompt = render_guidance_prompt(guidance)
+    assert "65 allowed options are available in the UI" in prompt
+    assert "Option 64=v64" not in prompt
+    assert "omit this field from AI output" in prompt
+
+
 def test_build_schema_guidance_handles_missing_schema() -> None:
     guidance = build_schema_guidance(None)
     assert guidance.ai_fillable_fields == []

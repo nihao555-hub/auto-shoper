@@ -2,6 +2,8 @@ from xml.etree import ElementTree
 
 from backend.app.models import (
     ParsedSchemaField,
+    SchemaDependencyExpression,
+    SchemaDependencyGroup,
     SchemaOption,
     SchemaParseResult,
     SchemaRule,
@@ -83,7 +85,8 @@ def _parse_field(element: ElementTree.Element, parent_path: list[str]) -> Parsed
     field_id = element.attrib.get("id", "")
     path = [*parent_path, field_id] if field_id else parent_path
     rules = _rules(element)
-    disabled = _rule_value(rules, "disableRule") == "true"
+    conditional_disable = _disable_dependencies(element)
+    disabled = _rule_value(rules, "disableRule") == "true" and not conditional_disable
     read_only = _rule_value(rules, "readOnlyRule") == "true"
     value_type = _rule_value(rules, "valueTypeRule")
     return ParsedSchemaField(
@@ -95,6 +98,7 @@ def _parse_field(element: ElementTree.Element, parent_path: list[str]) -> Parsed
         disabled=disabled,
         read_only=read_only,
         value_type=value_type,
+        conditional_disable=conditional_disable,
         rules=rules,
         options=_options(element),
         children=[_parse_field(child, path) for child in _nested_field_children(element)],
@@ -128,8 +132,40 @@ def _options(element: ElementTree.Element) -> list[SchemaOption]:
                     SchemaOption(
                         display_name=option.attrib.get("displayName"),
                         value=value,
+                        valid=option.attrib.get("valid", "true").lower() != "false",
+                        attributes={
+                            key: item
+                            for key, item in option.attrib.items()
+                            if key not in {"displayName", "value", "valid"}
+                        },
                     )
                 )
+    return result
+
+
+def _disable_dependencies(element: ElementTree.Element) -> list[SchemaDependencyGroup]:
+    result: list[SchemaDependencyGroup] = []
+    for rules_element in _children_named(element, "rules"):
+        for rule in _children_named(rules_element, "rule"):
+            if rule.attrib.get("name") != "disableRule" or rule.attrib.get("value") != "true":
+                continue
+            for group in _children_named(rule, "depend-group"):
+                expressions = [
+                    SchemaDependencyExpression(
+                        field_id=expression.attrib.get("fieldId", ""),
+                        value=expression.attrib.get("value"),
+                        symbol=expression.attrib.get("symbol", "=="),
+                    )
+                    for expression in _children_named(group, "depend-express")
+                    if expression.attrib.get("fieldId")
+                ]
+                if expressions:
+                    result.append(
+                        SchemaDependencyGroup(
+                            operator="or" if group.attrib.get("operator") == "or" else "and",
+                            expressions=expressions,
+                        )
+                    )
     return result
 
 

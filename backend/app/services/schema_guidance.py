@@ -11,9 +11,28 @@ from backend.app.models import (
 from backend.app.services.field_policy import schema_field_responsibility
 from backend.app.services.schema_rules import parse_schema_data
 
-MAX_OPTIONS_PER_FIELD = 40
+MAX_PROMPT_OPTIONS_PER_FIELD = 40
 SKIPPED_TYPES = {"label", "hidden"}
 CHOICE_TYPES = {"singleCheck", "multiCheck"}
+SUPPORTED_TYPES = {
+    "input",
+    "multiInput",
+    "singleCheck",
+    "multiCheck",
+    "complex",
+    "multiComplex",
+}
+SUPPORTED_VALUE_TYPES = {
+    None,
+    "text",
+    "decimal",
+    "integer",
+    "date",
+    "long",
+    "url",
+    "textarea",
+    "html",
+}
 
 
 def build_schema_guidance(
@@ -41,7 +60,9 @@ def _collect(
     field: ParsedSchemaField,
     ai_fillable: list[SchemaFieldGuidance],
     manual: list[SchemaFieldGuidance],
+    parents: list[ParsedSchemaField] | None = None,
 ) -> None:
+    parent_fields = parents or []
     key = _field_key(field)
     describable = (
         bool(key)
@@ -52,18 +73,25 @@ def _collect(
     )
     if describable:
         async_query_method = _rule_value(field.rules, "asyncQueryRule")
-        responsibility, label, reason, allowed_sources = _responsibility(
-            key, field.name or ""
+        responsibility, label, reason, allowed_sources = _responsibility(key, field.name or "")
+        supported = (
+            (field.type or "input") in SUPPORTED_TYPES
+            and field.value_type in SUPPORTED_VALUE_TYPES
         )
+        support_message = None
+        if not supported:
+            field_signature = f"{field.type or 'input'} / {field.value_type or 'text'}"
+            support_message = f"Alibaba 返回了暂未支持的字段类型：{field_signature}"
         if (
             responsibility == "ai_candidate"
             and field.type in CHOICE_TYPES
             and not field.options
             and async_query_method is None
         ):
-            responsibility, label, reason, allowed_sources = (
-                _unsupported_choice_responsibility()
-            )
+            responsibility, label, reason, allowed_sources = _unsupported_choice_responsibility()
+        if field.type in CHOICE_TYPES and not field.options and async_query_method is None:
+            supported = False
+            support_message = "Alibaba 未返回该选择字段的可提交选项，禁止按文本猜测填写"
         guidance = SchemaFieldGuidance(
             field=key,
             name=field.name,
@@ -76,16 +104,36 @@ def _collect(
             allowed_sources=allowed_sources,
             async_options=async_query_method is not None,
             async_query_method=async_query_method,
+            value_type=field.value_type,
             max_length=_max_length(field.rules),
+            min_length=_integer_rule(field.rules, "minLengthRule"),
+            min_value=_rule_value(field.rules, "minValueRule"),
+            max_value=_rule_value(field.rules, "maxValueRule"),
+            min_input_num=_integer_rule(field.rules, "minInputNumRule"),
+            max_input_num=_integer_rule(field.rules, "maxInputNumRule"),
+            pattern=_rule_value(field.rules, "regxRule") or _rule_value(field.rules, "regexRule"),
+            value_attributes=_rule_values(field.rules, "valueAttributeRule"),
+            conditional_disable=field.conditional_disable,
+            supported=supported,
+            support_message=support_message,
             tip=_tip(field.rules),
-            options=field.options[:MAX_OPTIONS_PER_FIELD],
+            options=field.options,
+            parent_path=".".join(field.path[:-1]) or None,
+            repeatable_group=next(
+                (
+                    ".".join(parent.path)
+                    for parent in reversed(parent_fields)
+                    if parent.type == "multiComplex"
+                ),
+                None,
+            ),
         )
         if guidance.responsibility == "ai_candidate":
             ai_fillable.append(guidance)
         else:
             manual.append(guidance)
     for child in field.children:
-        _collect(child, ai_fillable, manual)
+        _collect(child, ai_fillable, manual, [*parent_fields, field])
 
 
 def _responsibility(
@@ -127,6 +175,20 @@ def _max_length(rules: list[SchemaRule]) -> int | None:
     return None
 
 
+def _integer_rule(rules: list[SchemaRule], name: str) -> int | None:
+    value = _rule_value(rules, name)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _rule_values(rules: list[SchemaRule], name: str) -> list[str]:
+    return [rule.value for rule in rules if rule.name == name and rule.value]
+
+
 def _tip(rules: list[SchemaRule]) -> str | None:
     for rule in rules:
         if rule.name == "tipRule" and rule.value:
@@ -157,9 +219,7 @@ def render_guidance_prompt(guidance: SchemaGuidanceResult) -> str:
         for item in guidance.ai_fillable_fields:
             lines.append(_render_field(item))
     if guidance.manual_fact_fields:
-        manual_names = ", ".join(
-            item.field for item in guidance.manual_fact_fields
-        )
+        manual_names = ", ".join(item.field for item in guidance.manual_fact_fields)
         lines.append(
             "Never fill these human/business fact fields (a person must supply them): "
             f"{manual_names}."
@@ -177,7 +237,13 @@ def _render_field(item: SchemaFieldGuidance) -> str:
     if item.max_length:
         parts.append(f"[max {item.max_length}]")
     if item.options:
-        parts.append("options=" + _render_options(item.options))
+        if len(item.options) <= MAX_PROMPT_OPTIONS_PER_FIELD:
+            parts.append("options=" + _render_options(item.options))
+        else:
+            parts.append(
+                f"[{len(item.options)} allowed options are available in the UI; "
+                "omit this field from AI output]"
+            )
     if item.tip:
         parts.append(f"tip: {item.tip}")
     return " ".join(parts)

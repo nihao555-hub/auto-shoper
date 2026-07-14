@@ -193,3 +193,107 @@ def test_validate_filled_schema_xml_rechecks_submission_values() -> None:
         "scImages",
         "shippingTemplate.templateType",
     }
+
+
+def test_official_integer_and_regx_rules_are_enforced() -> None:
+    schema = r"""
+    <schema>
+      <field id="stock" type="input">
+        <rules>
+          <rule name="valueTypeRule" value="integer"/>
+          <rule name="regxRule" value="[0-9]+"/>
+        </rules>
+      </field>
+    </schema>
+    """
+    result = build_schema_xml(schema, {"stock": "1.5"})
+    assert {(issue.field, issue.rule) for issue in result.errors} == {
+        ("stock", "valueTypeRule"),
+        ("stock", "regxRule"),
+    }
+
+
+def test_conditional_disable_rule_only_applies_when_dependency_matches() -> None:
+    schema = """
+    <schema>
+      <field id="item_status" type="singleCheck">
+        <options><option value="0"/><option value="1"/></options>
+      </field>
+      <field id="start_time" type="input">
+        <rules>
+          <rule name="requiredRule" value="true"/>
+          <rule name="disableRule" value="true">
+            <depend-group operator="and">
+              <depend-express fieldId="item_status" value="1" symbol="!="/>
+            </depend-group>
+          </rule>
+        </rules>
+      </field>
+    </schema>
+    """
+    disabled = build_schema_xml(schema, {"item_status": "0"})
+    assert disabled.ready_to_submit is True
+    enabled = build_schema_xml(schema, {"item_status": "1"})
+    assert {(issue.field, issue.rule) for issue in enabled.errors} == {
+        ("start_time", "requiredRule")
+    }
+    completed = build_schema_xml(schema, {"item_status": "1", "start_time": "2026-07-14"})
+    assert completed.ready_to_submit is True
+
+
+def test_field_options_dependency_symbols_use_referenced_field_options() -> None:
+    schema = """
+    <schema>
+      <field id="mode" type="singleCheck">
+        <options><option value="A"/><option value="B"/></options>
+      </field>
+      <field id="disabled_when_known" type="input">
+        <rules>
+          <rule name="disableRule" value="true">
+            <depend-group>
+              <depend-express
+                fieldId="mode"
+                symbol="this field’s value in fieldOptions"
+              />
+            </depend-group>
+          </rule>
+        </rules>
+      </field>
+      <field id="disabled_when_unknown" type="input">
+        <rules>
+          <rule name="disableRule" value="true">
+            <depend-group>
+              <depend-express
+                fieldId="mode"
+                symbol="this field's value not in fieldOptions"
+              />
+            </depend-group>
+          </rule>
+        </rules>
+      </field>
+    </schema>
+    """
+    known = build_schema_xml(
+        schema,
+        {
+            "mode": "A",
+            "disabled_when_known": "must be rejected",
+            "disabled_when_unknown": "allowed",
+        },
+    )
+    assert {(issue.field, issue.rule) for issue in known.errors} == {
+        ("disabled_when_known", "disableRule")
+    }
+
+    unknown = build_schema_xml(
+        schema,
+        {
+            "mode": "X",
+            "disabled_when_known": "allowed",
+            "disabled_when_unknown": "must be rejected",
+        },
+    )
+    assert {(issue.field, issue.rule) for issue in unknown.errors} == {
+        ("mode", "optionRule"),
+        ("disabled_when_unknown", "disableRule"),
+    }

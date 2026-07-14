@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
 
@@ -25,11 +26,44 @@ class _TestStore:
 
 
 class _TestDatabase:
+    confirmations: list[dict[str, object]] = []
+    snapshots: list[dict[str, object]] = []
+    metric_events: list[dict[str, object]] = []
+
     def get_active_store(self, workspace_id: str) -> _TestStore:
         return _TestStore()
 
     def ensure_batch(self, workspace_id: str, store_id: str, batch_id: str) -> bool:
         return True
+
+    def record_field_confirmation(self, **values: object) -> object:
+        self.confirmations.append(values)
+
+        @dataclass(frozen=True)
+        class Confirmation:
+            id: str = "test-confirmation"
+            created_at: datetime = datetime(2026, 1, 1, tzinfo=UTC)
+
+        return Confirmation()
+
+    def save_draft_snapshot(self, **values: object) -> object:
+        self.snapshots.append(values)
+        return values
+
+    def list_draft_snapshots(self, workspace_id: str, batch_id: str) -> list[object]:
+        return []
+
+    def get_listing_feature_flags(self, workspace_id: str) -> dict[str, bool]:
+        return {
+            "workflow_v2": True,
+            "templates": True,
+            "imports": True,
+            "metrics": True,
+            "legacy_fallback": True,
+        }
+
+    def record_listing_metric_event(self, **values: object) -> None:
+        self.metric_events.append(values)
 
 
 @pytest.fixture

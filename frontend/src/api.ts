@@ -6,10 +6,15 @@ import type {
   BatchApiResult,
   CapabilityResponse,
   DraftField,
+  FieldTaskResult,
   ImageAnalysisResponse,
   ImagePromptTemplate,
   ImageSlot,
+  ListingFeatureFlags,
   ListingFieldGroup,
+  ListingImportResult,
+  ListingMetrics,
+  ListingTemplate,
   ProductImageGenerationResponse,
   ProductImagePlanResponse,
   ProductRecord,
@@ -117,6 +122,49 @@ export const startAlibabaOAuth = async (): Promise<{ authorization_url: string }
 
 export const getListingFieldMatrix = async (): Promise<ListingFieldGroup[]> =>
   parseResponse<ListingFieldGroup[]>(await apiFetch(`${API_ROOT}/alibaba/listing-field-matrix`));
+
+export const getListingFeatureFlags = async (): Promise<ListingFeatureFlags> =>
+  parseResponse<ListingFeatureFlags>(
+    await apiFetch(`${API_ROOT}/products/official-listing/feature-flags`),
+  );
+
+export const updateListingFeatureFlags = async (
+  updates: Partial<ListingFeatureFlags>,
+): Promise<ListingFeatureFlags> =>
+  parseResponse<ListingFeatureFlags>(
+    await apiFetch(`${API_ROOT}/products/official-listing/feature-flags`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    }),
+  );
+
+export const getListingMetrics = async (): Promise<ListingMetrics> =>
+  parseResponse<ListingMetrics>(await apiFetch(`${API_ROOT}/products/official-listing/metrics`));
+
+export const importListingProducts = async (file: File): Promise<ListingImportResult> => {
+  const body = new FormData();
+  body.append("file", file);
+  return parseResponse<ListingImportResult>(
+    await apiFetch(`${API_ROOT}/products/official-listing/import`, { method: "POST", body }),
+  );
+};
+
+export const recordListingMetricEvent = async (event: {
+  event_type: "upload_started" | "task_evaluated";
+  batch_id?: string;
+  reference?: string;
+  payload?: Record<string, unknown>;
+}): Promise<void> => {
+  const response = await apiFetch(`${API_ROOT}/products/official-listing/metrics/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  });
+  if (!response.ok) {
+    await parseResponse(response);
+  }
+};
 
 export const analyzeProductImages = async (
   files: File[],
@@ -376,22 +424,58 @@ const trustedField = (value: unknown): DraftField => ({
   source: "user_provided",
 });
 
-const confirmedField = (value: unknown): DraftField => ({
-  value,
-  source: "user_confirmed",
-});
+const candidateOrConfirmedField = (
+  product: ProductRecord,
+  fieldNames: string[],
+  value: unknown,
+): DraftField => {
+  for (const fieldName of fieldNames) {
+    const field = product.schemaFields?.[fieldName];
+    if (field) {
+      return { ...field, value };
+    }
+  }
+  return {
+    value,
+    source: product.aiConfirmed ? "user_confirmed" : "ai_generated",
+    requires_confirmation: !product.aiConfirmed,
+  };
+};
 
 const accountDefault = (value: unknown): DraftField => ({
   value,
   source: "account_default",
 });
 
+const normalizedSchemaFields = (product: ProductRecord): Record<string, DraftField> => {
+  const fields = product.schemaFields ?? {};
+  const canonicalAliases: Record<string, string[]> = {
+    subject: ["title", "english_title", "product_title"],
+    keywords: ["keyword"],
+    description: ["detail", "product_description"],
+    selling_points: ["sellingPoints", "highlights"],
+  };
+  const ignored = new Set<string>();
+  for (const [canonical, aliases] of Object.entries(canonicalAliases)) {
+    if (fields[canonical]) {
+      for (const alias of aliases) {
+        ignored.add(alias);
+      }
+    }
+  }
+  return Object.fromEntries(Object.entries(fields).filter(([field]) => !ignored.has(field)));
+};
+
 const productFields = (product: ProductRecord): Record<string, DraftField> => ({
-  ...(product.schemaFields ?? {}),
-  category_id: confirmedField(product.facts.categoryId),
-  subject: confirmedField(product.title),
-  keywords: confirmedField(product.keywords),
-  description: confirmedField(product.description),
+  ...normalizedSchemaFields(product),
+  category_id: candidateOrConfirmedField(
+    product,
+    ["category_id", "cat_id"],
+    product.facts.categoryId,
+  ),
+  subject: candidateOrConfirmedField(product, ["subject", "title"], product.title),
+  keywords: candidateOrConfirmedField(product, ["keywords", "keyword"], product.keywords),
+  description: candidateOrConfirmedField(product, ["description", "detail"], product.description),
   brand: trustedField(product.facts.brand),
   model: trustedField(product.facts.model),
   material: trustedField(product.facts.material),
@@ -415,8 +499,15 @@ const productFields = (product: ProductRecord): Record<string, DraftField> => ({
   origin: trustedField(product.facts.origin),
   hs_code: trustedField(product.facts.hsCode),
   certifications: trustedField(product.facts.certifications),
-  images: confirmedField(product.images.flatMap((image) => image.photoBankUrl ?? [])),
-  main_image: confirmedField(
+  sku_rows: trustedField(product.facts.skuRows ?? []),
+  images: candidateOrConfirmedField(
+    product,
+    ["images", "scImages"],
+    product.images.flatMap((image) => image.photoBankUrl ?? []),
+  ),
+  main_image: candidateOrConfirmedField(
+    product,
+    ["main_image", "mainImage"],
     product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
   ),
 });
@@ -434,6 +525,152 @@ const accountDefaults = (settings: StoreSettings): Record<string, DraftField> =>
   customizationPolicy: accountDefault(settings.customizationPolicy),
   detailTemplate: accountDefault(settings.detailTemplate),
 });
+
+export const getListingTasks = async (
+  product: ProductRecord,
+  settings: StoreSettings,
+): Promise<FieldTaskResult> => {
+  if (!product.schemaData) {
+    return {
+      tasks: [],
+      summary: { completed: 0, confirm: 0, fill: 0, invalid: 0 },
+      ready_to_draft: false,
+    };
+  }
+  return parseResponse<FieldTaskResult>(
+    await apiFetch(`${API_ROOT}/products/official-listing/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category_id: product.facts.categoryId,
+        schema_data: product.schemaData,
+        fields: productFields(product),
+        account_defaults: accountDefaults(settings),
+      }),
+    }),
+  );
+};
+
+export const listListingTemplates = async (categoryId?: string): Promise<ListingTemplate[]> => {
+  const query = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : "";
+  return parseResponse<ListingTemplate[]>(
+    await apiFetch(`${API_ROOT}/products/official-listing/templates${query}`),
+  );
+};
+
+export const createListingTemplate = async (
+  name: string,
+  product: ProductRecord,
+): Promise<ListingTemplate> =>
+  parseResponse<ListingTemplate>(
+    await apiFetch(`${API_ROOT}/products/official-listing/templates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        category_id: product.facts.categoryId || null,
+        fields: Object.fromEntries(
+          Object.entries(productFields(product))
+            .filter(
+              ([, field]) => field.source === "user_provided" || field.source === "business_system",
+            )
+            .map(([fieldPath, field]) => [fieldPath, field.value]),
+        ),
+      }),
+    }),
+  );
+
+export const applyListingTemplate = async (
+  templateId: string,
+  product: ProductRecord,
+  settings: StoreSettings,
+): Promise<{ fields: Record<string, DraftField>; tasks: FieldTaskResult }> => {
+  if (!product.schemaData) {
+    throw new Error("请先加载商品类目的实时 Schema，再应用模板");
+  }
+  return parseResponse<{ fields: Record<string, DraftField>; tasks: FieldTaskResult }>(
+    await apiFetch(
+      `${API_ROOT}/products/official-listing/templates/${encodeURIComponent(templateId)}/apply`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_data: product.schemaData,
+          fields: productFields(product),
+          account_defaults: accountDefaults(settings),
+        }),
+      },
+    ),
+  );
+};
+
+export const deleteListingTemplate = async (templateId: string): Promise<void> => {
+  const response = await apiFetch(
+    `${API_ROOT}/products/official-listing/templates/${encodeURIComponent(templateId)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    await parseResponse(response);
+  }
+};
+
+export const getAsyncFieldOptions = async (
+  product: ProductRecord,
+  settings: StoreSettings,
+  fieldPath: string,
+): Promise<SchemaGuidanceResult> => {
+  if (!product.schemaData || !product.facts.categoryId) {
+    throw new Error("缺少实时 Schema 或最终叶子类目，无法加载联动选项");
+  }
+  return parseResponse<SchemaGuidanceResult>(
+    await apiFetch(`${API_ROOT}/products/official-listing/options`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category_id: product.facts.categoryId,
+        field_path: fieldPath,
+        language: "en_US",
+        schema_data: product.schemaData,
+        fields: productFields(product),
+        account_defaults: accountDefaults(settings),
+      }),
+    }),
+  );
+};
+
+export const confirmListingField = async (
+  batchId: string,
+  product: ProductRecord,
+  fieldPath: string,
+  value: unknown,
+  action: "accepted" | "edited" = "accepted",
+): Promise<{ field_path: string; field: DraftField }> => {
+  const candidate = product.schemaFields?.[fieldPath];
+  if (!candidate || !product.schemaData) {
+    throw new Error("字段缺少 AI 候选或实时 Schema，无法确认");
+  }
+  if (candidate.source !== "ai_generated" && candidate.source !== "image_extracted") {
+    throw new Error("只有 AI 或图片识别候选可以通过此入口确认");
+  }
+  return parseResponse<{ field_path: string; field: DraftField }>(
+    await apiFetch(`${API_ROOT}/products/official-listing/fields/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        batch_id: batchId,
+        reference: product.reference,
+        field_path: fieldPath,
+        value,
+        display_value_zh: candidate.display_value_zh,
+        original_source: candidate.source,
+        confidence: candidate.confidence,
+        evidence: candidate.evidence,
+        schema_data: product.schemaData,
+        action,
+      }),
+    }),
+  );
+};
 
 export const createDraftBatch = async (
   batchId: string,
