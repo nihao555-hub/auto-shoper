@@ -310,11 +310,21 @@ def _template_defaults(
     values = {
         "currency": _first_scalar(
             product_payloads,
-            {"currency", "currency_code", "currencyCode"},
+            {"currency", "currency_code", "currencyCode", "fob_currency", "fobCurrency"},
         ),
         "priceUnit": _first_scalar(
             product_payloads,
-            {"price_unit", "priceUnit", "unit", "unit_name", "unitName"},
+            {
+                "price_unit",
+                "priceUnit",
+                "unit",
+                "unit_name",
+                "unitName",
+                "unit_type",
+                "unitType",
+                "fob_unit_type",
+                "fobUnitType",
+            },
         ),
         "productGroupId": product_group_id,
         "productGroupLabel": product_group_label,
@@ -335,6 +345,8 @@ def _template_defaults(
                 "shippingTemplateId",
                 "freight_template_id",
                 "freightTemplateId",
+                "shipping_line_template_id",
+                "shippingLineTemplateId",
             },
         ),
         "shippingTemplateLabel": _first_text(
@@ -348,7 +360,14 @@ def _template_defaults(
         ),
         "inventoryCode": _first_scalar(
             product_payloads,
-            {"inventory_code", "inventoryCode", "warehouse_code", "warehouseCode"},
+            {
+                "inventory_code",
+                "inventoryCode",
+                "warehouse_code",
+                "warehouseCode",
+                "store_code",
+                "storeCode",
+            },
         ),
         "companyProfile": merchant_assets["company_profile"],
         "brand": merchant_assets["brand"],

@@ -6,7 +6,13 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.app.config import Settings
-from backend.app.models import DraftField, FieldSource, ProductImageAnalysis
+from backend.app.models import (
+    DraftField,
+    FieldSource,
+    ProductContentTranslationRequest,
+    ProductContentTranslationResponse,
+    ProductImageAnalysis,
+)
 from backend.app.services.field_policy import MANUAL_REQUIREMENTS, is_manual_fact_field
 
 
@@ -26,6 +32,13 @@ class _ProviderAnalysis(BaseModel):
     generated_fields: dict[str, _ProviderField] = Field(default_factory=dict)
     category_suggestions: list[_ProviderField] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class _ProviderTranslation(BaseModel):
+    title: str
+    keywords: list[str] = Field(default_factory=list)
+    selling_points: list[str] = Field(default_factory=list)
+    description: str = ""
 
 
 class AIClient:
@@ -188,6 +201,61 @@ class AIClient:
             category_suggestions=suggestions,
             manual_requirements=MANUAL_REQUIREMENTS,
             warnings=warnings,
+        )
+
+    async def translate_product_content(
+        self,
+        request: ProductContentTranslationRequest,
+    ) -> ProductContentTranslationResponse:
+        content = {
+            "title": request.title,
+            "keywords": request.keywords,
+            "selling_points": request.selling_points,
+            "description": request.description,
+        }
+        prompt = (
+            f"Translate the supplied Alibaba.com product listing from {request.source_language} "
+            f"to {request.target_language} ({request.target_language_code}). Return JSON only "
+            'with keys "title", "keywords", "selling_points", and "description". Preserve every '
+            "number, unit, model number, trademark, material, certification, HTML tag, and factual "
+            "claim exactly. Do not add, remove, summarize, improve, localize, or infer facts. Keep "
+            "keyword and selling-point array lengths unchanged. Use natural buyer-facing language "
+            "for the target market while preserving the source meaning. "
+            f"Source content: {json.dumps(content, ensure_ascii=False)}"
+        )
+        response = await self.client.post(
+            "/chat/completions",
+            json={
+                "model": self.settings.text_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            },
+        )
+        if response.is_error:
+            raise AIProviderError(self._provider_error(response))
+        try:
+            response_content = response.json()["choices"][0]["message"]["content"]
+            translated = _ProviderTranslation.model_validate(self._parse_json(response_content))
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            ValidationError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise AIProviderError("AI provider returned an invalid translation response") from exc
+        if len(translated.keywords) != len(request.keywords):
+            raise AIProviderError("AI provider changed the keyword count during translation")
+        if len(translated.selling_points) != len(request.selling_points):
+            raise AIProviderError("AI provider changed the selling-point count during translation")
+        return ProductContentTranslationResponse(
+            target_language_code=request.target_language_code,
+            target_language=request.target_language,
+            title=translated.title,
+            keywords=translated.keywords,
+            selling_points=translated.selling_points,
+            description=translated.description,
         )
 
     async def generate_image(self, prompt: str, size: str, count: int) -> dict[str, Any]:

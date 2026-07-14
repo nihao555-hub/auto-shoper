@@ -1,4 +1,5 @@
 import type {
+  AlibabaCategoryLevel,
   AlibabaConnectedStore,
   AlibabaOAuthStatus,
   AlibabaStoreDirectory,
@@ -15,6 +16,7 @@ import type {
   ListingImportResult,
   ListingMetrics,
   ListingTemplate,
+  ProductContentTranslationResponse,
   ProductImageGenerationResponse,
   ProductImagePlanResponse,
   ProductRecord,
@@ -188,6 +190,27 @@ export const analyzeProductImages = async (
     }),
   );
 };
+
+export const translateProductContent = async (
+  product: ProductRecord,
+  targetLanguageCode: string,
+  targetLanguage: string,
+): Promise<ProductContentTranslationResponse> =>
+  parseResponse<ProductContentTranslationResponse>(
+    await apiFetch(`${API_ROOT}/products/translate-content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_language: "English",
+        target_language_code: targetLanguageCode,
+        target_language: targetLanguage,
+        title: product.title,
+        keywords: product.keywords,
+        selling_points: product.sellingPoints,
+        description: product.description,
+      }),
+    }),
+  );
 
 export const getImagePromptTemplates = async (): Promise<ImagePromptTemplate[]> =>
   parseResponse<ImagePromptTemplate[]>(await apiFetch(`${API_ROOT}/images/prompt-templates`));
@@ -408,6 +431,11 @@ export const getCategorySchema = async (categoryId: string): Promise<Record<stri
     await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
   );
 
+export const listCategoryChildren = async (categoryId: string): Promise<AlibabaCategoryLevel> =>
+  parseResponse<AlibabaCategoryLevel>(
+    await apiFetch(`${API_ROOT}/alibaba/categories/${encodeURIComponent(categoryId)}/children`),
+  );
+
 export const getSchemaGuidance = async (
   schemaData: Record<string, unknown> | string,
 ): Promise<SchemaGuidanceResult> =>
@@ -447,8 +475,12 @@ const accountDefault = (value: unknown): DraftField => ({
   source: "account_default",
 });
 
-const normalizedSchemaFields = (product: ProductRecord): Record<string, DraftField> => {
-  const fields = product.schemaFields ?? {};
+const confirmedField = (value: unknown): DraftField => ({
+  value,
+  source: "user_confirmed",
+});
+
+const normalizedSchemaFields = (fields: Record<string, DraftField>): Record<string, DraftField> => {
   const canonicalAliases: Record<string, string[]> = {
     subject: ["title", "english_title", "product_title"],
     keywords: ["keyword"],
@@ -466,51 +498,108 @@ const normalizedSchemaFields = (product: ProductRecord): Record<string, DraftFie
   return Object.fromEntries(Object.entries(fields).filter(([field]) => !ignored.has(field)));
 };
 
-const productFields = (product: ProductRecord): Record<string, DraftField> => ({
-  ...normalizedSchemaFields(product),
-  category_id: candidateOrConfirmedField(
-    product,
-    ["category_id", "cat_id"],
-    product.facts.categoryId,
-  ),
-  subject: candidateOrConfirmedField(product, ["subject", "title"], product.title),
-  keywords: candidateOrConfirmedField(product, ["keywords", "keyword"], product.keywords),
-  description: candidateOrConfirmedField(product, ["description", "detail"], product.description),
-  brand: trustedField(product.facts.brand),
-  model: trustedField(product.facts.model),
-  material: trustedField(product.facts.material),
-  price: trustedField(product.facts.price),
-  moq: trustedField(product.facts.moq),
-  inventory: trustedField(product.facts.stock),
-  dimensions: trustedField({
-    length: product.facts.productLength,
-    width: product.facts.productWidth,
-    height: product.facts.productHeight,
-  }),
-  weight: trustedField(product.facts.netWeight),
-  packaging: trustedField({
-    length: product.facts.packageLength,
-    width: product.facts.packageWidth,
-    height: product.facts.packageHeight,
-    grossWeight: product.facts.grossWeight,
-    unitsPerCarton: product.facts.unitsPerCarton,
-  }),
-  lead_time: trustedField(product.facts.leadTime),
-  origin: trustedField(product.facts.origin),
-  hs_code: trustedField(product.facts.hsCode),
-  certifications: trustedField(product.facts.certifications),
-  sku_rows: trustedField(product.facts.skuRows ?? []),
-  images: candidateOrConfirmedField(
-    product,
-    ["images", "scImages"],
-    product.images.flatMap((image) => image.photoBankUrl ?? []),
-  ),
-  main_image: candidateOrConfirmedField(
-    product,
-    ["main_image", "mainImage"],
-    product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
-  ),
-});
+const listingContent = (product: ProductRecord) =>
+  product.translation?.confirmed
+    ? {
+        title: product.translation.title,
+        keywords: product.translation.keywords,
+        sellingPoints: product.translation.sellingPoints,
+        description: product.translation.description,
+      }
+    : {
+        title: product.title,
+        keywords: product.keywords,
+        sellingPoints: product.sellingPoints,
+        description: product.description,
+      };
+
+const localizedDetailImageValue = (value: unknown, text: string): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => localizedDetailImageValue(item, text));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        key === "generalText" ? text : localizedDetailImageValue(item, text),
+      ]),
+    );
+  }
+  return value;
+};
+
+const localizedSchemaFields = (product: ProductRecord): Record<string, DraftField> => {
+  const fields = { ...(product.schemaFields ?? {}) };
+  if (!product.translation?.confirmed) {
+    return fields;
+  }
+  const content = listingContent(product);
+  fields.productTitle = confirmedField(content.title);
+  fields["productKeywords.productKeywords_0"] = confirmedField(content.keywords.join(", "));
+  fields.textDesc = confirmedField(
+    content.sellingPoints.length ? content.sellingPoints.join("\n") : content.description,
+  );
+  if (fields.detailImage) {
+    fields.detailImage = confirmedField(
+      localizedDetailImageValue(fields.detailImage.value, content.description),
+    );
+  }
+  return fields;
+};
+
+const productFields = (product: ProductRecord): Record<string, DraftField> => {
+  const content = listingContent(product);
+  const contentField = (fieldNames: string[], value: unknown) =>
+    product.translation?.confirmed
+      ? confirmedField(value)
+      : candidateOrConfirmedField(product, fieldNames, value);
+  return {
+    ...normalizedSchemaFields(localizedSchemaFields(product)),
+    category_id: candidateOrConfirmedField(
+      product,
+      ["category_id", "cat_id"],
+      product.facts.categoryId,
+    ),
+    subject: contentField(["subject", "title"], content.title),
+    keywords: contentField(["keywords", "keyword"], content.keywords),
+    selling_points: contentField(["selling_points", "sellingPoints"], content.sellingPoints),
+    description: contentField(["description", "detail"], content.description),
+    brand: trustedField(product.facts.brand),
+    model: trustedField(product.facts.model),
+    material: trustedField(product.facts.material),
+    price: trustedField(product.facts.price),
+    moq: trustedField(product.facts.moq),
+    inventory: trustedField(product.facts.stock),
+    dimensions: trustedField({
+      length: product.facts.productLength,
+      width: product.facts.productWidth,
+      height: product.facts.productHeight,
+    }),
+    weight: trustedField(product.facts.netWeight),
+    packaging: trustedField({
+      length: product.facts.packageLength,
+      width: product.facts.packageWidth,
+      height: product.facts.packageHeight,
+      grossWeight: product.facts.grossWeight,
+      unitsPerCarton: product.facts.unitsPerCarton,
+    }),
+    lead_time: trustedField(product.facts.leadTime),
+    origin: trustedField(product.facts.origin),
+    hs_code: trustedField(product.facts.hsCode),
+    certifications: trustedField(product.facts.certifications),
+    sku_rows: trustedField(product.facts.skuRows ?? []),
+    images: candidateOrConfirmedField(
+      product,
+      ["images", "scImages"],
+      product.images.flatMap((image) => image.photoBankUrl ?? []),
+    ),
+    main_image: candidateOrConfirmedField(
+      product,
+      ["main_image", "mainImage"],
+      product.images.find((image) => image.id === product.mainImageId)?.photoBankUrl ?? "",
+    ),
+  };
+};
 
 const accountDefaults = (settings: StoreSettings): Record<string, DraftField> => ({
   currency: accountDefault(settings.currency),

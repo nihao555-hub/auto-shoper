@@ -20,6 +20,7 @@ import {
   Plus,
   Question,
   Sparkle,
+  Translate,
   Trash,
   UploadSimple,
   Warning,
@@ -27,10 +28,12 @@ import {
   X,
   XCircle,
 } from "@phosphor-icons/react";
+import { type TCountryCode, type TLanguageCode, countries, languages } from "countries-list";
 import {
   type ChangeEvent,
   type DragEvent,
   Fragment,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -58,17 +61,20 @@ import {
   getListingTasks,
   getSchemaGuidance,
   importListingProducts,
+  listCategoryChildren,
   listListingTemplates,
   listPhotoBankGroups,
   listPhotoBankImages,
   planProductImages,
   publishBatch,
   recordListingMetricEvent,
+  translateProductContent,
   updateListingFeatureFlags,
   uploadPhotoBankImage,
 } from "../api";
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
 import type {
+  AlibabaCategoryOption,
   AlibabaConnectedStore,
   CapabilityResponse,
   DataMode,
@@ -83,6 +89,7 @@ import type {
   ListingTemplate,
   ProductImageCandidate,
   ProductRecord,
+  ProductTranslation,
   SchemaFieldGuidance,
   StoreSettings,
   ToastMessage,
@@ -199,6 +206,65 @@ const mergeListingFields = (
   };
 };
 
+type TargetMarket = {
+  code: string;
+  label: string;
+  languageCode: string;
+  languageLabel: string;
+};
+
+type TargetCountry = {
+  code: TCountryCode;
+  label: string;
+  defaultLanguageCode: TLanguageCode;
+};
+
+type TargetLanguage = {
+  code: TLanguageCode;
+  label: string;
+};
+
+const regionNames = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+const languageNames = new Intl.DisplayNames(["zh-CN"], { type: "language" });
+
+const targetCountries: TargetCountry[] = Object.entries(countries)
+  .map(([code, country]) => ({
+    code: code as TCountryCode,
+    label: regionNames.of(code) ?? country.name,
+    defaultLanguageCode: country.languages[0] ?? "en",
+  }))
+  .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+const targetLanguages: TargetLanguage[] = Object.entries(languages)
+  .map(([code, language]) => ({
+    code: code as TLanguageCode,
+    label: languageNames.of(code) ?? language.name,
+  }))
+  .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+const getTargetMarket = (countryCode: string, languageCode: string): TargetMarket | null => {
+  const country = targetCountries.find((item) => item.code === countryCode);
+  const language = targetLanguages.find((item) => item.code === languageCode);
+  if (!country || !language) {
+    return null;
+  }
+  return {
+    code: country.code,
+    label: country.label,
+    languageCode: `${language.code}-${country.code}`,
+    languageLabel: language.label,
+  };
+};
+
+const hasMarketTranslation = (
+  product: ProductRecord,
+  market: TargetMarket | null,
+): product is ProductRecord & { translation: ProductTranslation } =>
+  Boolean(
+    market &&
+      product.translation?.targetMarketCode === market.code &&
+      product.translation.targetLanguageCode === market.languageCode,
+  );
 const demoImageCandidates: ProductImageCandidate[] = [
   {
     slot: "main",
@@ -237,28 +303,48 @@ const demoImageCandidates: ProductImageCandidate[] = [
   },
 ];
 
-const stepLabels = ["上传图片", "确认 AI 候选", "补齐事实", "创建草稿", "回读发布"];
-const stepGuides = [
+const workflowStepLabels = ["上传商品", "确认并补资料", "草稿与发布"];
+const workflowStepGuides = [
   {
-    title: "先准备商品图片",
-    detail: "每组图片对应一个商品，第一张默认为主图。完成后使用底部主按钮继续。",
+    title: "上传商品图片",
+    detail: "每组图片对应一个商品，系统会自动识别商品并生成可编辑内容。",
   },
   {
-    title: "只确认 AI 生成内容",
-    detail: "逐个核对标题、类目和卖点；全部确认后才能进入可信资料填写。",
+    title: "确认内容并补齐资料",
+    detail: "核对 AI 结果，选择 Alibaba 最终类目，只填写系统仍缺少的真实信息。",
   },
   {
-    title: "只补充可信事实",
-    detail: "系统按当前类目 API 隐藏已完成字段，只显示仍需你提供的真实信息。",
+    title: "保存草稿并确认发布",
+    detail: "先保存 Alibaba 草稿，再翻译和回读；正式发布仍需要单独勾选确认。",
   },
-  {
-    title: "只创建已校验商品的草稿",
-    detail: "先查看校验结果，再为已选且通过校验的商品创建草稿。",
-  },
-  {
-    title: "最后回读并发布",
-    detail: "核对商品 ID、店铺、价格和状态；正式发布前还需要再次确认。",
-  },
+];
+
+const workflowStepIndex = (step: number) => (step === 0 ? 0 : step <= 2 ? 1 : 2);
+
+const advancedFactFields: Array<{
+  key: Exclude<
+    keyof ProductRecord["facts"],
+    "categoryId" | "categoryLabel" | "categoryLabelZh" | "brand" | "certifications" | "skuRows"
+  >;
+  label: string;
+}> = [
+  { key: "model", label: "型号" },
+  { key: "material", label: "材质" },
+  { key: "price", label: "价格" },
+  { key: "moq", label: "MOQ" },
+  { key: "stock", label: "库存" },
+  { key: "productLength", label: "产品长度（cm）" },
+  { key: "productWidth", label: "产品宽度（cm）" },
+  { key: "productHeight", label: "产品高度（cm）" },
+  { key: "netWeight", label: "产品净重（kg）" },
+  { key: "packageLength", label: "包装长度（cm）" },
+  { key: "packageWidth", label: "包装宽度（cm）" },
+  { key: "packageHeight", label: "包装高度（cm）" },
+  { key: "grossWeight", label: "包装毛重（kg）" },
+  { key: "unitsPerCarton", label: "每箱数量" },
+  { key: "leadTime", label: "发货期（天）" },
+  { key: "origin", label: "原产地" },
+  { key: "hsCode", label: "美国 HS 编码" },
 ];
 
 // 把后端/AI 供应商返回的错误信息翻译成用户可读的中文提示，区分"未配置/余额不足/模型未注册/结构非法"等。
@@ -323,6 +409,9 @@ export function WorkbenchPage({
   const [dragActive, setDragActive] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [targetMarketCode, setTargetMarketCode] = useState("");
+  const [targetLanguageCode, setTargetLanguageCode] = useState("");
+  const [translationBusy, setTranslationBusy] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
   const [imagePlan, setImagePlan] = useState<ImageSlotPlan[]>([]);
@@ -348,6 +437,7 @@ export function WorkbenchPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
+  const plannedImageProductsRef = useRef(new Set<string>());
 
   const missingTemplateFields = useMemo(
     () => (dataMode === "live" ? getMissingStoreTemplateFields(settings) : []),
@@ -525,6 +615,21 @@ export function WorkbenchPage({
       product.stage === "publishing" ||
       product.stage === "published",
   );
+  const targetMarket = getTargetMarket(targetMarketCode, targetLanguageCode);
+  const translatedProducts = draftedProducts.filter((product) =>
+    hasMarketTranslation(product, targetMarket),
+  );
+  const translationComplete =
+    Boolean(targetMarket) &&
+    draftedProducts.length > 0 &&
+    draftedProducts.every(
+      (product) => hasMarketTranslation(product, targetMarket) && product.translation.confirmed,
+    );
+  const changeTargetCountry = (countryCode: string) => {
+    setTargetMarketCode(countryCode);
+    const country = targetCountries.find((item) => item.code === countryCode);
+    setTargetLanguageCode(country?.defaultLanguageCode ?? "");
+  };
   const publishedProducts = products.filter((product) => product.stage === "published");
   const publishTargets = getActionProducts(products, selected).filter(
     (product) =>
@@ -543,24 +648,26 @@ export function WorkbenchPage({
   const aiReviewComplete = analysisComplete && products.every((product) => product.aiConfirmed);
   const allProductsReady =
     aiReviewComplete && products.every((product) => getProductErrors(product).length === 0);
-  const completedSteps = [
-    analysisComplete,
-    aiReviewComplete,
-    allProductsReady,
-    draftedProducts.length > 0,
-    publishedProducts.length > 0,
-  ];
   const unlockedSteps = [
     true,
     maxUnlockedStep >= 1 && analysisComplete,
     maxUnlockedStep >= 2 && aiReviewComplete,
     maxUnlockedStep >= 3 && allProductsReady,
     maxUnlockedStep >= 4 && draftedProducts.length > 0,
+    maxUnlockedStep >= 5 && translationComplete,
   ];
   const maxAccessibleStep = unlockedSteps.reduce(
     (highest, unlocked, index) => (unlocked ? index : highest),
     0,
   );
+  const currentWorkflowStep = workflowStepIndex(step);
+  const workflowCompletedSteps = [analysisComplete, allProductsReady, publishedProducts.length > 0];
+  const workflowUnlockedSteps = [true, unlockedSteps[1], unlockedSteps[3]];
+  const workflowTargets = [
+    0,
+    step >= 1 && step <= 2 ? step : aiReviewComplete ? 2 : 1,
+    step >= 3 ? step : maxAccessibleStep,
+  ];
 
   useEffect(() => {
     if (step > maxAccessibleStep) {
@@ -571,7 +678,22 @@ export function WorkbenchPage({
 
   const updateProduct = (nextProduct: ProductRecord) => {
     onProductsChange(
-      products.map((product) => (product.id === nextProduct.id ? nextProduct : product)),
+      products.map((product) => {
+        if (product.id !== nextProduct.id) {
+          return product;
+        }
+        const contentChanged =
+          product.title !== nextProduct.title ||
+          product.description !== nextProduct.description ||
+          product.keywords.join("\u0000") !== nextProduct.keywords.join("\u0000") ||
+          product.sellingPoints.join("\u0000") !== nextProduct.sellingPoints.join("\u0000");
+        return contentChanged && nextProduct.translation
+          ? {
+              ...nextProduct,
+              translation: { ...nextProduct.translation, confirmed: false },
+            }
+          : nextProduct;
+      }),
     );
   };
 
@@ -1117,9 +1239,9 @@ export function WorkbenchPage({
     }
   };
 
-  const refreshImagePlan = async () => {
+  const refreshImagePlan = useCallback(async (): Promise<ImageSlotPlan[]> => {
     if (!activeProduct || activeProduct.isDemo) {
-      return;
+      return [];
     }
     setImagePlanBusy(true);
     try {
@@ -1131,12 +1253,27 @@ export function WorkbenchPage({
       if (!response.slots.length) {
         notify("success", "商品图已补齐", "五类商品图均已加入当前商品图库。");
       }
+      return response.slots;
     } catch (error) {
       notify("error", "无法检查缺失图种", error instanceof Error ? error.message : "请稍后重试。");
+      return [];
     } finally {
       setImagePlanBusy(false);
     }
-  };
+  }, [activeProduct, addedImageSlots, notify, providedImageInputs]);
+
+  useEffect(() => {
+    if (
+      step !== 2 ||
+      !activeProduct ||
+      activeProduct.isDemo ||
+      plannedImageProductsRef.current.has(activeProduct.id)
+    ) {
+      return;
+    }
+    plannedImageProductsRef.current.add(activeProduct.id);
+    void refreshImagePlan();
+  }, [activeProduct, refreshImagePlan, step]);
 
   const updateImageInput = (key: string, value: string) => {
     setProvidedImageInputs((current) => ({ ...current, [key]: value }));
@@ -1169,8 +1306,9 @@ export function WorkbenchPage({
       notify("warning", "缺少参考图", "生图采用图生图，需要先上传真实商品主图作为参考。");
       return;
     }
+    const availablePlan = !slots && !imagePlan.length ? await refreshImagePlan() : imagePlan;
     const requestedSlots =
-      slots ?? imagePlan.filter((slot) => slot.can_generate).map((slot) => slot.slot);
+      slots ?? availablePlan.filter((slot) => slot.can_generate).map((slot) => slot.slot);
     if (!requestedSlots.length) {
       notify("warning", "暂无可生成图种", "请先补齐提示的信息，再重新检查缺失图种。");
       return;
@@ -1260,8 +1398,8 @@ export function WorkbenchPage({
     notify("success", `已加入 ${available.length} 张候选图`, "仍需逐张检查产品一致性后发布。");
   };
 
-  const validateAll = () => {
-    const nextProducts = products.map((product) => {
+  const validateAll = (sourceProducts = products) => {
+    const nextProducts = sourceProducts.map((product) => {
       const errors = getProductErrors(product);
       return {
         ...product,
@@ -1412,13 +1550,170 @@ export function WorkbenchPage({
     }
   };
 
+  const translateDrafts = async () => {
+    if (!targetMarket) {
+      notify("warning", "请先选择目标国家", "系统会自动匹配该市场的主要语言。");
+      return;
+    }
+    if (!draftedProducts.length) {
+      notify("warning", "没有可翻译的草稿");
+      return;
+    }
+    if (
+      !targetMarket.languageCode.startsWith("en-") &&
+      (!backendConnected || !capabilities?.model_credentials_configured)
+    ) {
+      notify(
+        "error",
+        !backendConnected ? "翻译服务暂不可用" : "AI 翻译服务尚未配置",
+        "可以选择英语保留原文，或联系管理员配置现有 AI Provider。",
+      );
+      return;
+    }
+
+    setTranslationBusy(true);
+    const results = await Promise.all(
+      draftedProducts.map(async (product) => {
+        try {
+          const response = targetMarket.languageCode.startsWith("en-")
+            ? {
+                title: product.title,
+                keywords: product.keywords,
+                selling_points: product.sellingPoints,
+                description: product.description,
+              }
+            : await translateProductContent(
+                product,
+                targetMarket.languageCode,
+                targetMarket.languageLabel,
+              );
+          const translation: ProductTranslation = {
+            targetMarketCode: targetMarket.code,
+            targetMarketLabel: targetMarket.label,
+            targetLanguageCode: targetMarket.languageCode,
+            targetLanguageLabel: targetMarket.languageLabel,
+            title: response.title,
+            keywords: response.keywords,
+            sellingPoints: response.selling_points,
+            description: response.description,
+            confirmed: false,
+            translatedAt: new Date().toISOString(),
+          };
+          return { productId: product.id, translation, error: null };
+        } catch (error) {
+          return {
+            productId: product.id,
+            translation: null,
+            error: error instanceof Error ? error.message : "翻译失败",
+          };
+        }
+      }),
+    );
+    const translations = new Map(
+      results
+        .filter(
+          (
+            result,
+          ): result is {
+            productId: string;
+            translation: ProductTranslation;
+            error: null;
+          } => result.translation !== null,
+        )
+        .map((result) => [result.productId, result.translation]),
+    );
+    onProductsChange(
+      products.map((product) => {
+        const translation = translations.get(product.id);
+        return translation ? { ...product, translation } : product;
+      }),
+    );
+    const failures = results.filter((result) => result.error);
+    notify(
+      failures.length ? "warning" : "success",
+      failures.length
+        ? `翻译完成 ${translations.size}/${results.length}`
+        : `已生成 ${translations.size} 个${targetMarket.languageLabel}版本`,
+      failures.length
+        ? failures
+            .slice(0, 2)
+            .map((result) => result.error)
+            .join("；")
+        : "请逐项核对，确认后才会用于正式发布。",
+    );
+    setTranslationBusy(false);
+  };
+
+  const changeTranslation = (
+    productId: string,
+    patch: Partial<
+      Pick<ProductTranslation, "title" | "keywords" | "sellingPoints" | "description">
+    >,
+  ) => {
+    onProductsChange(
+      products.map((product) =>
+        product.id === productId && product.translation
+          ? {
+              ...product,
+              translation: {
+                ...product.translation,
+                ...patch,
+                confirmed: false,
+              },
+            }
+          : product,
+      ),
+    );
+  };
+
+  const confirmTranslation = (productId: string) => {
+    onProductsChange(
+      products.map((product) =>
+        product.id === productId && product.translation
+          ? {
+              ...product,
+              translation: { ...product.translation, confirmed: true },
+            }
+          : product,
+      ),
+    );
+  };
+
+  const confirmAllTranslations = () => {
+    if (!targetMarket || translatedProducts.length !== draftedProducts.length) {
+      notify("warning", "请先完成全部翻译");
+      return;
+    }
+    onProductsChange(
+      products.map((product) =>
+        product.translation?.targetMarketCode === targetMarket.code &&
+        product.translation.targetLanguageCode === targetMarket.languageCode
+          ? {
+              ...product,
+              translation: { ...product.translation, confirmed: true },
+            }
+          : product,
+      ),
+    );
+    setMaxUnlockedStep((current) => Math.max(current, 5));
+  };
+
+  const continueToPublish = () => {
+    if (!translationComplete) {
+      notify("warning", "翻译尚未全部确认", "所有草稿的目标语言文案确认后才能发布。");
+      return;
+    }
+    setMaxUnlockedStep((current) => Math.max(current, 5));
+    setStep(5);
+  };
+
   const confirmPublish = async () => {
     const targets = getActionProducts(products, selected).filter(
       (product) =>
         product.stage === "drafted" ||
         (product.stage === "error" && Boolean(product.draftProductId)),
     );
-    if (!publishConfirmed || !targets.length) {
+    if (!publishConfirmed || !targets.length || !translationComplete) {
       return;
     }
     if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
@@ -1578,13 +1873,13 @@ export function WorkbenchPage({
     }));
   };
 
-  const loadCategoryRules = async (): Promise<boolean> => {
+  const loadCategoryRules = async (): Promise<ProductRecord[] | null> => {
     if (dataMode === "demo") {
-      return true;
+      return products;
     }
     if (products.some((product) => !product.facts.categoryId.trim())) {
       notify("warning", "类目尚未确认", "需要先确认每个商品的最终叶子类目。");
-      return false;
+      return null;
     }
     setBusy(true);
     let failedCount = 0;
@@ -1615,9 +1910,9 @@ export function WorkbenchPage({
         "无法读取实时类目规则",
         `${failedCount} 个商品未取得 Alibaba 必填字段，请稍后重试。`,
       );
-      return false;
+      return null;
     }
-    return true;
+    return nextProducts;
   };
 
   const goNext = async () => {
@@ -1630,19 +1925,20 @@ export function WorkbenchPage({
         notify("warning", "还有 AI 内容未确认", "确认后才能进入可信资料填写。");
         return;
       }
-      if (!(await loadCategoryRules())) {
-        return;
-      }
       setMaxUnlockedStep((current) => Math.max(current, 2));
       setStep(2);
       return;
     }
     if (step === 2) {
-      if (!allProductsReady) {
+      const productsWithRules = await loadCategoryRules();
+      if (!productsWithRules) {
+        return;
+      }
+      if (productsWithRules.some((product) => getProductErrors(product).length > 0)) {
         notify("warning", "仍有商品资料尚未完整", "全部商品补齐 API 必填事实后才能创建草稿。");
         return;
       }
-      validateAll();
+      validateAll(productsWithRules);
       setMaxUnlockedStep((current) => Math.max(current, 3));
       setStep(3);
       return;
@@ -1652,6 +1948,10 @@ export function WorkbenchPage({
       return;
     }
     if (step === 4) {
+      continueToPublish();
+      return;
+    }
+    if (step === 5) {
       setPublishDialogOpen(true);
     }
   };
@@ -1665,12 +1965,20 @@ export function WorkbenchPage({
     (product) =>
       product.aiConfirmed && product.stage !== "error" && getFactErrors(product).length === 0,
   ).length;
-  const stepCaptions = [
-    `已上传 ${products.length}`,
-    `已确认 ${confirmedCount}`,
-    `缺失事实 ${missingCount}`,
-    `可建草稿 ${draftReadyCount}`,
-    `待发布 ${draftedProducts.length}`,
+  const workflowStepCaptions = [
+    analysisComplete ? `AI 已识别 ${products.length}` : `已上传 ${products.length}`,
+    allProductsReady
+      ? "资料已完成"
+      : aiReviewComplete
+        ? `还需补 ${missingCount} 项`
+        : `待确认 ${products.length - confirmedCount} 项`,
+    publishedProducts.length
+      ? `已发布 ${publishedProducts.length}`
+      : translationComplete
+        ? "待正式确认"
+        : draftedProducts.length
+          ? `草稿 ${draftedProducts.length} 个`
+          : `可建草稿 ${draftReadyCount}`,
   ];
   return (
     <div
@@ -1680,7 +1988,9 @@ export function WorkbenchPage({
         <div className="wb-topbar-meta">
           <span>
             当前店铺：
-            <strong>{activeStore?.login_id ?? activeStore?.account ?? "未连接店铺"}</strong>
+            <strong>
+              {activeStore?.login_id ?? activeStore?.account ?? activeStore?.id ?? "未连接店铺"}
+            </strong>
           </span>
           <span>
             批次 ID：<strong>{batchId}</strong>
@@ -1701,6 +2011,8 @@ export function WorkbenchPage({
                 setSelected(new Set(products.map((product) => product.id)));
                 setInspectorOpen(false);
                 setPublishDialogOpen(false);
+                setTargetMarketCode("");
+                setTargetLanguageCode("");
               }}
             >
               <ArrowCounterClockwise size={16} />
@@ -1721,38 +2033,46 @@ export function WorkbenchPage({
       <div className="wb-body">
         <section className="wb-content">
           <nav className="wb-steps" aria-label="上品流程">
-            {stepLabels.map((label, index) => (
+            {workflowStepLabels.map((label, index) => (
               <button
                 key={label}
                 type="button"
-                className={`wb-step ${step === index ? "is-active" : ""} ${
-                  completedSteps[index] ? "is-complete" : ""
+                className={`wb-step ${currentWorkflowStep === index ? "is-active" : ""} ${
+                  workflowCompletedSteps[index] ? "is-complete" : ""
                 }`}
                 onClick={() => {
-                  setStep(index);
-                  if (index !== 2) {
+                  setStep(workflowTargets[index]);
+                  if (index !== 1 || workflowTargets[index] !== 2) {
                     setInspectorOpen(false);
                   }
                 }}
-                disabled={!unlockedSteps[index]}
-                title={!unlockedSteps[index] ? "请先完成上一步" : undefined}
+                disabled={!workflowUnlockedSteps[index]}
+                title={!workflowUnlockedSteps[index] ? "请先完成上一步" : undefined}
               >
                 <span className="wb-step-number">
-                  {completedSteps[index] && index < step ? <Check size={13} /> : index + 1}
+                  {workflowCompletedSteps[index] && index < currentWorkflowStep ? (
+                    <Check size={13} />
+                  ) : (
+                    index + 1
+                  )}
                 </span>
                 <span className="wb-step-copy">
                   <strong>{label}</strong>
-                  <small>{unlockedSteps[index] ? stepCaptions[index] : "先完成上一步"}</small>
+                  <small>
+                    {workflowUnlockedSteps[index] ? workflowStepCaptions[index] : "先完成上一步"}
+                  </small>
                 </span>
-                {!unlockedSteps[index] ? <LockSimple className="wb-step-lock" size={13} /> : null}
+                {!workflowUnlockedSteps[index] ? (
+                  <LockSimple className="wb-step-lock" size={13} />
+                ) : null}
               </button>
             ))}
           </nav>
           <div className="wb-step-guide">
-            <span>第 {step + 1} 步</span>
+            <span>第 {currentWorkflowStep + 1} 步</span>
             <div>
-              <strong>{stepGuides[step].title}</strong>
-              <p>{stepGuides[step].detail}</p>
+              <strong>{workflowStepGuides[currentWorkflowStep].title}</strong>
+              <p>{workflowStepGuides[currentWorkflowStep].detail}</p>
             </div>
           </div>
           {!templateComplete ? (
@@ -1842,6 +2162,10 @@ export function WorkbenchPage({
                 setActiveProductId(id);
                 setInspectorOpen(true);
               }}
+              onEditAi={() => {
+                setStep(1);
+                setInspectorOpen(false);
+              }}
               onOpenSettings={onOpenSettings}
               onBulkFill={bulkFillFacts}
               selectedCount={selected.size}
@@ -1865,6 +2189,24 @@ export function WorkbenchPage({
           ) : null}
 
           {step === 4 ? (
+            <TranslationStep
+              products={draftedProducts}
+              targetCountries={targetCountries}
+              targetLanguages={targetLanguages}
+              targetMarketCode={targetMarketCode}
+              targetLanguageCode={targetLanguageCode}
+              busy={translationBusy}
+              onTargetMarketChange={changeTargetCountry}
+              onTargetLanguageChange={setTargetLanguageCode}
+              onTranslate={() => void translateDrafts()}
+              onChange={changeTranslation}
+              onConfirm={confirmTranslation}
+              onConfirmAll={confirmAllTranslations}
+              onContinue={continueToPublish}
+            />
+          ) : null}
+
+          {step === 5 ? (
             <PreviewStep
               products={products}
               selected={selected}
@@ -1872,6 +2214,7 @@ export function WorkbenchPage({
               storeName={activeStore?.login_id ?? activeStore?.account ?? ""}
               unit={settings.priceUnit}
               currency={settings.currency}
+              targetLanguage={targetMarket?.languageLabel ?? ""}
               onSelect={toggleSelected}
               onPublish={() => setPublishDialogOpen(true)}
               onPublishOne={(id) => {
@@ -1898,6 +2241,7 @@ export function WorkbenchPage({
 
         {step === 2 && activeProduct && inspectorOpen ? (
           <WbInspector
+            key={activeProduct.id}
             product={activeProduct}
             settings={settings}
             onOpenSettings={onOpenSettings}
@@ -2748,9 +3092,11 @@ function AiStep({
                       <div>
                         <span>
                           <MagicWand size={15} weight="fill" />
-                          AI 图片候选
+                          AI 智能套图
                         </span>
-                        <p>加入图库前需检查外观一致性；尺寸、包装和合规事实不会由图片生成。</p>
+                        <p>
+                          基于真实参考图生成白底图、场景图、细节图和规格图；加入图库前需人工确认。
+                        </p>
                       </div>
                       <div>
                         <button
@@ -2764,7 +3110,11 @@ function AiStep({
                           ) : (
                             <ArrowCounterClockwise size={15} />
                           )}
-                          {imageGenerationBusy ? "生成中" : "重新生成"}
+                          {imageGenerationBusy
+                            ? "生成中"
+                            : imageCandidates.length
+                              ? "重新生成套图"
+                              : "生成 AI 套图"}
                         </button>
                         <button
                           type="button"
@@ -3432,6 +3782,7 @@ function FactsStep({
   onToggleSelected,
   onToggleAll,
   onOpenProduct,
+  onEditAi,
   onOpenSettings,
   onBulkFill,
   selectedCount,
@@ -3445,6 +3796,7 @@ function FactsStep({
   onToggleSelected: (id: string) => void;
   onToggleAll: () => void;
   onOpenProduct: (id: string) => void;
+  onEditAi: () => void;
   onOpenSettings: () => void;
   onBulkFill: (
     values: Partial<Pick<ProductRecord["facts"], "price" | "moq" | "stock" | "grossWeight">>,
@@ -3491,6 +3843,12 @@ function FactsStep({
         </div>
       </div>
       <div className="wb-toolbar">
+        <span className={`wb-facts-count ${remainingCount ? "" : "is-complete"}`}>
+          {remainingCount ? `${remainingCount} 个商品待补充` : "已全部完成"}
+        </span>
+        <button type="button" className="wb-link" onClick={onEditAi}>
+          修改 AI 内容
+        </button>
         <label className="wb-select">
           <span className="sr-only">校验状态</span>
           <select
@@ -3523,7 +3881,7 @@ function FactsStep({
       </div>
 
       <div className="wb-bulk-fill">
-        <strong>相同信息可一次填写（可选）</strong>
+        <strong>批量补空缺</strong>
         <small>
           {selectedCount ? `套用到选中的 ${selectedCount} 个商品` : "请先勾选需要套用的商品"}
           ，只填空缺、不覆盖已有值；不同商品请直接点击该商品填写
@@ -3730,8 +4088,165 @@ function WbInspector({
 }) {
   const [asyncOptionField, setAsyncOptionField] = useState("");
   const [asyncOptionError, setAsyncOptionError] = useState("");
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [categoryOptions, setCategoryOptions] = useState<AlibabaCategoryOption[]>([]);
+  const [categoryPath, setCategoryPath] = useState<AlibabaCategoryOption[]>([]);
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const [categoryError, setCategoryError] = useState("");
+  const addImageInputRef = useRef<HTMLInputElement>(null);
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
-    onChange({ ...product, facts: { ...product.facts, [key]: value } });
+    const schemaField = getRequiredSchemaFields(product).find(
+      (field) => schemaFactKey(field) === key,
+    );
+    onChange({
+      ...product,
+      facts: { ...product.facts, [key]: value },
+      schemaFields: schemaField
+        ? {
+            ...product.schemaFields,
+            [schemaField.field]: {
+              value,
+              source: "user_provided",
+            },
+          }
+        : product.schemaFields,
+    });
+  };
+  const setCertifications = (certifications: string[]) => {
+    const schemaField = getRequiredSchemaFields(product).find(
+      (field) => schemaFactKey(field) === "certifications",
+    );
+    onChange({
+      ...product,
+      facts: { ...product.facts, certifications },
+      schemaFields: schemaField
+        ? {
+            ...product.schemaFields,
+            [schemaField.field]: {
+              value: certifications,
+              source: "user_provided",
+            },
+          }
+        : product.schemaFields,
+    });
+  };
+  const loadCategoryOptions = async (categoryId: string) => {
+    setCategoryBusy(true);
+    setCategoryError("");
+    try {
+      const response = await listCategoryChildren(categoryId);
+      setCategoryOptions(response.categories);
+      if (!response.categories.length) {
+        setCategoryError("该类目没有可选子类目，请返回上一级重新选择。");
+      }
+    } catch (error) {
+      setCategoryError(error instanceof Error ? error.message : "类目加载失败，请稍后重试。");
+      setCategoryOptions([]);
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
+  const openCategoryPicker = () => {
+    setCategoryPickerOpen(true);
+    setCategoryPath([]);
+    void loadCategoryOptions("0");
+  };
+  const chooseCategory = async (option: AlibabaCategoryOption) => {
+    const nextPath = [...categoryPath, option];
+    if (!option.leaf) {
+      setCategoryPath(nextPath);
+      void loadCategoryOptions(option.id);
+      return;
+    }
+    const categoryLabel = nextPath.map((item) => item.name).join(" > ");
+    const selectedProduct: ProductRecord = {
+      ...product,
+      facts: {
+        ...product.facts,
+        categoryId: option.id,
+        categoryLabel,
+        categoryLabelZh: categoryLabel,
+      },
+      schemaData: undefined,
+      schemaGuidance: undefined,
+      schemaFields: {
+        categoryId: {
+          value: option.id,
+          source: "user_confirmed",
+        },
+        categoryLabel: {
+          value: categoryLabel,
+          source: "user_confirmed",
+        },
+      },
+    };
+    onChange(selectedProduct);
+    setCategoryPickerOpen(false);
+    setCategoryOptions([]);
+    setCategoryPath([]);
+    setCategoryBusy(true);
+    setCategoryError("");
+    try {
+      const payload = await getCategorySchema(option.id);
+      const schemaData = findSchemaData(payload);
+      if (!schemaData) {
+        throw new Error("Alibaba 未返回类目 Schema");
+      }
+      const schemaGuidance = await getSchemaGuidance(schemaData);
+      onChange(
+        syncProductSchemaFields(
+          {
+            ...selectedProduct,
+            schemaData,
+            schemaGuidance,
+          },
+          settings,
+        ),
+      );
+    } catch (error) {
+      setCategoryError(
+        error instanceof Error ? error.message : "类目已选择，但实时必填字段加载失败。",
+      );
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
+  const goBackCategoryLevel = () => {
+    const nextPath = categoryPath.slice(0, -1);
+    setCategoryPath(nextPath);
+    void loadCategoryOptions(nextPath.at(-1)?.id ?? "0");
+  };
+  const addProductImages = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) {
+      return;
+    }
+    const now = Date.now();
+    onChange({
+      ...product,
+      images: [
+        ...product.images,
+        ...files.map((file, index) => ({
+          id: `added-${now}-${index}`,
+          url: URL.createObjectURL(file),
+          name: file.name,
+          sourceFile: file,
+          source: "upload" as const,
+        })),
+      ],
+    });
+    event.target.value = "";
+  };
+  const removeProductImage = (imageId: string) => {
+    const images = product.images.filter((image) => image.id !== imageId);
+    if (!images.length) {
+      return;
+    }
+    onChange({
+      ...product,
+      images,
+      mainImageId: product.mainImageId === imageId ? images[0].id : product.mainImageId,
+    });
   };
   const setSkuRows = (skuRows: NonNullable<ProductRecord["facts"]["skuRows"]>) => {
     onChange({
@@ -3871,12 +4386,6 @@ function WbInspector({
           <span>
             {missingFacts.length ? `还需填写 ${missingFacts.length} 项` : "必要信息已完成"}
           </span>
-          <small>
-            系统已处理类目、图片、计量单位和运费模板
-            {!settings.priceUnit || !settings.shippingTemplateId
-              ? "；缺少店铺默认值时会提示设置"
-              : ""}
-          </small>
         </div>
 
         <details
@@ -3887,48 +4396,136 @@ function WbInspector({
           <SkuTableEditor rows={product.facts.skuRows ?? []} onChange={setSkuRows} />
         </details>
 
-        <details className="wb-inspector-optional wb-image-generation-optional">
-          <summary>可选：生成更多商品图片</summary>
-          <section className="wb-inspector-section wb-image-generation">
-            <div className="wb-image-generation-heading">
-              <h3>智能补齐商品图</h3>
-              <button
-                type="button"
-                className="button button-secondary wb-image-generation-button"
-                onClick={onRefreshImagePlan}
-                disabled={imagePlanBusy || imageGenerationBusy || product.isDemo}
-              >
-                {imagePlanBusy ? <CircleNotch size={15} className="spin" /> : <Sparkle size={15} />}
-                {imagePlanBusy ? "检查中" : "检查缺失图种"}
-              </button>
+        <section className="wb-inspector-section wb-category-confirmation">
+          <div className="wb-category-heading">
+            <div>
+              <h3>最终 Alibaba 类目</h3>
+              <p>AI 只提供建议，最终叶子类目来自 Alibaba 实时类目树。</p>
             </div>
-            {product.isDemo ? (
-              <p className="wb-image-generation-empty">
-                演示模式使用隔离候选图，不调用真实图片服务或 Alibaba 店铺。
-              </p>
-            ) : null}
-            {imagePlan.length ? (
-              <div className="wb-image-plan">
-                <div className="wb-image-plan-summary">
-                  <span>
-                    缺失 {imagePlan.length} 种 · 可生成{" "}
-                    {imagePlan.filter((slot) => slot.can_generate).length} 种
-                  </span>
-                  <button
-                    type="button"
-                    className="button button-secondary wb-image-generation-button"
-                    onClick={() => onGenerateImages()}
-                    disabled={imageGenerationBusy || !imagePlan.some((slot) => slot.can_generate)}
-                  >
-                    {imageGenerationBusy ? (
-                      <CircleNotch size={15} className="spin" />
-                    ) : (
-                      <MagicWand size={15} />
-                    )}
-                    {imageGenerationBusy ? "生成中" : "生成全部就绪图种"}
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={openCategoryPicker}
+              disabled={categoryBusy || product.isDemo}
+            >
+              {product.facts.categoryId ? "更换类目" : "选择类目"}
+            </button>
+          </div>
+          {product.facts.categoryId ? (
+            <div className="wb-category-selected">
+              <CheckCircle size={17} weight="fill" />
+              <span>
+                <strong>{product.facts.categoryLabel}</strong>
+                <small>叶子类目 ID {product.facts.categoryId}</small>
+              </span>
+            </div>
+          ) : (
+            <div className="wb-category-suggestion">
+              <WarningCircle size={17} />
+              <span>
+                <strong>尚未确认最终类目</strong>
+                <small>
+                  AI 建议：{product.facts.categoryLabel || "等待 AI 分析"}
+                  ；请选择实际叶子类目后继续。
+                </small>
+              </span>
+            </div>
+          )}
+          {categoryPickerOpen ? (
+            <div className="wb-category-picker">
+              <div className="wb-category-picker-bar">
+                {categoryPath.length ? (
+                  <button type="button" className="wb-link" onClick={goBackCategoryLevel}>
+                    <CaretLeft size={14} />
+                    返回上一级
                   </button>
+                ) : (
+                  <span>选择一级类目</span>
+                )}
+                <button
+                  type="button"
+                  className="wb-link"
+                  onClick={() => setCategoryPickerOpen(false)}
+                >
+                  取消
+                </button>
+              </div>
+              {categoryPath.length ? (
+                <p className="wb-category-path">
+                  已选择：{categoryPath.map((item) => item.name).join(" > ")}
+                </p>
+              ) : null}
+              {categoryBusy ? (
+                <div className="wb-category-loading">
+                  <CircleNotch size={17} className="spin" />
+                  正在读取 Alibaba 类目
                 </div>
-                {imagePlan.map((slot) => (
+              ) : null}
+              {categoryError ? <p className="wb-category-error">{categoryError}</p> : null}
+              {!categoryBusy && categoryOptions.length ? (
+                <div className="wb-category-options">
+                  {categoryOptions.map((option) => (
+                    <button key={option.id} type="button" onClick={() => chooseCategory(option)}>
+                      <span>{option.name}</span>
+                      {option.leaf ? <Check size={14} /> : <CaretRight size={14} />}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {!categoryPickerOpen && categoryError ? (
+            <p className="wb-category-error">{categoryError}</p>
+          ) : null}
+        </section>
+
+        <section className="wb-inspector-section wb-image-generation wb-image-generation-prominent">
+          <div className="wb-image-generation-heading">
+            <div>
+              <h3>AI 智能套图</h3>
+              <p>至少使用一张真实参考图，生成结果加入图库前必须人工确认。</p>
+            </div>
+            <button
+              type="button"
+              className="button button-secondary wb-image-generation-button"
+              onClick={onRefreshImagePlan}
+              disabled={imagePlanBusy || imageGenerationBusy || product.isDemo}
+            >
+              {imagePlanBusy ? <CircleNotch size={15} className="spin" /> : <Sparkle size={15} />}
+              {imagePlanBusy ? "检查中" : "检查缺失图种"}
+            </button>
+          </div>
+          {product.isDemo ? (
+            <p className="wb-image-generation-empty">
+              演示模式使用隔离候选图，不调用真实图片服务或 Alibaba 店铺。
+            </p>
+          ) : null}
+          {imagePlan.length ? (
+            <div className="wb-image-plan">
+              <div className="wb-image-plan-summary">
+                <span>
+                  缺失 {imagePlan.length} 种 · 可生成{" "}
+                  {imagePlan.filter((slot) => slot.can_generate).length} 种
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary wb-image-generation-button"
+                  onClick={() => onGenerateImages()}
+                  disabled={imageGenerationBusy || !imagePlan.some((slot) => slot.can_generate)}
+                >
+                  {imageGenerationBusy ? (
+                    <CircleNotch size={15} className="spin" />
+                  ) : (
+                    <MagicWand size={15} />
+                  )}
+                  {imageGenerationBusy ? "生成中" : "生成全部就绪图种"}
+                </button>
+              </div>
+              {imagePlan.map((slot) => {
+                const requiredInputsReady = slot.missing_user_inputs.every((requirement) =>
+                  Boolean(providedImageInputs[requirement.key]?.trim()),
+                );
+                return (
                   <article
                     key={slot.slot}
                     className={`wb-image-plan-item ${slot.can_generate ? "is-ready" : "is-blocked"}`}
@@ -3956,52 +4553,114 @@ function WbInspector({
                       <button
                         type="button"
                         className="wb-link"
-                        onClick={() => onGenerateImages([slot.slot])}
-                        disabled={!slot.can_generate || imageGenerationBusy}
+                        onClick={
+                          slot.can_generate
+                            ? () => onGenerateImages([slot.slot])
+                            : onRefreshImagePlan
+                        }
+                        disabled={
+                          imageGenerationBusy ||
+                          imagePlanBusy ||
+                          (!slot.can_generate && !requiredInputsReady)
+                        }
                       >
-                        生成此图
+                        {slot.can_generate ? "生成此图" : "核对信息并解锁"}
                       </button>
                     </div>
                   </article>
-                ))}
-              </div>
-            ) : null}
-            {imageCandidates.length ? (
-              <div className="wb-image-candidate-list">
-                {imageCandidates.map((candidate) => (
-                  <article key={candidate.slot} className="wb-image-candidate">
+                );
+              })}
+            </div>
+          ) : null}
+          {imageCandidates.length ? (
+            <div className="wb-image-candidate-list">
+              {imageCandidates.map((candidate) => (
+                <article key={candidate.slot} className="wb-image-candidate">
+                  {candidate.image_url ? (
+                    <img src={candidate.image_url} alt={`${candidate.label}候选`} />
+                  ) : (
+                    <div className="wb-image-candidate-error">
+                      <WarningCircle size={17} />
+                      <span>{candidate.error ?? "未返回图片"}</span>
+                    </div>
+                  )}
+                  <div>
+                    <strong>{candidate.label}</strong>
                     {candidate.image_url ? (
-                      <img src={candidate.image_url} alt={`${candidate.label}候选`} />
+                      <button
+                        type="button"
+                        className="wb-link"
+                        onClick={() => onAddGeneratedImage(candidate)}
+                      >
+                        加入图库
+                      </button>
                     ) : (
-                      <div className="wb-image-candidate-error">
-                        <WarningCircle size={17} />
-                        <span>{candidate.error ?? "未返回图片"}</span>
-                      </div>
+                      <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
                     )}
-                    <div>
-                      <strong>{candidate.label}</strong>
-                      {candidate.image_url ? (
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
+        <details className="wb-inspector-optional wb-content-optional">
+          <summary>查看全部字段 / 高级编辑</summary>
+          <section className="wb-inspector-section">
+            <h3>买家可见内容</h3>
+            <div className="wb-field">
+              <span className="wb-field-label">商品图片</span>
+              <div className="wb-field-control">
+                <div className="wb-advanced-images">
+                  {product.images.map((image) => (
+                    <article
+                      key={image.id}
+                      className={image.id === product.mainImageId ? "is-main" : ""}
+                    >
+                      <img src={image.url} alt={image.name} />
+                      <div>
                         <button
                           type="button"
                           className="wb-link"
-                          onClick={() => onAddGeneratedImage(candidate)}
+                          onClick={() =>
+                            onChange({
+                              ...product,
+                              mainImageId: image.id,
+                            })
+                          }
                         >
-                          加入图库
+                          {image.id === product.mainImageId ? "当前主图" : "设为主图"}
                         </button>
-                      ) : (
-                        <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
-                      )}
-                    </div>
-                  </article>
-                ))}
+                        <button
+                          type="button"
+                          className="wb-link is-danger"
+                          onClick={() => removeProductImage(image.id)}
+                          disabled={product.images.length <= 1}
+                          aria-label={`删除 ${image.name}`}
+                        >
+                          <Trash size={13} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                  <button
+                    type="button"
+                    className="wb-advanced-image-add"
+                    onClick={() => addImageInputRef.current?.click()}
+                  >
+                    <Plus size={17} />
+                    添加图片
+                  </button>
+                </div>
+                <input
+                  ref={addImageInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  onChange={addProductImages}
+                />
               </div>
-            ) : null}
-          </section>
-        </details>
-        <details className="wb-inspector-optional wb-content-optional">
-          <summary>可选：修改已确认的标题与描述</summary>
-          <section className="wb-inspector-section">
-            <h3>已确认内容</h3>
+            </div>
             <div className="wb-field">
               <span className="wb-field-label">商品标题</span>
               <div className="wb-field-control">
@@ -4015,31 +4674,54 @@ function WbInspector({
               </div>
             </div>
             <div className="wb-field">
-              <span className="wb-field-label">类目</span>
-              <div className="wb-field-control">
-                <div className="wb-input wb-input-readonly">
-                  {product.facts.categoryLabel ? (
-                    <p>
-                      {product.facts.categoryLabel}
-                      {product.facts.categoryId ? (
-                        <small>ID {product.facts.categoryId}</small>
-                      ) : null}
-                    </p>
-                  ) : (
-                    <p className="wb-input-empty">
-                      等待 AI 类目建议（创建草稿时按 Alibaba 类目 schema 校验）
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="wb-field">
               <span className="wb-field-label">品牌</span>
               <div className="wb-field-control">
                 <div className="wb-input">
                   <input
                     value={product.facts.brand}
                     onChange={(event) => setFact("brand", event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="wb-field">
+              <span className="wb-field-label">关键词</span>
+              <div className="wb-field-control">
+                <div className="wb-input">
+                  <input
+                    value={product.keywords.join(", ")}
+                    onChange={(event) =>
+                      onChange({
+                        ...product,
+                        keywords: event.target.value
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean)
+                          .slice(0, 3),
+                      })
+                    }
+                    placeholder="最多 3 个，用逗号分隔"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="wb-field">
+              <span className="wb-field-label">卖点</span>
+              <div className="wb-field-control">
+                <div className="wb-input wb-input-area">
+                  <textarea
+                    rows={3}
+                    value={product.sellingPoints.join("\n")}
+                    onChange={(event) =>
+                      onChange({
+                        ...product,
+                        sellingPoints: event.target.value
+                          .split("\n")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                    placeholder="每行一个卖点"
                   />
                 </div>
               </div>
@@ -4057,47 +4739,74 @@ function WbInspector({
                 </div>
               </div>
             </div>
+            <h3>商业与规格资料</h3>
+            <p className="wb-advanced-facts-note">
+              以下内容不会由 AI 猜测；仅填写商家、ERP 或商品实物能够确认的真实信息。
+            </p>
+            <div className="wb-advanced-fact-grid">
+              {advancedFactFields.map((field) => (
+                <label key={field.key}>
+                  <span>{field.label}</span>
+                  <input
+                    value={product.facts[field.key]}
+                    onChange={(event) => setFact(field.key, event.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="wb-field">
+              <span className="wb-field-label">认证与合规说明</span>
+              <div className="wb-field-control">
+                <div className="wb-input wb-input-area">
+                  <textarea
+                    rows={3}
+                    value={product.facts.certifications.join("\n")}
+                    onChange={(event) =>
+                      setCertifications(
+                        event.target.value
+                          .split("\n")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      )
+                    }
+                    placeholder="每行一项，仅填写真实证书或合规说明"
+                  />
+                </div>
+              </div>
+            </div>
+            <button type="button" className="wb-link" onClick={onOpenSettings}>
+              修改币种、计量单位、运费模板等店铺默认值
+            </button>
           </section>
         </details>
 
         {product.schemaGuidance ? (
           <section className="wb-inspector-section wb-schema-required">
             <div className="wb-schema-heading">
-              <div>
-                <h3>Alibaba API 实时必填</h3>
-                <p>先由 API 决定字段，再决定谁提供；未知字段一律不交给 AI。</p>
-              </div>
-            </div>
-            <div className="wb-schema-decision">
-              <span className="is-ai">
-                <strong>{aiCandidateCount} 项 AI 可先填</strong>
-                <small>仅文案和图片可见属性，全部需要客户确认</small>
-              </span>
-              <span className="is-human">
-                <strong>{humanFactCount} 项 AI 不得填写</strong>
-                <small>交易、SKU、供应链、包装、履约、合规、权利及未知字段</small>
-              </span>
-            </div>
-            <p className="wb-schema-source-title">人工事实来源细分</p>
-            <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
-              <span className="is-default">
-                <strong>{responsibilityCounts.store_default}</strong>
-                店铺默认
-              </span>
-              <span className="is-system">
-                <strong>{responsibilityCounts.business_system}</strong>
-                ERP / 客户事实
-              </span>
-              <span className="is-merchant">
-                <strong>{responsibilityCounts.merchant}</strong>
-                客户填写
-              </span>
+              <h3>需补充字段（{inputSchemaFields.length}）</h3>
             </div>
             <details className="wb-schema-matrix">
               <summary>
                 查看全部 {allSchemaFields.length} 个字段与责任（必填 {requiredSchemaFields.length}）
               </summary>
               <div>
+                <p className="wb-schema-policy">
+                  AI 仅可起草文案与图片可见属性；价格、SKU、库存、材质和合规必须使用真实值。
+                </p>
+                <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
+                  <span className="is-default">
+                    <strong>{responsibilityCounts.store_default}</strong>
+                    店铺默认
+                  </span>
+                  <span className="is-system">
+                    <strong>{responsibilityCounts.business_system}</strong>
+                    ERP / 客户事实
+                  </span>
+                  <span className="is-merchant">
+                    <strong>{responsibilityCounts.merchant}</strong>
+                    客户填写
+                  </span>
+                </div>
                 <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
                 {allSchemaFields
                   .filter((field) => field.responsibility === "ai_candidate")
@@ -4387,12 +5096,7 @@ function WbInspector({
                       <textarea
                         rows={2}
                         value={complianceNote}
-                        onChange={(event) =>
-                          onChange({
-                            ...product,
-                            facts: { ...product.facts, certifications: [event.target.value] },
-                          })
-                        }
+                        onChange={(event) => setCertifications([event.target.value])}
                       />
                       <small>{complianceNote.length}/200</small>
                     </div>
@@ -5304,6 +6008,316 @@ function DraftDetailDrawer({
   );
 }
 
+function TranslationStep({
+  products,
+  targetCountries,
+  targetLanguages,
+  targetMarketCode,
+  targetLanguageCode,
+  busy,
+  onTargetMarketChange,
+  onTargetLanguageChange,
+  onTranslate,
+  onChange,
+  onConfirm,
+  onConfirmAll,
+  onContinue,
+}: {
+  products: ProductRecord[];
+  targetCountries: TargetCountry[];
+  targetLanguages: TargetLanguage[];
+  targetMarketCode: string;
+  targetLanguageCode: string;
+  busy: boolean;
+  onTargetMarketChange: (code: string) => void;
+  onTargetLanguageChange: (code: string) => void;
+  onTranslate: () => void;
+  onChange: (
+    productId: string,
+    patch: Partial<
+      Pick<ProductTranslation, "title" | "keywords" | "sellingPoints" | "description">
+    >,
+  ) => void;
+  onConfirm: (productId: string) => void;
+  onConfirmAll: () => void;
+  onContinue: () => void;
+}) {
+  const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
+  const market = getTargetMarket(targetMarketCode, targetLanguageCode);
+  const countryLanguageCodes = targetMarketCode
+    ? (countries[targetMarketCode as TCountryCode]?.languages ?? [])
+    : [];
+  const countryLanguages = countryLanguageCodes
+    .map((code) => targetLanguages.find((language) => language.code === code))
+    .filter((language): language is TargetLanguage => Boolean(language));
+  const otherLanguages = targetLanguages.filter(
+    (language) => !countryLanguageCodes.includes(language.code),
+  );
+  const activeProduct =
+    products.find((product) => product.id === activeProductId) ?? products[0] ?? null;
+  const matchingTranslation =
+    activeProduct && hasMarketTranslation(activeProduct, market) ? activeProduct.translation : null;
+  const translatedCount = products.filter((product) =>
+    hasMarketTranslation(product, market),
+  ).length;
+  const confirmedCount = products.filter(
+    (product) => hasMarketTranslation(product, market) && product.translation.confirmed,
+  ).length;
+  const allTranslated = products.length > 0 && translatedCount === products.length;
+  const allConfirmed = products.length > 0 && confirmedCount === products.length;
+
+  useEffect(() => {
+    if (products.length && !products.some((product) => product.id === activeProductId)) {
+      setActiveProductId(products[0].id);
+    }
+  }, [activeProductId, products]);
+
+  return (
+    <div className="step-page translation-step">
+      <div className="step-heading">
+        <div>
+          <h2>翻译为目标市场语言</h2>
+        </div>
+        <span className="quiet-stat">
+          仅翻译标题、关键词、卖点和详情；价格、SKU、物流与合规事实不变
+        </span>
+      </div>
+
+      <div className="translation-market-bar">
+        <label>
+          <span>目标国家 / 市场</span>
+          <select
+            value={targetMarketCode}
+            onChange={(event) => onTargetMarketChange(event.target.value)}
+          >
+            <option value="">请选择国家或地区</option>
+            {targetCountries.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>目标语言</span>
+          <select
+            value={targetLanguageCode}
+            onChange={(event) => onTargetLanguageChange(event.target.value)}
+            disabled={!targetMarketCode}
+          >
+            <option value="">请选择目标语言</option>
+            {countryLanguages.length ? (
+              <optgroup label="该国家 / 地区常用语言">
+                {countryLanguages.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.label}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            <optgroup label="其他语言">
+              {otherLanguages.map((language) => (
+                <option key={language.code} value={language.code}>
+                  {language.label}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <small>{market ? `发布文案语言：${market.languageCode}` : "可覆盖系统推荐语言"}</small>
+        </label>
+        <div className="translation-scope">
+          <span>翻译范围</span>
+          <strong>标题 · 关键词 · 卖点 · 商品详情</strong>
+          <small>类目枚举和业务事实继续使用 Alibaba API 原值</small>
+        </div>
+        <button
+          type="button"
+          className="button button-dark translation-run"
+          onClick={onTranslate}
+          disabled={!market || busy || !products.length}
+        >
+          {busy ? <CircleNotch size={17} className="spin" /> : <Translate size={17} />}
+          {busy ? "正在翻译" : translatedCount ? "重新生成翻译" : "自动翻译全部"}
+        </button>
+      </div>
+
+      <div className="translation-status-strip">
+        <span>
+          <strong>{products.length}</strong>
+          待处理草稿
+        </span>
+        <span>
+          <strong>{translatedCount}</strong>
+          已生成翻译
+        </span>
+        <span className={allConfirmed ? "is-complete" : ""}>
+          <strong>{confirmedCount}</strong>
+          已人工确认
+        </span>
+        <p>
+          <WarningCircle size={15} weight="fill" />
+          AI 翻译不会改写数字、单位、型号、材质或认证；正式发布前仍需逐项核对。
+        </p>
+      </div>
+
+      <div className="translation-workspace">
+        <div className="translation-product-list">
+          {products.map((product) => {
+            const translation = hasMarketTranslation(product, market) ? product.translation : null;
+            return (
+              <button
+                type="button"
+                key={product.id}
+                className={product.id === activeProduct?.id ? "is-active" : ""}
+                onClick={() => setActiveProductId(product.id)}
+              >
+                <img src={getMainProductImage(product).url} alt="" />
+                <span>
+                  <strong>{product.title || product.reference}</strong>
+                  <small>{product.reference}</small>
+                </span>
+                {translation?.confirmed ? (
+                  <CheckCircle size={17} weight="fill" />
+                ) : translation ? (
+                  <WarningCircle size={17} weight="fill" />
+                ) : (
+                  <Translate size={17} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="translation-editor">
+          {activeProduct && matchingTranslation ? (
+            <>
+              <div className="translation-editor-head">
+                <span>
+                  <small>{activeProduct.reference}</small>
+                  <strong>
+                    {matchingTranslation.targetMarketLabel} ·{" "}
+                    {matchingTranslation.targetLanguageLabel}
+                  </strong>
+                </span>
+                <SourceBadge
+                  source={matchingTranslation.confirmed ? "trusted" : "ai"}
+                  label={matchingTranslation.confirmed ? "人工已确认" : "AI 翻译待确认"}
+                />
+              </div>
+              <div className="translation-field">
+                <span>商品标题</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.title}</p>
+                  <textarea
+                    rows={2}
+                    value={matchingTranslation.title}
+                    onChange={(event) => onChange(activeProduct.id, { title: event.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>关键词</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.keywords.join(" · ") || "—"}</p>
+                  <textarea
+                    rows={2}
+                    value={matchingTranslation.keywords.join(", ")}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, {
+                        keywords: event.target.value
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>核心卖点</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.sellingPoints.join("\n") || "—"}</p>
+                  <textarea
+                    rows={4}
+                    value={matchingTranslation.sellingPoints.join("\n")}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, {
+                        sellingPoints: event.target.value
+                          .split("\n")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-field">
+                <span>商品详情</span>
+                <div className="translation-pair">
+                  <p>{activeProduct.description || "—"}</p>
+                  <textarea
+                    rows={5}
+                    value={matchingTranslation.description}
+                    onChange={(event) =>
+                      onChange(activeProduct.id, { description: event.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="translation-editor-actions">
+                <small>左侧为已确认原文，右侧为正式发布候选译文。</small>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => onConfirm(activeProduct.id)}
+                  disabled={!matchingTranslation.title.trim() || matchingTranslation.confirmed}
+                >
+                  <Check size={16} />
+                  {matchingTranslation.confirmed ? "当前译文已确认" : "确认当前译文"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="translation-empty">
+              <Translate size={28} />
+              <strong>{market ? `尚未生成${market.languageLabel}版本` : "先选择目标国家"}</strong>
+              <p>点击“自动翻译全部”后，在这里逐项核对原文和译文。</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="translation-bottom-bar">
+        <span>
+          {allConfirmed
+            ? "全部译文已人工确认，发布时将使用目标语言文案。"
+            : `还需确认 ${products.length - confirmedCount} 个商品的译文。`}
+        </span>
+        <div>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={onConfirmAll}
+            disabled={!allTranslated || allConfirmed}
+          >
+            <CheckSquare size={16} />
+            确认全部译文
+          </button>
+          <button
+            type="button"
+            className="button button-primary button-large"
+            onClick={onContinue}
+            disabled={!allConfirmed}
+          >
+            进入回读发布
+            <ArrowRight size={17} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PreviewStep({
   products,
   selected,
@@ -5311,6 +6325,7 @@ function PreviewStep({
   storeName,
   unit,
   currency,
+  targetLanguage,
   onSelect,
   onPublish,
   onPublishOne,
@@ -5323,6 +6338,7 @@ function PreviewStep({
   storeName: string;
   unit: string;
   currency: string;
+  targetLanguage: string;
   onSelect: (id: string) => void;
   onPublish: () => void;
   onPublishOne: (id: string) => void;
@@ -5376,7 +6392,7 @@ function PreviewStep({
       [
         product.draftProductId ?? "",
         product.reference,
-        product.title,
+        product.translation?.confirmed ? product.translation.title : product.title,
         storeName,
         product.stage === "published"
           ? "已发布"
@@ -5408,6 +6424,7 @@ function PreviewStep({
       <div className="step-heading">
         <div>
           <h2>回读草稿并发布</h2>
+          <small>发布文案：{targetLanguage || "未选择目标语言"}</small>
         </div>
         <div className="readback-head-actions">
           <button
@@ -5489,7 +6506,11 @@ function PreviewStep({
                           <div className="draft-table-product">
                             <img src={getMainProductImage(product).url} alt="" />
                             <span>
-                              <strong>{product.title || product.reference}</strong>
+                              <strong>
+                                {product.translation?.confirmed
+                                  ? product.translation.title
+                                  : product.title || product.reference}
+                              </strong>
                               <small>{product.reference}</small>
                             </span>
                           </div>
@@ -5701,13 +6722,13 @@ function SourceBadge({
 
 function actionLabel(step: number, aiPending: number) {
   if (step === 0) {
-    return "下一步：AI 内容与套图";
+    return "AI 识别并继续";
   }
   if (step === 1) {
-    return aiPending ? `请先确认剩余 ${aiPending} 项` : "下一步：补齐可信事实";
+    return aiPending ? `请先确认剩余 ${aiPending} 项` : "继续补齐资料";
   }
   if (step === 2) {
-    return "下一步：创建草稿";
+    return "资料完成，创建草稿";
   }
   if (step === 3) {
     return "校验并创建草稿";

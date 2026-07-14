@@ -3,11 +3,16 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.clients.ai import AIProviderError
 from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
 from backend.app.config import Settings
 from backend.app.dependencies import get_ai_client, get_alibaba_client
 from backend.app.main import app
-from backend.app.models import ProductImageAnalysis
+from backend.app.models import (
+    ProductContentTranslationRequest,
+    ProductContentTranslationResponse,
+    ProductImageAnalysis,
+)
 
 SCHEMA_XML = '<itemSchema><field id="productTitle" type="input" /></itemSchema>'
 
@@ -91,12 +96,37 @@ class FakeAIClient:
             "source_image_preservation_required": True,
         }
 
+    async def translate_product_content(
+        self,
+        request: ProductContentTranslationRequest,
+    ) -> ProductContentTranslationResponse:
+        return ProductContentTranslationResponse(
+            target_language_code=request.target_language_code,
+            target_language=request.target_language,
+            title="Professionelles Pinselset",
+            keywords=["Pinselset"],
+            selling_points=["Nylonborsten"],
+            description="Käuferorientierte Übersetzung.",
+        )
+
 
 fake_ai = FakeAIClient()
 
 
 async def fake_ai_client() -> AsyncIterator[FakeAIClient]:
     yield fake_ai
+
+
+class FailingTranslationAIClient(FakeAIClient):
+    async def translate_product_content(
+        self,
+        request: ProductContentTranslationRequest,
+    ) -> ProductContentTranslationResponse:
+        raise AIProviderError("translation provider unavailable")
+
+
+async def failing_translation_ai_client() -> AsyncIterator[FailingTranslationAIClient]:
+    yield FailingTranslationAIClient()
 
 
 def test_health_and_capabilities() -> None:
@@ -137,6 +167,55 @@ def test_product_analysis_passes_schema_field_guidance_to_ai() -> None:
         assert response.status_code == 200
         assert fake_ai.received_field_guidance is not None
         assert "productTitle" in fake_ai.received_field_guidance
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_product_translation_returns_only_localized_copy_fields() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/translate-content",
+            json={
+                "target_language_code": "de-DE",
+                "target_language": "German",
+                "title": "Professional Paint Brush Set",
+                "keywords": ["paint brush set"],
+                "selling_points": ["nylon bristles"],
+                "description": "Buyer-facing copy.",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["target_language_code"] == "de-DE"
+        assert body["title"] == "Professionelles Pinselset"
+        assert set(body) == {
+            "target_language_code",
+            "target_language",
+            "title",
+            "keywords",
+            "selling_points",
+            "description",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_product_translation_returns_provider_errors_as_bad_gateway() -> None:
+    app.dependency_overrides[get_ai_client] = failing_translation_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/translate-content",
+            json={
+                "target_language_code": "de-DE",
+                "target_language": "German",
+                "title": "Professional Paint Brush Set",
+            },
+        )
+        assert response.status_code == 502
+        assert response.json()["detail"] == "translation provider unavailable"
     finally:
         app.dependency_overrides.clear()
 

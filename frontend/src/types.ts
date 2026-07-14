@@ -202,6 +202,19 @@ export type DraftFieldDifference = {
   status: "changed" | "matched";
 };
 
+export type ProductTranslation = {
+  targetMarketCode: string;
+  targetMarketLabel: string;
+  targetLanguageCode: string;
+  targetLanguageLabel: string;
+  title: string;
+  keywords: string[];
+  sellingPoints: string[];
+  description: string;
+  confirmed: boolean;
+  translatedAt: string;
+};
+
 export type ProductRecord = {
   id: string;
   reference: string;
@@ -234,6 +247,7 @@ export type ProductRecord = {
   schemaFields?: Record<string, DraftField>;
   fieldTasks?: FieldTask[];
   fieldTaskSummary?: FieldTaskSummary;
+  translation?: ProductTranslation;
   isDemo?: boolean;
 };
 
@@ -340,6 +354,19 @@ export type AlibabaStoreDirectory = {
   stores: AlibabaConnectedStore[];
 };
 
+export type AlibabaCategoryOption = {
+  id: string;
+  name: string;
+  leaf: boolean;
+  level: number | null;
+  child_ids: string[];
+};
+
+export type AlibabaCategoryLevel = {
+  parent: AlibabaCategoryOption | null;
+  categories: AlibabaCategoryOption[];
+};
+
 export type ListingFieldGroup = {
   key: string;
   label: string;
@@ -365,6 +392,15 @@ export type ImageAnalysisResponse = {
     reason: string;
   }>;
   warnings: string[];
+};
+
+export type ProductContentTranslationResponse = {
+  target_language_code: string;
+  target_language: string;
+  title: string;
+  keywords: string[];
+  selling_points: string[];
+  description: string;
 };
 
 export type ImageSlot = "main" | "detail" | "scenario" | "specification" | "packaging";
