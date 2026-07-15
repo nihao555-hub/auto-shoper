@@ -5931,15 +5931,16 @@ tr.is-failed .bt-store small {
 .wb-page .ai-review-list {
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .wb-page .ai-review-card {
   display: flex;
   min-width: 0;
-  min-height: 100%;
+  min-height: auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   border: 0;
   border-radius: 0;
 }
@@ -5947,8 +5948,8 @@ tr.is-failed .bt-store small {
 .wb-page .ai-review-content {
   display: flex;
   min-width: 0;
-  min-height: 0;
-  flex: 1;
+  min-height: auto;
+  flex: none;
   flex-direction: column;
   padding: 0;
 }
@@ -6161,10 +6162,10 @@ tr.is-failed .bt-store small {
 
 .wb-page .ai-field-table-scroll {
   min-width: 0;
-  min-height: 0;
-  flex: 1;
+  min-height: auto;
+  flex: none;
   margin: 0;
-  overflow: auto;
+  overflow: visible;
   border: 0;
   border-radius: 0;
 }
@@ -6304,6 +6305,104 @@ tr.is-failed .bt-store small {
   min-height: 32px;
   border-radius: 3px;
   font-size: 10px;
+}
+
+.wb-page .ai-analysis-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #f1c7bb;
+  background: var(--ds-danger-soft);
+  color: var(--ds-danger);
+}
+
+.wb-page .ai-analysis-error > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.wb-page .ai-analysis-error small {
+  color: var(--ds-text-2);
+}
+
+.wb-page .upload-grouping-choice {
+  display: inline-flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid var(--ds-border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.wb-page .upload-grouping-choice button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--ds-border);
+  background: #fff;
+  color: var(--ds-text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.wb-page .upload-grouping-choice button:last-child {
+  border-right: 0;
+}
+
+.wb-page .upload-grouping-choice button.is-active {
+  background: var(--ds-brand-soft);
+  color: var(--ds-brand);
+  font-weight: 700;
+}
+
+.wb-page .upload-card-check {
+  border: 1px solid var(--ds-border);
+  cursor: pointer;
+}
+
+.wb-page .upload-card-check.is-selected {
+  border-color: var(--ds-brand);
+  background: var(--ds-brand);
+  color: #fff;
+}
+
+.wb-page .upload-card-add-images,
+.wb-page .upload-card-split {
+  justify-content: flex-start;
+  padding: 0;
+  font-size: 9px;
+}
+
+.wb-page .upload-image-order-tools {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-top: 1px solid var(--ds-divider);
+  color: var(--ds-text-3);
+  font-size: 8px;
+}
+
+.wb-page .upload-image-order-tools button {
+  display: grid;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--ds-border);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--ds-text-2);
+  cursor: pointer;
+}
+
+.wb-page .upload-card {
+  height: 300px;
 }
 
 .wb-page .draft-step,

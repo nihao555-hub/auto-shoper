@@ -153,9 +153,10 @@ export const importListingProducts = async (file: File): Promise<ListingImportRe
 };
 
 export const recordListingMetricEvent = async (event: {
-  event_type: "upload_started" | "task_evaluated";
+  event_type: "upload_started" | "task_evaluated" | "analysis_failed" | "field_confirmed";
   batch_id?: string;
   reference?: string;
+  reason?: string;
   payload?: Record<string, unknown>;
 }): Promise<void> => {
   const response = await apiFetch(`${API_ROOT}/products/official-listing/metrics/events`, {

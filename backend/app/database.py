@@ -1713,7 +1713,7 @@ class Database:
                     completed_tasks += completed
                     manual_tasks += confirm + fill + invalid
                     evaluated_tasks += completed + confirm + fill + invalid
-            if event_type in {"draft_failed", "publish_failed"}:
+            if event_type in {"analysis_failed", "draft_failed", "publish_failed"}:
                 failure_events += 1
                 reason = str(row["reason"] or "").lower()
                 if any(

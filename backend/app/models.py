@@ -649,6 +649,7 @@ class ListingFeatureFlagsUpdate(BaseModel):
 class ListingMetricEventRequest(BaseModel):
     event_type: Literal[
         "upload_started",
+        "analysis_failed",
         "task_evaluated",
         "import_completed",
         "template_applied",

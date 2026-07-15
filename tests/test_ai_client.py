@@ -92,6 +92,49 @@ async def test_image_analysis_sends_one_consolidated_multi_image_request() -> No
 
 
 @pytest.mark.asyncio
+async def test_image_analysis_retries_one_provider_timeout() -> None:
+    calls = 0
+    provider_data = {
+        "observed_fields": {},
+        "generated_fields": {"title": {"value": "Recovered Product"}},
+        "category_suggestions": [],
+        "warnings": [],
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ReadTimeout("provider timeout", request=request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(provider_data)}}]},
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.analyze_product_image(b"image", "image/jpeg", {}, None)
+    finally:
+        await client.close()
+
+    assert calls == 2
+    assert result.generated_fields["title"].value == "Recovered Product"
+
+
+@pytest.mark.asyncio
+async def test_image_analysis_localizes_timeout_after_retry() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("provider timeout", request=request)
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AIProviderError, match="timed out; please retry"):
+            await client.analyze_product_image(b"image", "image/jpeg", {}, None)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_image_generation_uses_configured_model() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(await request.aread())

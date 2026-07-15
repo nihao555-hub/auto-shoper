@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from typing import Any
@@ -131,7 +132,7 @@ class AIClient:
             ],
             "temperature": 0.2,
         }
-        response = await self.client.post("/chat/completions", json=payload)
+        response = await self._post_with_retry("/chat/completions", json=payload)
         if response.is_error:
             raise AIProviderError(self._provider_error(response))
         try:
@@ -223,7 +224,7 @@ class AIClient:
             "for the target market while preserving the source meaning. "
             f"Source content: {json.dumps(content, ensure_ascii=False)}"
         )
-        response = await self.client.post(
+        response = await self._post_with_retry(
             "/chat/completions",
             json={
                 "model": self.settings.text_model,
@@ -259,7 +260,7 @@ class AIClient:
         )
 
     async def generate_image(self, prompt: str, size: str, count: int) -> dict[str, Any]:
-        response = await self.client.post(
+        response = await self._post_with_retry(
             "/images/generations",
             json={
                 "model": self.settings.image_model,
@@ -326,6 +327,20 @@ class AIClient:
             "requires_confirmation": True,
             "source_image_preservation_required": True,
         }
+
+    async def _post_with_retry(self, path: str, **kwargs: Any) -> httpx.Response:
+        attempts = 2
+        for attempt in range(attempts):
+            try:
+                return await self.client.post(path, **kwargs)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(0.25)
+                    continue
+                if isinstance(exc, httpx.TimeoutException):
+                    raise AIProviderError("AI provider timed out; please retry") from exc
+                raise AIProviderError("AI provider connection failed; please retry") from exc
+        raise AIProviderError("AI provider request failed")
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any]:

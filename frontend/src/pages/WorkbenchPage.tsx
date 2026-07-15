@@ -33,6 +33,7 @@ import {
   type ChangeEvent,
   type DragEvent,
   Fragment,
+  type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
@@ -103,7 +104,7 @@ type WorkbenchPageProps = {
   activeStore: AlibabaConnectedStore | null;
   products: ProductRecord[];
   settings: StoreSettings;
-  onProductsChange: (products: ProductRecord[]) => void;
+  onProductsChange: (products: SetStateAction<ProductRecord[]>) => void;
   onDataModeChange: (mode: DataMode) => void;
   onResetDemo: () => void;
   onOpenSettings: () => void;
@@ -354,6 +355,9 @@ const describeAiFailure = (message: string | undefined): string => {
   if (lower.includes("insufficient credits") || lower.includes("insufficient_quota")) {
     return "AI 服务额度不足，请联系管理员。";
   }
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return "AI 服务响应超时，系统已自动重试一次；你可以稍后单独重试该商品。";
+  }
   if (lower.includes("not register") || lower.includes("model_not_found")) {
     return "AI 服务暂不可用，请联系管理员。";
   }
@@ -407,6 +411,9 @@ export function WorkbenchPage({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadGroupingMode, setUploadGroupingMode] = useState<
+    "single_product" | "separate_products"
+  >("single_product");
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [targetMarketCode, setTargetMarketCode] = useState("");
@@ -435,6 +442,7 @@ export function WorkbenchPage({
     backendConnected &&
     Boolean(capabilities?.alibaba_credentials_configured);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetProductId = useRef<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
   const plannedImageProductsRef = useRef(new Set<string>());
@@ -641,9 +649,10 @@ export function WorkbenchPage({
     products.length > 0 &&
     products.every(
       (product) =>
-        product.stage !== "uploaded" &&
-        product.stage !== "analyzing" &&
-        Boolean(product.title.trim() || product.aiConfirmed),
+        product.stage === "error" ||
+        (product.stage !== "uploaded" &&
+          product.stage !== "analyzing" &&
+          Boolean(product.title.trim() || product.aiConfirmed)),
     );
   const aiReviewComplete = analysisComplete && products.every((product) => product.aiConfirmed);
   const allProductsReady =
@@ -677,8 +686,8 @@ export function WorkbenchPage({
   }, [maxAccessibleStep, step]);
 
   const updateProduct = (nextProduct: ProductRecord) => {
-    onProductsChange(
-      products.map((product) => {
+    onProductsChange((currentProducts) =>
+      currentProducts.map((product) => {
         if (product.id !== nextProduct.id) {
           return product;
         }
@@ -698,7 +707,9 @@ export function WorkbenchPage({
   };
 
   const replaceProduct = (id: string, updater: (product: ProductRecord) => ProductRecord) => {
-    onProductsChange(products.map((product) => (product.id === id ? updater(product) : product)));
+    onProductsChange((currentProducts) =>
+      currentProducts.map((product) => (product.id === id ? updater(product) : product)),
+    );
   };
 
   const hydrateListingTasks = async (product: ProductRecord): Promise<ProductRecord> => {
@@ -716,7 +727,14 @@ export function WorkbenchPage({
       };
     }
     if (!product.schemaData) {
-      return product;
+      const tasks = buildFallbackAiTasks(product);
+      const summary = summarizeFieldTasks(tasks);
+      return {
+        ...product,
+        aiConfirmed: summary.confirm === 0,
+        fieldTasks: tasks,
+        fieldTaskSummary: summary,
+      };
     }
     const result = await getListingTasks(product, settings);
     if (featureFlags.metrics) {
@@ -736,7 +754,7 @@ export function WorkbenchPage({
     };
   };
 
-  const handleFiles = (files: FileList | File[]) => {
+  const handleFiles = (files: FileList | File[], targetProductId: string | null = null) => {
     const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
     if (!imageFiles.length) {
       notify("warning", "没有可用图片", "请选择 JPG、PNG 或 WebP 商品图片。");
@@ -744,59 +762,91 @@ export function WorkbenchPage({
     }
 
     const now = Date.now();
-    const images = imageFiles.map((file, index) => ({
-      id: `uploaded-${now}-image-${index}`,
-      url: URL.createObjectURL(file),
-      name: file.name,
-      sourceFile: file,
-      source: "upload" as const,
-    }));
-    const newProduct: ProductRecord = {
-      id: `uploaded-${now}`,
-      reference: `AUTO-${String(now).slice(-6)}-01`,
-      images,
-      mainImageId: images[0].id,
-      title: "",
-      keywords: [],
-      sellingPoints: [],
-      description: "",
-      visibleTraits: [],
-      aiConfirmed: false,
-      stage: "uploaded",
-      facts: createEmptyFacts(settings),
-      errors: ["等待 AI 分析"],
-    };
+    const createImages = (filesForProduct: File[], productIndex: number) =>
+      filesForProduct.map((file, imageIndex) => ({
+        id: `uploaded-${now}-${productIndex}-image-${imageIndex}`,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        sourceFile: file,
+        source: "upload" as const,
+      }));
+    if (targetProductId) {
+      const images = createImages(imageFiles, 0);
+      replaceProduct(targetProductId, (product) => ({
+        ...product,
+        images: [...product.images, ...images],
+        aiConfirmed: false,
+        analyzedAt: undefined,
+        stage: "uploaded",
+        fieldTasks: undefined,
+        fieldTaskSummary: undefined,
+        errors: ["图片已更新，请重新进行 AI 分析"],
+      }));
+      setActiveProductId(targetProductId);
+      setSelected((current) => new Set(current).add(targetProductId));
+      notify("success", `已追加 ${images.length} 张图片`, "图片变化后需要重新进行 AI 分析。");
+      return;
+    }
+    const groups =
+      uploadGroupingMode === "separate_products" ? imageFiles.map((file) => [file]) : [imageFiles];
+    const newProducts = groups.map((filesForProduct, productIndex): ProductRecord => {
+      const images = createImages(filesForProduct, productIndex);
+      return {
+        id: `uploaded-${now}-${productIndex}`,
+        reference: `AUTO-${String(now).slice(-6)}-${String(productIndex + 1).padStart(2, "0")}`,
+        images,
+        mainImageId: images[0].id,
+        title: "",
+        keywords: [],
+        sellingPoints: [],
+        description: "",
+        visibleTraits: [],
+        aiConfirmed: false,
+        stage: "uploaded",
+        facts: createEmptyFacts(settings),
+        errors: ["等待 AI 分析"],
+      };
+    });
     if (dataMode === "live" && backendConnected && featureFlags.metrics) {
-      void recordListingMetricEvent({
-        event_type: "upload_started",
-        batch_id: batchId,
-        reference: newProduct.reference,
-      });
+      for (const product of newProducts) {
+        void recordListingMetricEvent({
+          event_type: "upload_started",
+          batch_id: batchId,
+          reference: product.reference,
+          payload: { image_count: product.images.length, grouping_mode: uploadGroupingMode },
+        });
+      }
     }
 
     const shouldReplaceDemo = dataMode === "demo";
-    const nextProducts = shouldReplaceDemo ? [newProduct] : [...products, newProduct];
     if (shouldReplaceDemo) {
       onDataModeChange("live");
     }
-    onProductsChange(nextProducts);
-    setSelected((current) =>
-      shouldReplaceDemo ? new Set([newProduct.id]) : new Set([...current, newProduct.id]),
+    onProductsChange((currentProducts) =>
+      shouldReplaceDemo ? newProducts : [...currentProducts, ...newProducts],
     );
-    setActiveProductId(newProduct.id);
+    setSelected((current) =>
+      shouldReplaceDemo
+        ? new Set(newProducts.map((product) => product.id))
+        : new Set([...current, ...newProducts.map((product) => product.id)]),
+    );
+    setActiveProductId(newProducts[0].id);
     setStep(0);
     setMaxUnlockedStep(0);
     setInspectorOpen(false);
     notify(
       "success",
-      `已加入 1 个商品 · ${images.length} 张图片`,
-      "第一张默认为主图，可在下一步更换；AI 会综合分析整组图片。",
+      `已加入 ${newProducts.length} 个商品 · ${imageFiles.length} 张图片`,
+      uploadGroupingMode === "single_product"
+        ? "本次选择的图片已合并为同一商品，第一张默认为主图。"
+        : "本次选择的每张图片已分别建立一个商品。",
     );
   };
 
   const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
-      handleFiles(event.target.files);
+      handleFiles(event.target.files, uploadTargetProductId.current);
+      uploadTargetProductId.current = null;
       event.target.value = "";
     }
   };
@@ -804,7 +854,13 @@ export function WorkbenchPage({
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
+    uploadTargetProductId.current = null;
     handleFiles(event.dataTransfer.files);
+  };
+
+  const pickProductImages = (productId: string | null = null) => {
+    uploadTargetProductId.current = productId;
+    fileInputRef.current?.click();
   };
 
   const togglePhotoSelection = (imageId: string) => {
@@ -978,6 +1034,26 @@ export function WorkbenchPage({
         stage: "error",
         errors: [message],
       }));
+      if (featureFlags.metrics) {
+        void recordListingMetricEvent({
+          event_type: "analysis_failed",
+          batch_id: batchId,
+          reference: product.reference,
+          reason: message,
+        });
+        setListingMetrics((current) =>
+          current
+            ? {
+                ...current,
+                total_events: current.total_events + 1,
+                counters: {
+                  ...current.counters,
+                  analysis_failed: (current.counters.analysis_failed ?? 0) + 1,
+                },
+              }
+            : current,
+        );
+      }
       return { success: false as const, error: message };
     }
   };
@@ -996,27 +1072,35 @@ export function WorkbenchPage({
       return;
     }
     setBusy(true);
-    const results = await Promise.all(
-      products
-        .filter((product) => product.stage === "uploaded" || product.stage === "error")
-        .map(analyzeOne),
+    const targets = products.filter(
+      (product) => product.stage === "uploaded" || product.stage === "error",
     );
+    const results: Array<Awaited<ReturnType<typeof analyzeOne>>> = [];
+    const concurrency = 3;
+    for (let index = 0; index < targets.length; index += concurrency) {
+      results.push(
+        ...(await Promise.all(targets.slice(index, index + concurrency).map(analyzeOne))),
+      );
+    }
     setBusy(false);
     const failures = results.filter((result) => !result.success);
     if (!results.length) {
       notify("info", "没有需要分析的商品", "所有商品都已完成 AI 分析。");
       return;
     }
-    if (!failures.length) {
+    const successCount = results.length - failures.length;
+    if (successCount > 0) {
       setMaxUnlockedStep((current) => Math.max(current, 1));
       setStep(1);
+    }
+    if (!failures.length) {
       notify("success", "AI 分析已完成", "请确认标题、类目建议和图片可见属性。");
       return;
     }
     notify(
       failures.length === results.length ? "error" : "warning",
-      `AI 分析完成：成功 ${results.length - failures.length}/${results.length}`,
-      describeAiFailure(failures[0].error),
+      `AI 分析完成：成功 ${successCount}/${results.length}`,
+      `${describeAiFailure(failures[0].error)} 成功商品可先确认，失败商品可单独重试。`,
     );
   };
 
@@ -1048,6 +1132,20 @@ export function WorkbenchPage({
     setBusy(true);
     try {
       const schemaFields = { ...product.schemaFields };
+      if (!product.schemaData) {
+        const next = confirmFallbackTaskLocally(product, task);
+        updateProduct(next);
+        if (featureFlags.metrics) {
+          void recordListingMetricEvent({
+            event_type: "field_confirmed",
+            batch_id: batchId,
+            reference: product.reference,
+            payload: { field_path: fieldPath, fallback_without_schema: true },
+          });
+        }
+        notify("success", `已确认：${task.label}`);
+        return;
+      }
       if (product.isDemo) {
         const candidate = schemaFields[fieldPath];
         if (candidate) {
@@ -1858,7 +1956,7 @@ export function WorkbenchPage({
         }
       }
     }
-    onProductsChange(products.filter((item) => item.id !== id));
+    onProductsChange((currentProducts) => currentProducts.filter((item) => item.id !== id));
     setSelected((current) => {
       const next = new Set(current);
       next.delete(id);
@@ -1871,6 +1969,101 @@ export function WorkbenchPage({
       ...product,
       mainImageId: imageId,
     }));
+  };
+
+  const moveProductImage = (productId: string, imageId: string, direction: -1 | 1) => {
+    replaceProduct(productId, (product) => {
+      const index = product.images.findIndex((image) => image.id === imageId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= product.images.length) {
+        return product;
+      }
+      const images = [...product.images];
+      [images[index], images[target]] = [images[target], images[index]];
+      return { ...product, images };
+    });
+  };
+
+  const splitProductImages = (productId: string) => {
+    const product = products.find((item) => item.id === productId);
+    if (!product || product.images.length < 2) {
+      return;
+    }
+    const splitProducts = product.images.map(
+      (image, index): ProductRecord => ({
+        ...product,
+        id: `${product.id}-split-${index}`,
+        reference: `${product.reference.replace(/-\d+$/, "")}-${String(index + 1).padStart(2, "0")}`,
+        images: [image],
+        mainImageId: image.id,
+        title: "",
+        keywords: [],
+        sellingPoints: [],
+        description: "",
+        visibleTraits: [],
+        aiConfirmed: false,
+        analyzedAt: undefined,
+        stage: "uploaded",
+        facts: createEmptyFacts(settings),
+        schemaData: undefined,
+        schemaGuidance: undefined,
+        schemaFields: undefined,
+        fieldTasks: undefined,
+        fieldTaskSummary: undefined,
+        errors: ["等待 AI 分析"],
+      }),
+    );
+    onProductsChange((currentProducts) =>
+      currentProducts.flatMap((item) => (item.id === productId ? splitProducts : [item])),
+    );
+    setSelected(new Set(splitProducts.map((item) => item.id)));
+    setActiveProductId(splitProducts[0].id);
+    notify("success", `已拆分为 ${splitProducts.length} 个商品`, "每张图片现在对应一个商品。");
+  };
+
+  const mergeSelectedProducts = () => {
+    const selectedIds = new Set(selected);
+    const targets = products.filter((product) => selectedIds.has(product.id));
+    if (targets.length < 2) {
+      notify("warning", "请至少选择两个商品", "选中的商品图片将合并为同一个商品。");
+      return;
+    }
+    const base = targets[0];
+    const merged: ProductRecord = {
+      ...base,
+      images: targets.flatMap((product) => product.images),
+      mainImageId: base.mainImageId,
+      title: "",
+      keywords: [],
+      sellingPoints: [],
+      description: "",
+      visibleTraits: [],
+      aiConfirmed: false,
+      analyzedAt: undefined,
+      stage: "uploaded",
+      facts: createEmptyFacts(settings),
+      schemaData: undefined,
+      schemaGuidance: undefined,
+      schemaFields: undefined,
+      fieldTasks: undefined,
+      fieldTaskSummary: undefined,
+      errors: ["图片已合并，请重新进行 AI 分析"],
+    };
+    onProductsChange((currentProducts) =>
+      currentProducts.flatMap((product) => {
+        if (product.id === base.id) {
+          return [merged];
+        }
+        return selectedIds.has(product.id) ? [] : [product];
+      }),
+    );
+    setSelected(new Set([base.id]));
+    setActiveProductId(base.id);
+    notify(
+      "success",
+      `已合并 ${targets.length} 个商品`,
+      `合并后共有 ${merged.images.length} 张图片。`,
+    );
   };
 
   const loadCategoryRules = async (): Promise<ProductRecord[] | null> => {
@@ -1959,7 +2152,8 @@ export function WorkbenchPage({
   const confirmedCount = products.filter((product) => product.aiConfirmed).length;
   const failedCount = products.filter((product) => product.stage === "error").length;
   const missingCount = products.filter(
-    (product) => product.stage !== "error" && getFactErrors(product).length > 0,
+    (product) =>
+      product.aiConfirmed && product.stage !== "error" && getFactErrors(product).length > 0,
   ).length;
   const draftReadyCount = products.filter(
     (product) =>
@@ -2109,6 +2303,7 @@ export function WorkbenchPage({
           {step === 0 ? (
             <UploadStep
               products={products}
+              selected={selected}
               dragActive={dragActive}
               busy={busy}
               photoBankAvailable={photoBankAvailable}
@@ -2118,12 +2313,20 @@ export function WorkbenchPage({
               photoGroupId={photoGroupId}
               photoImages={photoImages}
               photoSelection={photoSelection}
+              uploadGroupingMode={uploadGroupingMode}
               onPhotoGroupChange={setPhotoGroupId}
               onTogglePhoto={togglePhotoSelection}
               onCreateFromPhotoBank={() => void createProductFromPhotoBank()}
               onDragActive={setDragActive}
               onDrop={onDrop}
-              onPickFiles={() => fileInputRef.current?.click()}
+              onGroupingModeChange={setUploadGroupingMode}
+              onPickFiles={() => pickProductImages()}
+              onAddImages={(productId) => pickProductImages(productId)}
+              onToggleSelected={toggleSelected}
+              onToggleAll={toggleAll}
+              onMergeSelected={mergeSelectedProducts}
+              onSplitProduct={splitProductImages}
+              onMoveImage={moveProductImage}
               onRemove={removeProduct}
               onMainImageChange={setMainImage}
               onOpenAiImages={() => void openAiImageReview()}
@@ -2500,7 +2703,9 @@ function ListingOperationsPanel({
               <div>
                 <dt>失败事件</dt>
                 <dd>
-                  {(metrics.counters.draft_failed ?? 0) + (metrics.counters.publish_failed ?? 0)}
+                  {(metrics.counters.analysis_failed ?? 0) +
+                    (metrics.counters.draft_failed ?? 0) +
+                    (metrics.counters.publish_failed ?? 0)}
                 </dd>
               </div>
               <div>
@@ -2555,6 +2760,7 @@ function ListingOperationsPanel({
 
 function UploadStep({
   products,
+  selected,
   dragActive,
   busy,
   photoBankAvailable,
@@ -2564,17 +2770,26 @@ function UploadStep({
   photoGroupId,
   photoImages,
   photoSelection,
+  uploadGroupingMode,
   onPhotoGroupChange,
+  onGroupingModeChange,
   onTogglePhoto,
   onCreateFromPhotoBank,
   onDragActive,
   onDrop,
   onPickFiles,
+  onAddImages,
+  onToggleSelected,
+  onToggleAll,
+  onMergeSelected,
+  onSplitProduct,
+  onMoveImage,
   onRemove,
   onMainImageChange,
   onOpenAiImages,
 }: {
   products: ProductRecord[];
+  selected: Set<string>;
   dragActive: boolean;
   busy: boolean;
   photoBankAvailable: boolean;
@@ -2584,21 +2799,29 @@ function UploadStep({
   photoGroupId: string;
   photoImages: PhotoBankImage[];
   photoSelection: string[];
+  uploadGroupingMode: "single_product" | "separate_products";
   onPhotoGroupChange: (groupId: string) => void;
+  onGroupingModeChange: (mode: "single_product" | "separate_products") => void;
   onTogglePhoto: (imageId: string) => void;
   onCreateFromPhotoBank: () => void;
   onDragActive: (active: boolean) => void;
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onPickFiles: () => void;
+  onAddImages: (productId: string) => void;
+  onToggleSelected: (productId: string) => void;
+  onToggleAll: () => void;
+  onMergeSelected: () => void;
+  onSplitProduct: (productId: string) => void;
+  onMoveImage: (productId: string, imageId: string, direction: -1 | 1) => void;
   onRemove: (id: string) => void;
   onMainImageChange: (productId: string, imageId: string) => void;
   onOpenAiImages: () => void;
 }) {
   const [photoQuery, setPhotoQuery] = useState("");
   const [productQuery, setProductQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "confirmed" | "error">(
-    "all",
-  );
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "pending" | "review" | "confirmed" | "error"
+  >("all");
   const [sourceTab, setSourceTab] = useState<"local" | "photobank">("local");
   const visiblePhotos = photoQuery.trim()
     ? photoImages.filter((image) =>
@@ -2609,6 +2832,9 @@ function UploadStep({
     (product) => product.stage === "uploaded" || product.stage === "analyzing",
   ).length;
   const confirmedCount = products.filter((product) => product.aiConfirmed).length;
+  const reviewCount = products.filter(
+    (product) => product.stage === "ai_ready" && !product.aiConfirmed,
+  ).length;
   const errorCount = products.filter((product) => product.stage === "error").length;
   const visibleProducts = products.filter((product) => {
     const normalized = productQuery.trim().toLowerCase();
@@ -2624,6 +2850,9 @@ function UploadStep({
     }
     if (statusFilter === "confirmed") {
       return product.aiConfirmed;
+    }
+    if (statusFilter === "review") {
+      return product.stage === "ai_ready" && !product.aiConfirmed;
     }
     if (statusFilter === "error") {
       return product.stage === "error";
@@ -2657,6 +2886,24 @@ function UploadStep({
             从图片银行选择
           </button>
         </div>
+        {sourceTab === "local" ? (
+          <div className="upload-grouping-choice" role="group" aria-label="图片分组方式">
+            <button
+              type="button"
+              className={uploadGroupingMode === "single_product" ? "is-active" : ""}
+              onClick={() => onGroupingModeChange("single_product")}
+            >
+              同一商品多图
+            </button>
+            <button
+              type="button"
+              className={uploadGroupingMode === "separate_products" ? "is-active" : ""}
+              onClick={() => onGroupingModeChange("separate_products")}
+            >
+              每张图建一个商品
+            </button>
+          </div>
+        ) : null}
         <div className="upload-toolbar-end">
           {sourceTab === "photobank" && photoBankAvailable ? (
             <>
@@ -2784,6 +3031,7 @@ function UploadStep({
             {[
               { value: "all", label: "全部商品", count: products.length },
               { value: "pending", label: "待 AI 分析", count: pendingCount },
+              { value: "review", label: "AI 待确认", count: reviewCount },
               { value: "confirmed", label: "内容已确认", count: confirmedCount },
               { value: "error", label: "处理异常", count: errorCount },
             ].map((item) => (
@@ -2792,7 +3040,9 @@ function UploadStep({
                 type="button"
                 className={statusFilter === item.value ? "is-active" : ""}
                 onClick={() =>
-                  setStatusFilter(item.value as "all" | "pending" | "confirmed" | "error")
+                  setStatusFilter(
+                    item.value as "all" | "pending" | "review" | "confirmed" | "error",
+                  )
                 }
               >
                 <span>{item.label}</span>
@@ -2816,9 +3066,21 @@ function UploadStep({
               </div>
               <div className="upload-list-tools">
                 <label>
-                  <input type="checkbox" checked={products.length > 0} readOnly />
+                  <input
+                    type="checkbox"
+                    checked={products.length > 0 && selected.size === products.length}
+                    onChange={onToggleAll}
+                  />
                   全选当前页
                 </label>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={onMergeSelected}
+                  disabled={selected.size < 2}
+                >
+                  合并所选
+                </button>
                 <select aria-label="商品排序" defaultValue="latest">
                   <option value="latest">按上传时间</option>
                   <option value="reference">按货号</option>
@@ -2845,8 +3107,16 @@ function UploadStep({
                   <div className="upload-icon">
                     <CloudArrowUp size={26} />
                   </div>
-                  <h3>上传一组商品图</h3>
-                  <p>拖入或选择 JPG、PNG、WebP，单张不超过 10 MB。</p>
+                  <h3>
+                    {uploadGroupingMode === "single_product"
+                      ? "一次选择同一商品的全部图片"
+                      : "选择多张图片并分别建商品"}
+                  </h3>
+                  <p>
+                    {uploadGroupingMode === "single_product"
+                      ? "本次选择的所有图片将合并为 1 个商品，第一张作为主图。"
+                      : "本次选择的每张图片将分别创建 1 个商品。"}
+                  </p>
                   <button type="button" className="button button-dark" onClick={onPickFiles}>
                     <Plus size={17} />
                     选择图片
@@ -2855,9 +3125,14 @@ function UploadStep({
               ) : null}
               {visibleProducts.map((product, index) => (
                 <article key={product.id} className="upload-card">
-                  <span className="upload-card-check">
+                  <button
+                    type="button"
+                    className={`upload-card-check ${selected.has(product.id) ? "is-selected" : ""}`}
+                    onClick={() => onToggleSelected(product.id)}
+                    aria-label={`${selected.has(product.id) ? "取消选择" : "选择"}${product.reference}`}
+                  >
                     <Check size={12} weight="bold" />
-                  </span>
+                  </button>
                   <span className="upload-order">{String(index + 1).padStart(2, "0")}</span>
                   <div className="upload-card-gallery">
                     <img src={getMainProductImage(product).url} alt="" />
@@ -2874,6 +3149,25 @@ function UploadStep({
                         </button>
                       ))}
                     </div>
+                    {product.images.length > 1 ? (
+                      <div className="upload-image-order-tools">
+                        <button
+                          type="button"
+                          onClick={() => onMoveImage(product.id, product.mainImageId, -1)}
+                          aria-label="主图向前移动"
+                        >
+                          <CaretLeft size={12} />
+                        </button>
+                        <span>移动当前主图</span>
+                        <button
+                          type="button"
+                          onClick={() => onMoveImage(product.id, product.mainImageId, 1)}
+                          aria-label="主图向后移动"
+                        >
+                          <CaretRight size={12} />
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="upload-card-copy">
                     <strong>{product.reference}</strong>
@@ -2891,6 +3185,23 @@ function UploadStep({
                         ? "图片银行"
                         : "上传完成"}
                     </span>
+                    <button
+                      type="button"
+                      className="text-button upload-card-add-images"
+                      onClick={() => onAddImages(product.id)}
+                    >
+                      <Plus size={13} />
+                      向此商品追加图片
+                    </button>
+                    {product.images.length > 1 ? (
+                      <button
+                        type="button"
+                        className="text-button upload-card-split"
+                        onClick={() => onSplitProduct(product.id)}
+                      >
+                        拆分为 {product.images.length} 个商品
+                      </button>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -3087,6 +3398,23 @@ function AiStep({
                       )}
                     </span>
                   </div>
+                  {product.stage === "error" ? (
+                    <div className="ai-analysis-error" role="alert">
+                      <WarningCircle size={18} weight="fill" />
+                      <span>
+                        <strong>AI 分析未完成</strong>
+                        <small>{describeAiFailure(product.errors[0])}</small>
+                      </span>
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => void onAnalyze(product)}
+                        disabled={busy}
+                      >
+                        单独重试
+                      </button>
+                    </div>
+                  ) : null}
                   <section className="ai-image-review">
                     <div className="ai-image-review-head">
                       <div>
@@ -3470,6 +3798,129 @@ function confirmationTasks(product: ProductRecord): FieldTask[] {
     return product.fieldTasks.filter((task) => task.status === "confirm");
   }
   return product.isDemo ? demoConfirmationTasks(product) : [];
+}
+
+function summarizeFieldTasks(tasks: FieldTask[]) {
+  const summary = { completed: 0, confirm: 0, fill: 0, invalid: 0 };
+  for (const task of tasks) {
+    summary[task.status] += 1;
+  }
+  return summary;
+}
+
+function buildFallbackAiTasks(product: ProductRecord): FieldTask[] {
+  const candidates: Array<{
+    field: string;
+    label: string;
+    value: unknown;
+    displayValue?: unknown;
+    evidence?: string;
+    confidence?: number;
+  }> = [
+    {
+      field: "subject",
+      label: "商品标题",
+      value: product.title,
+      displayValue: product.titleZh,
+    },
+    {
+      field: "category_suggestion",
+      label: "AI 类目建议",
+      value: product.facts.categoryLabel,
+      displayValue: product.facts.categoryLabelZh,
+      evidence: product.categoryEvidence,
+      confidence: product.categoryConfidence,
+    },
+    {
+      field: "keywords",
+      label: "关键词",
+      value: product.keywords,
+      displayValue: product.keywordsZh,
+    },
+    {
+      field: "selling_points",
+      label: "核心卖点",
+      value: product.sellingPoints,
+      displayValue: product.sellingPointsZh,
+    },
+    {
+      field: "description",
+      label: "商品描述",
+      value: product.description,
+      displayValue: product.descriptionZh,
+    },
+    {
+      field: "visible_traits",
+      label: "图片可见属性",
+      value: product.visibleTraits,
+      displayValue: product.visibleTraitsZh,
+    },
+  ];
+  return candidates
+    .filter(({ value }) => value !== "" && (!Array.isArray(value) || value.length > 0))
+    .map(({ field, label, value, displayValue, evidence, confidence }) => ({
+      field_path: field,
+      label,
+      question:
+        field === "category_suggestion"
+          ? "请确认 AI 类目建议仅作为参考；下一步仍需从 Alibaba 类目树选择最终叶子类目。"
+          : `请确认“${label}”是否准确。`,
+      explanation:
+        field === "category_suggestion"
+          ? "当前未取得真实类目 Schema，确认建议不会代替最终类目选择。"
+          : "该内容由 AI 根据商品图片生成，采用前必须人工核对。",
+      control_type: Array.isArray(value) ? "multiInput" : "input",
+      status: "confirm" as const,
+      responsibility: "ai_candidate" as const,
+      responsibility_label: "AI 先填·客户确认",
+      allowed_sources: ["ai_generated", "image_extracted", "user_confirmed"] as const,
+      value,
+      display_value_zh: displayValue,
+      source: "ai_generated" as const,
+      confidence,
+      evidence,
+      required: false,
+      blocking: true,
+      validation_errors: [],
+      options: [],
+      async_options: false,
+    }));
+}
+
+function confirmFallbackTaskLocally(product: ProductRecord, task: FieldTask): ProductRecord {
+  const fieldTasks = (product.fieldTasks ?? []).map((item) =>
+    item.field_path === task.field_path
+      ? {
+          ...item,
+          status: "completed" as const,
+          source: "user_confirmed" as const,
+          blocking: false,
+          validation_errors: [],
+        }
+      : item,
+  );
+  const fieldTaskSummary = summarizeFieldTasks(fieldTasks);
+  const candidate = product.schemaFields?.[task.field_path];
+  const schemaFields = {
+    ...product.schemaFields,
+    [task.field_path]: {
+      ...(candidate ?? { value: task.value }),
+      value: task.value,
+      display_value_zh: task.display_value_zh,
+      source: "user_confirmed" as const,
+      requires_confirmation: false,
+    },
+  };
+  const aiConfirmed = fieldTaskSummary.confirm === 0;
+  return {
+    ...product,
+    schemaFields,
+    fieldTasks,
+    fieldTaskSummary,
+    aiConfirmed,
+    stage: aiConfirmed ? "facts_needed" : "ai_ready",
+    errors: aiConfirmed ? getFactErrors(product) : ["AI 内容尚未确认"],
+  };
 }
 
 function demoConfirmationTasks(product: ProductRecord): FieldTask[] {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   activateAlibabaStore,
@@ -486,14 +486,17 @@ export default function App() {
     notify("info", "演示流程已重置", "已回到第 1 步，不会写入真实 Alibaba 店铺。");
   };
 
-  const updateProducts = (nextProducts: ProductRecord[]) => {
-    if (dataMode === "demo" && nextProducts.some((product) => !product.isDemo)) {
+  const updateProducts = (update: SetStateAction<ProductRecord[]>) => {
+    if (dataMode === "live") {
+      setLiveProducts(update);
+      return;
+    }
+    const nextProducts = typeof update === "function" ? update(demoProducts) : update;
+    if (nextProducts.some((product) => !product.isDemo)) {
       setLiveProducts(nextProducts.filter((product) => !product.isDemo));
       setDataMode("live");
-    } else if (dataMode === "demo") {
-      setDemoProducts(nextProducts);
     } else {
-      setLiveProducts(nextProducts);
+      setDemoProducts(nextProducts);
     }
   };
 
