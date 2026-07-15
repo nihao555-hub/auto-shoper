@@ -2153,6 +2153,7 @@ tr.is-failed .bt-store small {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  flex-shrink: 0;
 }
 
 .wb-toolbar {
@@ -2299,10 +2300,11 @@ tr.is-failed .bt-store small {
 .wb-table-shell {
   border: 1px solid var(--ds-border-soft);
   border-radius: 10px;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex-shrink: 0;
 }
 
 .wb-table {
@@ -2678,6 +2680,22 @@ tr.is-failed .bt-store small {
 
 .wb-schema-required {
   padding-top: 14px;
+}
+
+.wb-schema-advanced {
+  margin-top: 12px;
+  padding: 0 10px;
+  border: 1px solid var(--ds-border-soft);
+  border-radius: 8px;
+  background: var(--ds-surface-muted);
+}
+
+.wb-schema-advanced[open] {
+  padding-bottom: 12px;
+}
+
+.wb-schema-advanced > summary {
+  color: var(--ds-text-2);
 }
 
 .wb-schema-heading p {

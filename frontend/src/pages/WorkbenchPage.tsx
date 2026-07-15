@@ -4892,7 +4892,8 @@ function WbInspector({
   const complianceNote = product.facts.certifications[0] ?? "";
   const missingFacts = getFactErrors(product);
   const allSchemaFields = getAllSchemaFields(product);
-  const requiredSchemaFields = allSchemaFields.filter((field) => field.required);
+  const requiredSchemaFields = getRequiredSchemaFields(product);
+  const requiredSchemaFieldIds = new Set(product.schemaGuidance?.required_field_ids ?? []);
   const taskByField = new Map((product.fieldTasks ?? []).map((task) => [task.field_path, task]));
   const responsibilityCounts = {
     ai_candidate: 0,
@@ -4922,6 +4923,111 @@ function WbInspector({
     }
     return true;
   });
+  const repeatableGroupEntries = [...repeatableGroups.entries()];
+  const primarySchemaFields = inputSchemaFields.filter((field) =>
+    requiredSchemaFieldIds.has(field.field),
+  );
+  const advancedSchemaFields = inputSchemaFields.filter(
+    (field) => !requiredSchemaFieldIds.has(field.field),
+  );
+  const primaryRepeatableGroups = repeatableGroupEntries.filter(([groupPath]) =>
+    requiredSchemaFieldIds.has(groupPath),
+  );
+  const advancedRepeatableGroups = repeatableGroupEntries.filter(
+    ([groupPath]) => !requiredSchemaFieldIds.has(groupPath),
+  );
+  const missingRequiredSchemaCount = requiredSchemaFields.filter((field) =>
+    field.repeatable_group
+      ? !hasSchemaValue(repeatableGroupValue(product, field.repeatable_group))
+      : !hasSchemaValue(getSchemaFieldValue(product, field)),
+  ).length;
+
+  const renderRepeatableGroups = (entries: Array<[string, SchemaFieldGuidance[]]>) =>
+    entries.map(([groupPath, fields]) => (
+      <MultiComplexEditor
+        key={groupPath}
+        groupPath={groupPath}
+        fields={fields}
+        value={repeatableGroupValue(product, groupPath)}
+        onChange={(value) => setRepeatableGroup(groupPath, value)}
+      />
+    ));
+
+  const renderSchemaFields = (fields: SchemaFieldGuidance[], scope: string) =>
+    fields.length ? (
+      <div className="wb-schema-field-list">
+        {fields.map((field, index) => {
+          const task = taskByField.get(field.field);
+          const value = getSchemaFieldValue(product, field);
+          const inputId = `schema-${product.id}-${scope}-${index}`;
+          const requirementLabel = requiredSchemaFieldIds.has(field.field)
+            ? "API 必填"
+            : field.required
+              ? "条件必填"
+              : "API 选填";
+          return (
+            <div
+              key={field.field}
+              className={`wb-schema-field is-${task?.status ?? "fill"} ${hasSchemaValue(value) ? "is-complete" : ""}`}
+            >
+              <div className="wb-schema-field-heading" id={`${inputId}-label`}>
+                <span>
+                  {task?.question || schemaFieldLabel(field)}
+                  <i>{requirementLabel}</i>
+                  <i className="is-control">{schemaFieldControlLabel(field)}</i>
+                  <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                </span>
+                <small>
+                  {task?.validation_errors?.[0] ||
+                    task?.explanation ||
+                    field.tip ||
+                    (isShippingTemplateIdField(field)
+                      ? "请填写阿里国际站真实运费模板 ID，不要填写模板名称；若历史商品已使用模板，系统会优先自动带入。"
+                      : undefined) ||
+                    (hasSchemaValue(value) ? "已填写，可继续修改" : field.responsibility_reason)}
+                </small>
+              </div>
+              {field.supported === false ? (
+                <div className="wb-schema-dynamic-option is-blocked" role="alert">
+                  <WarningCircle size={15} />
+                  <span>{field.support_message || "该字段暂时无法安全填写"}</span>
+                </div>
+              ) : field.async_options && !field.options.length ? (
+                <div className="wb-schema-dynamic-option">
+                  <WarningCircle size={15} />
+                  <span>{asyncOptionError || "需先选择上级属性，再从 Alibaba API 加载选项"}</span>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={asyncOptionField === field.field}
+                    onClick={() => void loadAsyncOptions(field)}
+                  >
+                    {asyncOptionField === field.field ? (
+                      <CircleNotch size={14} className="spin" />
+                    ) : null}
+                    {asyncOptionField === field.field ? "加载中" : "加载 Alibaba 选项"}
+                  </button>
+                </div>
+              ) : (
+                <SchemaValueControl
+                  field={field}
+                  value={value}
+                  inputId={inputId}
+                  placeholder={
+                    isShippingTemplateIdField(field)
+                      ? "请输入真实运费模板 ID"
+                      : task?.example
+                        ? `示例：${task.example}`
+                        : "请输入真实信息"
+                  }
+                  onChange={(nextValue) => setSchemaField(field, nextValue)}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    ) : null;
 
   return (
     <aside className="wb-inspector" aria-label="商品资料">
@@ -5419,152 +5525,89 @@ function WbInspector({
         {product.schemaGuidance ? (
           <section className="wb-inspector-section wb-schema-required">
             <div className="wb-schema-heading">
-              <h3>需补充字段（{inputSchemaFields.length}）</h3>
+              <h3>
+                当前类目必填（{requiredSchemaFields.length}，待填 {missingRequiredSchemaCount}）
+              </h3>
             </div>
-            <details className="wb-schema-matrix">
-              <summary>
-                查看全部 {allSchemaFields.length} 个字段与责任（必填 {requiredSchemaFields.length}）
-              </summary>
-              <div>
-                <p className="wb-schema-policy">
-                  AI 仅可起草文案与图片可见属性；价格、SKU、库存、材质和合规必须使用真实值。
-                </p>
-                <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
-                  <span className="is-default">
-                    <strong>{responsibilityCounts.store_default}</strong>
-                    店铺默认
-                  </span>
-                  <span className="is-system">
-                    <strong>{responsibilityCounts.business_system}</strong>
-                    ERP / 客户事实
-                  </span>
-                  <span className="is-merchant">
-                    <strong>{responsibilityCounts.merchant}</strong>
-                    客户填写
-                  </span>
-                </div>
-                <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
-                {allSchemaFields
-                  .filter((field) => field.responsibility === "ai_candidate")
-                  .map((field) => {
-                    const value = getSchemaFieldValue(product, field);
-                    return (
-                      <p key={field.field}>
-                        <span>{schemaFieldLabel(field)}</span>
-                        <b>{schemaFieldControlLabel(field)}</b>
-                        <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
-                        <small>{hasSchemaValue(value) ? "已确认" : "待确认"}</small>
-                      </p>
-                    );
-                  })}
-                <h4>AI 不得填写（{humanFactCount}）</h4>
-                {allSchemaFields
-                  .filter((field) => field.responsibility !== "ai_candidate")
-                  .map((field) => {
-                    const value = getSchemaFieldValue(product, field);
-                    return (
-                      <p key={field.field}>
-                        <span>{schemaFieldLabel(field)}</span>
-                        <b>{schemaFieldControlLabel(field)}</b>
-                        <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
-                        <small>{hasSchemaValue(value) ? "已带入" : "待补充"}</small>
-                      </p>
-                    );
-                  })}
-              </div>
-            </details>
-            {[...repeatableGroups.entries()].map(([groupPath, fields]) => (
-              <MultiComplexEditor
-                key={groupPath}
-                groupPath={groupPath}
-                fields={fields}
-                value={repeatableGroupValue(product, groupPath)}
-                onChange={(value) => setRepeatableGroup(groupPath, value)}
-              />
-            ))}
-            {inputSchemaFields.length ? (
-              <div className="wb-schema-field-list">
-                {inputSchemaFields.map((field, index) => {
-                  const task = taskByField.get(field.field);
-                  const value = getSchemaFieldValue(product, field);
-                  const inputId = `schema-${product.id}-${index}`;
-                  return (
-                    <div
-                      key={field.field}
-                      className={`wb-schema-field is-${task?.status ?? "fill"} ${hasSchemaValue(value) ? "is-complete" : ""}`}
-                    >
-                      <div className="wb-schema-field-heading" id={`${inputId}-label`}>
-                        <span>
-                          {task?.question || schemaFieldLabel(field)}
-                          <i>{field.required ? "API 必填" : "API 选填"}</i>
-                          <i className="is-control">{schemaFieldControlLabel(field)}</i>
-                          <i className={`is-${field.responsibility}`}>
-                            {field.responsibility_label}
-                          </i>
-                        </span>
-                        <small>
-                          {task?.validation_errors?.[0] ||
-                            task?.explanation ||
-                            field.tip ||
-                            (isShippingTemplateIdField(field)
-                              ? "请填写阿里国际站真实运费模板 ID，不要填写模板名称；若历史商品已使用模板，系统会优先自动带入。"
-                              : undefined) ||
-                            (hasSchemaValue(value)
-                              ? "已填写，可继续修改"
-                              : field.responsibility_reason)}
-                        </small>
-                      </div>
-                      {field.supported === false ? (
-                        <div className="wb-schema-dynamic-option is-blocked" role="alert">
-                          <WarningCircle size={15} />
-                          <span>{field.support_message || "该字段暂时无法安全填写"}</span>
-                        </div>
-                      ) : field.async_options && !field.options.length ? (
-                        <div className="wb-schema-dynamic-option">
-                          <WarningCircle size={15} />
-                          <span>
-                            {asyncOptionError || "需先选择上级属性，再从 Alibaba API 加载选项"}
-                          </span>
-                          <button
-                            type="button"
-                            className="button button-secondary"
-                            disabled={asyncOptionField === field.field}
-                            onClick={() => void loadAsyncOptions(field)}
-                          >
-                            {asyncOptionField === field.field ? (
-                              <CircleNotch size={14} className="spin" />
-                            ) : null}
-                            {asyncOptionField === field.field ? "加载中" : "加载 Alibaba 选项"}
-                          </button>
-                        </div>
-                      ) : (
-                        <SchemaValueControl
-                          field={field}
-                          value={value}
-                          inputId={inputId}
-                          placeholder={
-                            isShippingTemplateIdField(field)
-                              ? "请输入真实运费模板 ID"
-                              : task?.example
-                                ? `示例：${task.example}`
-                                : "请输入真实信息"
-                          }
-                          onChange={(nextValue) => setSchemaField(field, nextValue)}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : repeatableGroups.size === 0 ? (
+            {missingRequiredSchemaCount === 0 ? (
               <div className="wb-schema-complete">
                 <CheckCircle size={18} weight="fill" />
                 <span>当前类目要求的必填项已全部完成</span>
               </div>
             ) : null}
+            {renderRepeatableGroups(primaryRepeatableGroups)}
+            {renderSchemaFields(primarySchemaFields, "required")}
+
+            {advancedSchemaFields.length || advancedRepeatableGroups.length ? (
+              <details className="wb-inspector-optional wb-schema-advanced">
+                <summary>
+                  高级编辑：{advancedSchemaFields.length + advancedRepeatableGroups.length}
+                  项选填或条件字段
+                </summary>
+                <details className="wb-schema-matrix">
+                  <summary>
+                    查看全部 {allSchemaFields.length} 个字段与责任（必填{" "}
+                    {requiredSchemaFields.length}）
+                  </summary>
+                  <div>
+                    <p className="wb-schema-policy">
+                      AI 仅可起草文案与图片可见属性；价格、SKU、库存、材质和合规必须使用真实值。
+                    </p>
+                    <div className="wb-schema-responsibility" aria-label="当前类目字段责任分配">
+                      <span className="is-default">
+                        <strong>{responsibilityCounts.store_default}</strong>
+                        店铺默认
+                      </span>
+                      <span className="is-system">
+                        <strong>{responsibilityCounts.business_system}</strong>
+                        ERP / 客户事实
+                      </span>
+                      <span className="is-merchant">
+                        <strong>{responsibilityCounts.merchant}</strong>
+                        客户填写
+                      </span>
+                    </div>
+                    <h4>AI 可先填·客户确认（{aiCandidateCount}）</h4>
+                    {allSchemaFields
+                      .filter((field) => field.responsibility === "ai_candidate")
+                      .map((field) => {
+                        const value = getSchemaFieldValue(product, field);
+                        return (
+                          <p key={field.field}>
+                            <span>{schemaFieldLabel(field)}</span>
+                            <b>{schemaFieldControlLabel(field)}</b>
+                            <i className={`is-${field.responsibility}`}>
+                              {field.responsibility_label}
+                            </i>
+                            <small>{hasSchemaValue(value) ? "已确认" : "待确认"}</small>
+                          </p>
+                        );
+                      })}
+                    <h4>AI 不得填写（{humanFactCount}）</h4>
+                    {allSchemaFields
+                      .filter((field) => field.responsibility !== "ai_candidate")
+                      .map((field) => {
+                        const value = getSchemaFieldValue(product, field);
+                        return (
+                          <p key={field.field}>
+                            <span>{schemaFieldLabel(field)}</span>
+                            <b>{schemaFieldControlLabel(field)}</b>
+                            <i className={`is-${field.responsibility}`}>
+                              {field.responsibility_label}
+                            </i>
+                            <small>{hasSchemaValue(value) ? "已带入" : "待补充"}</small>
+                          </p>
+                        );
+                      })}
+                  </div>
+                </details>
+                {renderRepeatableGroups(advancedRepeatableGroups)}
+                {renderSchemaFields(advancedSchemaFields, "advanced")}
+              </details>
+            ) : null}
             <p className="wb-schema-note">
               共 {allSchemaFields.length} 个 API 字段，其中必填 {requiredSchemaFields.length}
-              个；所有可编辑字段均保留入口，已带入的值也可复核修改。
+              个；日常只需处理上方必填项，全部可编辑字段仍保留在高级编辑中。
             </p>
           </section>
         ) : (
@@ -7735,16 +7778,35 @@ function isShippingTemplateIdField(field: SchemaFieldGuidance): boolean {
 }
 
 function schemaOptionValue(field: SchemaFieldGuidance, setting: string): string | null {
-  const normalized = setting.trim().toLowerCase();
-  if (!normalized) {
+  if (!normalizeSchemaOptionText(setting)) {
     return null;
   }
-  const option = field.options.find(
-    (item) =>
-      item.value.toLowerCase() === normalized ||
-      item.display_name?.trim().toLowerCase() === normalized,
-  );
+  const option = field.options.find((item) => schemaOptionMatches(item, setting));
   return option?.value ?? (field.options.length ? null : setting);
+}
+
+function normalizeSchemaOptionText(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+function schemaOptionMatches(
+  option: SchemaFieldGuidance["options"][number],
+  requestedValue: string,
+): boolean {
+  const normalizedRequested = normalizeSchemaOptionText(requestedValue);
+  if (!normalizedRequested) {
+    return false;
+  }
+  if (normalizeSchemaOptionText(option.value) === normalizedRequested) {
+    return true;
+  }
+  const displayName = option.display_name ?? "";
+  if (normalizeSchemaOptionText(displayName) === normalizedRequested) {
+    return true;
+  }
+  return displayName
+    .split(/[\/／|,，()（）]+/)
+    .some((alias) => normalizeSchemaOptionText(alias) === normalizedRequested);
 }
 
 function normalizeSchemaChoiceValue(field: SchemaFieldGuidance, value: unknown): unknown {
@@ -7760,11 +7822,7 @@ function normalizeSchemaChoiceValue(field: SchemaFieldGuidance, value: unknown):
     if (!text) {
       return item;
     }
-    const option = field.options.find(
-      (candidate) =>
-        candidate.value.toLowerCase() === text.toLowerCase() ||
-        candidate.display_name?.trim().toLowerCase() === text.toLowerCase(),
-    );
+    const option = field.options.find((candidate) => schemaOptionMatches(candidate, text));
     if (option) {
       return option.value;
     }
