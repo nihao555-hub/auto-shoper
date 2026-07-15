@@ -424,7 +424,7 @@ async def get_category_children(
         for child in children
         if child["id"] != category_id
     }
-    logger.info(
+    logger.warning(
         "Alibaba category tree diagnostics category_id=%s payload_type=%s "
         "top_level_keys=%s records=%d parent_found=%s children=%d "
         "missing_child_ids=%d result=%d",
