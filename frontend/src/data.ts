@@ -194,11 +194,13 @@ const demoSchemaFields = (
   sku: string,
   productFacts: ProductFacts,
   title: string,
+  aiConfirmed: boolean,
 ): Record<string, DraftField> => {
   const surfaceNeedsConfirmation = ["BP-ANG-2IN", "BP-LATEX-3P", "BP-FOAM-5P"].includes(sku);
+  const aiSource = aiConfirmed ? "user_confirmed" : "ai_generated";
   return {
-    productTitle: { value: title, source: "user_confirmed" },
-    "icbuCatProp.application": { value: ["wall", "wood"], source: "user_confirmed" },
+    productTitle: { value: title, source: aiSource },
+    "icbuCatProp.application": { value: ["wall", "wood"], source: aiSource },
     categoryId: { value: productFacts.categoryId, source: "user_confirmed" },
     "icbuCatProp.brand": { value: productFacts.brand, source: "business_system" },
     ...(productFacts.model
@@ -244,8 +246,16 @@ const demoSchemaFields = (
   };
 };
 
+const missingProductImage: ProductImage = {
+  id: "missing-product-image",
+  name: "未上传商品图片",
+  url: "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320' viewBox='0 0 320 320'%3E%3Crect width='320' height='320' fill='%23f4f4f1'/%3E%3Cpath d='M96 218l42-50 32 35 22-25 32 40H96z' fill='%23c8c9c3'/%3E%3Ccircle cx='126' cy='124' r='18' fill='%23d8d9d4'/%3E%3Crect x='80' y='80' width='160' height='160' rx='12' fill='none' stroke='%23b7b8b2' stroke-width='8'/%3E%3C/svg%3E",
+};
+
 export const getMainProductImage = (product: ProductRecord): ProductImage =>
-  product.images.find((image) => image.id === product.mainImageId) ?? product.images[0];
+  product.images.find((image) => image.id === product.mainImageId) ??
+  product.images[0] ??
+  missingProductImage;
 
 const brushCategory = {
   categoryId: "127814008",
@@ -280,7 +290,7 @@ const demoProduct = (input: {
     facts: productFacts,
     errors: input.errors,
     schemaGuidance: demoSchemaGuidance,
-    schemaFields: demoSchemaFields(input.sku, productFacts, input.title),
+    schemaFields: demoSchemaFields(input.sku, productFacts, input.title, input.aiConfirmed),
     isDemo: true,
   };
 };

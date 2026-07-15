@@ -75,6 +75,7 @@ import {
   uploadPhotoBankImage,
 } from "../api";
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
+import { resolveSchemaOptionValue, schemaOptionMatches } from "../schemaOptions";
 import type {
   AlibabaCategoryOption,
   AlibabaCategoryRecommendation,
@@ -1168,7 +1169,17 @@ export function WorkbenchPage({
     setBusy(true);
     try {
       const schemaFields = { ...product.schemaFields };
-      if (!product.schemaData) {
+      if (product.isDemo) {
+        const candidate = schemaFields[task.field_path];
+        if (candidate) {
+          schemaFields[task.field_path] = {
+            ...candidate,
+            value: task.value,
+            source: "user_confirmed",
+            requires_confirmation: false,
+          };
+        }
+      } else if (!product.schemaData) {
         const next = confirmFallbackTaskLocally(product, task);
         updateProduct(next);
         if (featureFlags.metrics) {
@@ -1181,17 +1192,6 @@ export function WorkbenchPage({
         }
         notify("success", `已确认：${task.label}`);
         return;
-      }
-      if (product.isDemo) {
-        const candidate = schemaFields[fieldPath];
-        if (candidate) {
-          schemaFields[fieldPath] = {
-            ...candidate,
-            value: task.value,
-            source: "user_confirmed",
-            requires_confirmation: false,
-          };
-        }
       } else {
         const result = await confirmListingField(
           batchId,
@@ -3833,7 +3833,9 @@ function confirmationTasks(product: ProductRecord): FieldTask[] {
   if (product.fieldTasks) {
     return product.fieldTasks.filter((task) => task.status === "confirm");
   }
-  return product.isDemo ? demoConfirmationTasks(product) : [];
+  return product.isDemo
+    ? demoConfirmationTasks(product).filter((task) => task.status === "confirm")
+    : [];
 }
 
 function summarizeFieldTasks(tasks: FieldTask[]) {
@@ -7778,35 +7780,9 @@ function isShippingTemplateIdField(field: SchemaFieldGuidance): boolean {
 }
 
 function schemaOptionValue(field: SchemaFieldGuidance, setting: string): string | null {
-  if (!normalizeSchemaOptionText(setting)) {
-    return null;
-  }
-  const option = field.options.find((item) => schemaOptionMatches(item, setting));
-  return option?.value ?? (field.options.length ? null : setting);
-}
-
-function normalizeSchemaOptionText(value: string): string {
-  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-}
-
-function schemaOptionMatches(
-  option: SchemaFieldGuidance["options"][number],
-  requestedValue: string,
-): boolean {
-  const normalizedRequested = normalizeSchemaOptionText(requestedValue);
-  if (!normalizedRequested) {
-    return false;
-  }
-  if (normalizeSchemaOptionText(option.value) === normalizedRequested) {
-    return true;
-  }
-  const displayName = option.display_name ?? "";
-  if (normalizeSchemaOptionText(displayName) === normalizedRequested) {
-    return true;
-  }
-  return displayName
-    .split(/[\/／|,，()（）]+/)
-    .some((alias) => normalizeSchemaOptionText(alias) === normalizedRequested);
+  return (
+    resolveSchemaOptionValue(field.options, setting) ?? (field.options.length ? null : setting)
+  );
 }
 
 function normalizeSchemaChoiceValue(field: SchemaFieldGuidance, value: unknown): unknown {
