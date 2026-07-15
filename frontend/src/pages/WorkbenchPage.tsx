@@ -754,6 +754,42 @@ export function WorkbenchPage({
     };
   };
 
+  useEffect(() => {
+    if (!featureFlags.workflow_v2) {
+      return;
+    }
+    const repairableProductIds = new Set(
+      products
+        .filter(
+          (product) =>
+            product.stage === "ai_ready" &&
+            !product.aiConfirmed &&
+            !product.schemaData &&
+            (product.fieldTasks?.length ?? 0) === 0 &&
+            Boolean(product.title.trim()),
+        )
+        .map((product) => product.id),
+    );
+    if (repairableProductIds.size === 0) {
+      return;
+    }
+    onProductsChange((currentProducts) =>
+      currentProducts.map((product) => {
+        if (!repairableProductIds.has(product.id)) {
+          return product;
+        }
+        const fieldTasks = buildFallbackAiTasks(product);
+        const fieldTaskSummary = summarizeFieldTasks(fieldTasks);
+        return {
+          ...product,
+          aiConfirmed: fieldTaskSummary.confirm === 0,
+          fieldTasks,
+          fieldTaskSummary,
+        };
+      }),
+    );
+  }, [featureFlags.workflow_v2, onProductsChange, products]);
+
   const handleFiles = (files: FileList | File[], targetProductId: string | null = null) => {
     const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
     if (!imageFiles.length) {
@@ -1013,8 +1049,8 @@ export function WorkbenchPage({
       if (schemaData) {
         const schemaGuidance = await getSchemaGuidance(schemaData);
         analyzed = syncProductSchemaFields({ ...analyzed, schemaData, schemaGuidance }, settings);
-        analyzed = await hydrateListingTasks(analyzed);
       }
+      analyzed = await hydrateListingTasks(analyzed);
       updateProduct(analyzed);
       const scenario = getFieldString(response.generated_fields, [
         "use_scenario",
