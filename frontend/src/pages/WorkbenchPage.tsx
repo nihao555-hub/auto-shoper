@@ -4617,20 +4617,23 @@ function WbInspector({
         : product.schemaFields,
     });
   };
-  const loadCategoryOptions = async (categoryId: string) => {
+  const loadCategoryOptions = async (
+    categoryId: string,
+    selectedCandidate?: AlibabaCategoryOption,
+  ) => {
     setCategoryBusy(true);
     setCategoryError("");
     try {
       const response = await listCategoryChildren(categoryId);
       const terminalCandidate =
-        response.categories.length === 0 && response.parent?.id === categoryId
-          ? [{ ...response.parent, leaf: true }]
+        response.categories.length === 0 && selectedCandidate
+          ? [{ ...selectedCandidate, leaf: true }]
           : response.categories;
       setCategoryOptions(terminalCandidate);
       if (!response.categories.length) {
         setCategoryError(
-          response.parent?.id === categoryId
-            ? "Alibaba 未返回更下级类目；可选择当前末端类目，系统将继续验证实时必填字段。"
+          selectedCandidate
+            ? `Alibaba 未返回「${selectedCandidate.name}」的更下级类目；请点击当前类目，系统将通过实时 Schema 验证它是否可用于发布。`
             : "该类目没有可选子类目，请返回上一级重新选择。",
         );
       }
@@ -4651,7 +4654,7 @@ function WbInspector({
       categoryPath.at(-1)?.id === option.id ? categoryPath : [...categoryPath, option];
     if (!option.leaf) {
       setCategoryPath(nextPath);
-      void loadCategoryOptions(option.id);
+      void loadCategoryOptions(option.id, option);
       return;
     }
     const categoryLabel = nextPath.map((item) => item.name).join(" > ");
@@ -4676,10 +4679,6 @@ function WbInspector({
         },
       },
     };
-    onChange(selectedProduct);
-    setCategoryPickerOpen(false);
-    setCategoryOptions([]);
-    setCategoryPath([]);
     setCategoryBusy(true);
     setCategoryError("");
     try {
@@ -4689,19 +4688,23 @@ function WbInspector({
         throw new Error("Alibaba 未返回类目 Schema");
       }
       const schemaGuidance = await getSchemaGuidance(schemaData);
-      onChange(
-        syncProductSchemaFields(
-          {
-            ...selectedProduct,
-            schemaData,
-            schemaGuidance,
-          },
-          settings,
-        ),
+      const confirmedProduct = syncProductSchemaFields(
+        {
+          ...selectedProduct,
+          schemaData,
+          schemaGuidance,
+        },
+        settings,
       );
+      onChange(confirmedProduct);
+      setCategoryPickerOpen(false);
+      setCategoryOptions([]);
+      setCategoryPath([]);
     } catch (error) {
       setCategoryError(
-        error instanceof Error ? error.message : "类目已选择，但实时必填字段加载失败。",
+        error instanceof Error
+          ? `无法将当前类目用于发布：${error.message}`
+          : "无法验证当前类目的实时必填字段，请重试或返回上一级。",
       );
     } finally {
       setCategoryBusy(false);
@@ -7311,6 +7314,15 @@ function getFactErrors(product: ProductRecord): string[] {
       errors.push("商品标题缺失");
     }
     return Array.from(new Set(errors));
+  }
+  if (!product.isDemo) {
+    const errors = [
+      product.facts.categoryId.trim() ? "类目实时必填字段未加载" : "最终叶子类目缺失",
+    ];
+    if (!product.title.trim()) {
+      errors.push("商品标题缺失");
+    }
+    return errors;
   }
   const errors: string[] = [];
   for (const key of requiredFactKeys) {
