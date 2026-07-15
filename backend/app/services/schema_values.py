@@ -276,7 +276,13 @@ def _validate_scalar_or_multi(
         if text is None:
             errors.append(_issue(field_key, "valueTypeRule", "Value must be scalar"))
             continue
-        if option_values and text not in option_values:
+        custom_input = (
+            "inputValue" in required_attributes
+            and bool(attributes.get("inputValue", "").strip())
+            and text.startswith("-")
+            and text[1:].isdigit()
+        )
+        if option_values and text not in option_values and not custom_input:
             errors.append(_issue(field_key, "optionRule", f"Unsupported option: {text}"))
         missing_attributes = sorted(required_attributes - set(attributes))
         if missing_attributes:

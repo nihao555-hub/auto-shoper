@@ -168,6 +168,37 @@ def test_build_schema_xml_adds_required_attributes_for_known_options() -> None:
     assert value.attrib["text"] == "USD"
 
 
+def test_build_schema_xml_accepts_custom_negative_option_with_input_value() -> None:
+    schema = """
+    <schema>
+      <field id="material" type="multiCheck">
+        <rules>
+          <rule name="requiredRule" value="true"/>
+          <rule name="valueAttributeRule" value="inputValue"/>
+        </rules>
+        <options><option displayName="Other" value="-1"/></options>
+      </field>
+    </schema>
+    """
+    result = build_schema_xml(
+        schema,
+        {
+            "material": [
+                {
+                    "value": "-2",
+                    "attributes": {"inputValue": "100% cotton paper"},
+                }
+            ]
+        },
+    )
+
+    assert result.ready_to_submit is True
+    value = ElementTree.fromstring(result.xml).find("field/values/value")
+    assert value is not None
+    assert value.text == "-2"
+    assert value.attrib["inputValue"] == "100% cotton paper"
+
+
 def test_validate_filled_schema_xml_rechecks_submission_values() -> None:
     built = build_schema_xml(
         SCHEMA_XML,

@@ -109,6 +109,24 @@ def test_guidance_marks_async_choice_fields() -> None:
     assert field.async_query_method == "top.category.options.get"
 
 
+def test_guidance_supports_alibaba_double_inputs() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="fob" type="complex"><fields>'
+        '<field id="range_min" type="input">'
+        '<rules><rule name="requiredRule" value="true"/>'
+        '<rule name="valueTypeRule" value="double"/></rules>'
+        "</field></fields></field>"
+        "</itemSchema>"
+    )
+
+    field = build_schema_guidance(schema).manual_fact_fields[0]
+
+    assert field.field == "fob.range_min"
+    assert field.value_type == "double"
+    assert field.supported is True
+
+
 def test_optionless_ai_looking_choice_defaults_to_merchant() -> None:
     schema = (
         "<itemSchema>"

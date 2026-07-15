@@ -25,6 +25,7 @@ SUPPORTED_TYPES = {
 SUPPORTED_VALUE_TYPES = {
     None,
     "text",
+    "double",
     "decimal",
     "integer",
     "date",

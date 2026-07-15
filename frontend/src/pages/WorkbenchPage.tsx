@@ -4591,21 +4591,20 @@ function WbInspector({
   const [manualCategoryPickerOpen, setManualCategoryPickerOpen] = useState(false);
   const addImageInputRef = useRef<HTMLInputElement>(null);
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
-    const schemaField = getRequiredSchemaFields(product).find(
+    const schemaFields = getRequiredSchemaFields(product).filter(
       (field) => schemaFactKey(field) === key,
     );
+    const nextSchemaFields = { ...product.schemaFields };
+    for (const field of schemaFields) {
+      nextSchemaFields[field.field] = {
+        value: normalizeSchemaChoiceValue(field, value),
+        source: "user_provided",
+      };
+    }
     onChange({
       ...product,
       facts: { ...product.facts, [key]: value },
-      schemaFields: schemaField
-        ? {
-            ...product.schemaFields,
-            [schemaField.field]: {
-              value,
-              source: "user_provided",
-            },
-          }
-        : product.schemaFields,
+      schemaFields: nextSchemaFields,
     });
   };
   const setCertifications = (certifications: string[]) => {
@@ -7750,12 +7749,52 @@ function schemaOptionValue(field: SchemaFieldGuidance, setting: string): string 
   return option?.value ?? (field.options.length ? null : setting);
 }
 
+function normalizeSchemaChoiceValue(field: SchemaFieldGuidance, value: unknown): unknown {
+  if (field.type !== "singleCheck" && field.type !== "multiCheck") {
+    return value;
+  }
+  const values = Array.isArray(value) ? value : [value];
+  const normalized = values.map((item, index) => {
+    if (typeof item !== "string" && typeof item !== "number") {
+      return item;
+    }
+    const text = String(item).trim();
+    if (!text) {
+      return item;
+    }
+    const option = field.options.find(
+      (candidate) =>
+        candidate.value.toLowerCase() === text.toLowerCase() ||
+        candidate.display_name?.trim().toLowerCase() === text.toLowerCase(),
+    );
+    if (option) {
+      return option.value;
+    }
+    if ((field.value_attributes ?? []).includes("inputValue")) {
+      return {
+        value: String(-(index + 1)),
+        attributes: { inputValue: text },
+      };
+    }
+    return item;
+  });
+  return field.type === "multiCheck" ? normalized : normalized[0];
+}
+
 function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings): ProductRecord {
   if (!product.schemaGuidance) {
     return product;
   }
   const schemaFields = { ...product.schemaFields };
-  for (const field of getRequiredSchemaFields(product)) {
+  const fieldsToSync = new Map(
+    [
+      ...getRequiredSchemaFields(product),
+      ...getAllSchemaFields(product).filter(
+        (field) => schemaDefaultForField(field, settings) !== null,
+      ),
+    ].map((field) => [field.field, field]),
+  );
+  for (const field of fieldsToSync.values()) {
     if (isImageSchemaField(field)) {
       const imageValue = schemaImageValue(field, product);
       if (imageValue) {
@@ -7773,7 +7812,7 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
       field.responsibility === "store_default" ? schemaDefaultForField(field, settings) : null;
     if (defaultValue) {
       schemaFields[field.field] = {
-        value: defaultValue,
+        value: normalizeSchemaChoiceValue(field, defaultValue),
         source: schemaFactKey(field) === "origin" ? "business_system" : "account_default",
       };
       continue;
@@ -7783,9 +7822,14 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
       continue;
     }
     schemaFields[field.field] = {
-      value: field.type === "multiCheck" && !Array.isArray(value) ? [value] : value,
-      source: field.responsibility === "ai_candidate" ? "ai_generated" : "user_provided",
-      requires_confirmation: field.responsibility === "ai_candidate",
+      value: normalizeSchemaChoiceValue(field, value),
+      source:
+        field.responsibility === "ai_candidate"
+          ? product.aiConfirmed
+            ? "user_confirmed"
+            : "ai_generated"
+          : "user_provided",
+      requires_confirmation: field.responsibility === "ai_candidate" && !product.aiConfirmed,
     };
   }
   return { ...product, schemaFields };
