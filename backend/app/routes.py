@@ -1284,7 +1284,9 @@ async def generate_product_images(
         except (AIProviderError, HTTPError, ValueError, TypeError) as exc:
             return ProductImageCandidate(slot=slot, label=template.label, error=str(exc))
 
-    candidates = await asyncio.gather(*(generate_slot(slot) for slot in slots))
+    # Image providers are substantially more capacity-sensitive than text APIs. Generate
+    # slots sequentially to avoid a merchant action creating a burst of large edit jobs.
+    candidates = [await generate_slot(slot) for slot in slots]
     return ProductImageGenerationResponse(product_id=product_id, candidates=list(candidates))
 
 

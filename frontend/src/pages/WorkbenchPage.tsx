@@ -4622,9 +4622,17 @@ function WbInspector({
     setCategoryError("");
     try {
       const response = await listCategoryChildren(categoryId);
-      setCategoryOptions(response.categories);
+      const terminalCandidate =
+        response.categories.length === 0 && response.parent?.id === categoryId
+          ? [{ ...response.parent, leaf: true }]
+          : response.categories;
+      setCategoryOptions(terminalCandidate);
       if (!response.categories.length) {
-        setCategoryError("该类目没有可选子类目，请返回上一级重新选择。");
+        setCategoryError(
+          response.parent?.id === categoryId
+            ? "Alibaba 未返回更下级类目；可选择当前末端类目，系统将继续验证实时必填字段。"
+            : "该类目没有可选子类目，请返回上一级重新选择。",
+        );
       }
     } catch (error) {
       setCategoryError(error instanceof Error ? error.message : "类目加载失败，请稍后重试。");
@@ -4639,7 +4647,8 @@ function WbInspector({
     void loadCategoryOptions("0");
   };
   const chooseCategory = async (option: AlibabaCategoryOption) => {
-    const nextPath = [...categoryPath, option];
+    const nextPath =
+      categoryPath.at(-1)?.id === option.id ? categoryPath : [...categoryPath, option];
     if (!option.leaf) {
       setCategoryPath(nextPath);
       void loadCategoryOptions(option.id);
@@ -5068,7 +5077,7 @@ function WbInspector({
                   ) : (
                     <div className="wb-image-candidate-error">
                       <WarningCircle size={17} />
-                      <span>{candidate.error ?? "未返回图片"}</span>
+                      <span>{candidate.error || "图片服务未返回具体原因，请单独重试"}</span>
                     </div>
                   )}
                   <div>
@@ -5082,7 +5091,14 @@ function WbInspector({
                         加入图库
                       </button>
                     ) : (
-                      <small>{candidate.error ?? "生成失败，可单独重试全部图位"}</small>
+                      <button
+                        type="button"
+                        className="wb-link"
+                        onClick={() => onGenerateImages([candidate.slot])}
+                        disabled={imageGenerationBusy}
+                      >
+                        单独重试
+                      </button>
                     )}
                   </div>
                 </article>

@@ -340,3 +340,37 @@ async def test_product_image_edit_sends_multiple_references() -> None:
     finally:
         await client.close()
     assert result["requires_confirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_product_image_edit_retries_overload_with_primary_reference() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        body = (await request.aread()).decode(errors="ignore")
+        if calls == 1:
+            assert 'name="image[]"; filename="front.jpg"' in body
+            assert 'name="image[]"; filename="side.jpg"' in body
+            return httpx.Response(400, json={"error": {"message": "excessive system load"}})
+        assert 'name="image"; filename="front.jpg"' in body
+        assert 'filename="side.jpg"' not in body
+        return httpx.Response(200, json={"data": [{"url": "https://example.test/edit.png"}]})
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.edit_product_image(
+            [
+                (b"front", "front.jpg", "image/jpeg"),
+                (b"side", "side.jpg", "image/jpeg"),
+            ],
+            "use a white studio background",
+            "1024x1024",
+            1,
+        )
+    finally:
+        await client.close()
+
+    assert calls == 2
+    assert result["data"][0]["url"].endswith("edit.png")

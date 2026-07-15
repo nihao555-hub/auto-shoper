@@ -300,25 +300,51 @@ class AIClient:
             f"{reference_note}"
             f"Only change the presentation as requested: {prompt}"
         )
-        # A single reference keeps the plain "image" field so behaviour is unchanged;
-        # multiple references use the OpenAI-compatible repeated "image[]" field.
-        field_name = "image" if len(references) == 1 else "image[]"
-        files = [
-            (field_name, (file_name, image_bytes, content_type))
-            for image_bytes, file_name, content_type in references
-        ]
-        response = await self.client.post(
-            "/images/edits",
-            data={
-                "model": self.settings.image_model,
-                "prompt": preservation_prompt,
-                "size": size,
-                "n": str(count),
-            },
-            files=files,
-        )
-        if response.is_error:
-            raise AIProviderError(self._provider_error(response))
+        active_references = references
+        response: httpx.Response | None = None
+        attempts = 3
+        for attempt in range(attempts):
+            # A single reference keeps the plain "image" field; compatible providers may
+            # accept repeated image[] fields. Overloaded/incompatible providers fall back
+            # to the primary image on retry so product identity remains grounded.
+            field_name = "image" if len(active_references) == 1 else "image[]"
+            files = [
+                (field_name, (file_name, image_bytes, content_type))
+                for image_bytes, file_name, content_type in active_references
+            ]
+            try:
+                response = await self.client.post(
+                    "/images/edits",
+                    data={
+                        "model": self.settings.image_model,
+                        "prompt": preservation_prompt,
+                        "size": size,
+                        "n": str(count),
+                    },
+                    files=files,
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt + 1 >= attempts:
+                    if isinstance(exc, httpx.TimeoutException):
+                        raise AIProviderError("Image provider timed out; please retry") from exc
+                    raise AIProviderError("Image provider connection failed; please retry") from exc
+                active_references = active_references[:1]
+                await asyncio.sleep(0.75 * (2**attempt))
+                continue
+            if not response.is_error:
+                break
+            provider_error = self._provider_error(response)
+            retryable = (
+                response.status_code in {429, 500, 502, 503, 504}
+                or "excessive system load" in provider_error.casefold()
+                or (response.status_code == 400 and len(active_references) > 1)
+            )
+            if attempt + 1 >= attempts or not retryable:
+                raise AIProviderError(provider_error)
+            active_references = active_references[:1]
+            await asyncio.sleep(0.75 * (2**attempt))
+        if response is None:
+            raise AIProviderError("Image provider request failed")
         data = response.json()
         if not isinstance(data, dict) or not isinstance(data.get("data"), list):
             raise AIProviderError("Image provider returned an invalid response")
