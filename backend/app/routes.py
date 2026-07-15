@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import zipfile
 from collections.abc import Mapping
 from time import perf_counter
@@ -113,6 +114,7 @@ from backend.app.services.schema_rules import (
 from backend.app.services.schema_values import build_schema_xml, validate_filled_schema_xml
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 @router.get("/capabilities")
@@ -422,6 +424,19 @@ async def get_category_children(
         for child in children
         if child["id"] != category_id
     }
+    logger.info(
+        "Alibaba category tree diagnostics category_id=%s payload_type=%s "
+        "top_level_keys=%s records=%d parent_found=%s children=%d "
+        "missing_child_ids=%d result=%d",
+        category_id,
+        type(payload).__name__,
+        sorted(str(key) for key in payload) if isinstance(payload, Mapping) else [],
+        len(records),
+        parent is not None,
+        len(children),
+        len(missing_child_ids),
+        len(unique_children),
+    )
     if category_id == "0" and not unique_children:
         raise HTTPException(
             status_code=502,
