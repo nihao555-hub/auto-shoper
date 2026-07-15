@@ -39,6 +39,21 @@ const sections: Array<{
 const uniqueOptions = (options: StoreLinkedOption[]): StoreLinkedOption[] =>
   Array.from(new Map(options.map((option) => [option.id, option])).values());
 
+type StoreOptionErrors = {
+  productGroup: string;
+  photoBankGroup: string;
+  shippingTemplate: string;
+};
+
+const emptyStoreOptionErrors: StoreOptionErrors = {
+  productGroup: "",
+  photoBankGroup: "",
+  shippingTemplate: "",
+};
+
+const optionErrorMessage = (label: string, result: PromiseRejectedResult): string =>
+  `${label}加载失败：${result.reason instanceof Error ? result.reason.message : "请稍后重试"}`;
+
 export function SettingsDrawer({
   open,
   settings,
@@ -55,7 +70,7 @@ export function SettingsDrawer({
   const [photoBankGroups, setPhotoBankGroups] = useState<StoreLinkedOption[]>([]);
   const [shippingTemplates, setShippingTemplates] = useState<StoreLinkedOption[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(false);
-  const [optionsError, setOptionsError] = useState("");
+  const [optionErrors, setOptionErrors] = useState<StoreOptionErrors>(emptyStoreOptionErrors);
   const missingRequired = getMissingStoreTemplateFields(draft);
 
   useEffect(() => {
@@ -74,7 +89,7 @@ export function SettingsDrawer({
     }
     let cancelled = false;
     setOptionsLoading(true);
-    setOptionsError("");
+    setOptionErrors(emptyStoreOptionErrors);
     void Promise.allSettled([
       listProductGroups(),
       listPhotoBankGroups(),
@@ -84,23 +99,23 @@ export function SettingsDrawer({
         return;
       }
       const [productResult, photoResult, shippingResult] = results;
-      const failures: string[] = [];
+      const errors = { ...emptyStoreOptionErrors };
       if (productResult.status === "fulfilled") {
         setProductGroups(uniqueOptions(findProductGroups(productResult.value)));
       } else {
-        failures.push("商品分组");
+        errors.productGroup = optionErrorMessage("商品分组", productResult);
       }
       if (photoResult.status === "fulfilled") {
         setPhotoBankGroups(uniqueOptions(findPhotoBankGroups(photoResult.value)));
       } else {
-        failures.push("图片银行分组");
+        errors.photoBankGroup = optionErrorMessage("图片银行分组", photoResult);
       }
       if (shippingResult.status === "fulfilled") {
         setShippingTemplates(uniqueOptions(findShippingTemplates(shippingResult.value)));
       } else {
-        failures.push("运费模板");
+        errors.shippingTemplate = optionErrorMessage("运费模板", shippingResult);
       }
-      setOptionsError(failures.length ? `${failures.join("、")}加载失败，请关闭后重试。` : "");
+      setOptionErrors(errors);
       setOptionsLoading(false);
     });
     return () => {
@@ -253,7 +268,7 @@ export function SettingsDrawer({
                     value={draft.productGroupLabel}
                     options={productGroups}
                     loading={optionsLoading}
-                    error={optionsError}
+                    error={optionErrors.productGroup}
                     onChange={(value) =>
                       updateLinkedOption(
                         "productGroupId",
@@ -269,7 +284,7 @@ export function SettingsDrawer({
                     value={draft.photoBankGroupLabel}
                     options={photoBankGroups}
                     loading={optionsLoading}
-                    error={optionsError}
+                    error={optionErrors.photoBankGroup}
                     onChange={(value) =>
                       updateLinkedOption(
                         "photoBankGroupId",
@@ -331,7 +346,7 @@ export function SettingsDrawer({
                     value={draft.shippingTemplateLabel}
                     options={shippingTemplates}
                     loading={optionsLoading}
-                    error={optionsError}
+                    error={optionErrors.shippingTemplate}
                     onChange={(value) =>
                       updateLinkedOption(
                         "shippingTemplateId",

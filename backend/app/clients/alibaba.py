@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -38,6 +39,11 @@ class AlibabaClient:
     def generate_signature(params: dict[str, str], secret: str, operation: str) -> str:
         canonical = operation + "".join(f"{key}{value}" for key, value in sorted(params.items()))
         return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest().upper()
+
+    @staticmethod
+    def generate_top_signature(params: dict[str, str], secret: str) -> str:
+        canonical = "".join(f"{key}{value}" for key, value in sorted(params.items()))
+        return hmac.new(secret.encode(), canonical.encode(), hashlib.md5).hexdigest().upper()
 
     async def call(
         self,
@@ -83,6 +89,41 @@ class AlibabaClient:
             raise AlibabaAPIError(business_error)
         return data
 
+    async def call_top(
+        self,
+        method: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        china_standard_time = datetime.now(UTC).astimezone(timezone(timedelta(hours=8)))
+        params = {
+            "app_key": self.settings.alibaba_app_key or "",
+            "format": "json",
+            "method": method,
+            "session": self.settings.alibaba_access_token or "",
+            "sign_method": "hmac",
+            "timestamp": china_standard_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "v": "2.0",
+        }
+        for key, value in (parameters or {}).items():
+            params[key] = self._serialize(value)
+        params["sign"] = self.generate_top_signature(
+            params,
+            self.settings.alibaba_app_secret or "",
+        )
+        response = await self.client.post(self.settings.alibaba_top_api_base_url, data=params)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise AlibabaAPIError(
+                f"Alibaba TOP API returned non-JSON HTTP {response.status_code}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise AlibabaAPIError("Alibaba TOP API returned an invalid response")
+        error = data.get("error_response")
+        if response.is_error or isinstance(error, dict):
+            raise AlibabaAPIError(self._top_error_message(data, response.status_code))
+        return data
+
     def _base_parameters(self, operation: str) -> dict[str, str]:
         return {
             "app_key": self.settings.alibaba_app_key or "",
@@ -120,6 +161,21 @@ class AlibabaClient:
             if details:
                 return f"Alibaba API error: {'; '.join(details)}"
         return f"Alibaba API returned HTTP {status_code}"
+
+    @staticmethod
+    def _top_error_message(data: dict[str, Any], status_code: int) -> str:
+        error = data.get("error_response")
+        if isinstance(error, dict):
+            message = error.get("sub_msg") or error.get("msg") or "TOP request failed"
+            code = error.get("sub_code") or error.get("code")
+            request_id = error.get("request_id")
+            details = [str(message)]
+            if code:
+                details.append(f"code={code}")
+            if request_id:
+                details.append(f"request_id={request_id}")
+            return f"Alibaba TOP API error: {'; '.join(details)}"
+        return f"Alibaba TOP API returned HTTP {status_code}"
 
     @classmethod
     def _business_error(cls, data: dict[str, Any]) -> str | None:

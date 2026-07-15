@@ -54,6 +54,13 @@ class FakeAlibabaClient:
             "file_fields": sorted(files) if files else [],
         }
 
+    async def call_top(
+        self,
+        method: str,
+        parameters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return {"operation": method, "parameters": parameters or {}}
+
 
 async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
     yield FakeAlibabaClient()  # type: ignore[misc]
@@ -572,7 +579,7 @@ def test_schema_update_and_photo_bank_queries() -> None:
         assert shipping_templates.status_code == 200
         assert (
             shipping_templates.json()["operation"]
-            == "/alibaba/wholesale/shippingline/template/list"
+            == "alibaba.wholesale.shippingline.template.list"
         )
         assert shipping_templates.json()["parameters"] == {"page_num": 2, "count": 25}
 

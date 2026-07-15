@@ -45,7 +45,7 @@ OPERATIONS = {
     ),
     "shipping_template_list": AlibabaOperation(
         key="shipping_template_list",
-        operation="/alibaba/wholesale/shippingline/template/list",
+        operation="alibaba.wholesale.shippingline.template.list",
         purpose="查询当前店铺运费模板",
         safety="只读店铺配置",
     ),
