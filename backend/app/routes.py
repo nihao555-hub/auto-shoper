@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import mimetypes
 import zipfile
 from collections.abc import Mapping
 from time import perf_counter
@@ -1774,10 +1773,6 @@ def _validate_upload(image: UploadFile, content: bytes) -> str:
 
 def _normalized_image_content_type(image: UploadFile, content: bytes) -> str | None:
     supported = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-    declared = (image.content_type or "").partition(";")[0].strip().lower()
-    if declared in supported:
-        return declared
-
     signatures = (
         (b"\xff\xd8\xff", "image/jpeg"),
         (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -1789,6 +1784,8 @@ def _normalized_image_content_type(image: UploadFile, content: bytes) -> str | N
             return content_type
     if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
         return "image/webp"
+    if content[4:12] in {b"ftypavif", b"ftypavis"}:
+        return None
 
-    guessed, _ = mimetypes.guess_type(image.filename or "")
-    return guessed if guessed in supported else None
+    declared = (image.content_type or "").partition(";")[0].strip().lower()
+    return declared if declared in supported else None

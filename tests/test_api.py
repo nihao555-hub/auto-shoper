@@ -437,6 +437,25 @@ def test_product_analysis_normalizes_photo_bank_octet_stream() -> None:
         app.dependency_overrides.clear()
 
 
+def test_product_analysis_rejects_avif_mislabeled_as_png() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/analyze-image",
+            files=[
+                (
+                    "images",
+                    ("photo-bank.png", b"\x00\x00\x00\x20ftypavifimage", "image/png"),
+                )
+            ],
+            data={"known_facts": "{}"},
+        )
+        assert response.status_code == 415
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_unconfigured_alibaba_client_is_rejected() -> None:
     settings = Settings(
         _env_file=None,

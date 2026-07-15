@@ -926,21 +926,7 @@ export function WorkbenchPage({
             const response = await fetch(image.url);
             if (response.ok) {
               const blob = await response.blob();
-              const declaredType = blob.type.split(";", 1)[0].toLowerCase();
-              const extensionType = image.name.toLowerCase().endsWith(".png")
-                ? "image/png"
-                : image.name.toLowerCase().endsWith(".webp")
-                  ? "image/webp"
-                  : image.name.toLowerCase().endsWith(".gif")
-                    ? "image/gif"
-                    : "image/jpeg";
-              sourceFile = new File([blob], image.name || `photobank-${index}.jpg`, {
-                type:
-                  declaredType.startsWith("image/") &&
-                  declaredType !== "image/application/octet-stream"
-                    ? declaredType
-                    : extensionType,
-              });
+              sourceFile = await preparePhotoBankFile(blob, image.name || `photobank-${index}.jpg`);
             }
           } catch {
             sourceFile = undefined;
@@ -8208,3 +8194,36 @@ function readbackValue(value: unknown): string {
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
+const AI_SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+const preparePhotoBankFile = async (blob: Blob, fileName: string): Promise<File> => {
+  const declaredType = blob.type.split(";", 1)[0].toLowerCase();
+  if (AI_SUPPORTED_IMAGE_TYPES.has(declaredType)) {
+    return new File([blob], fileName, { type: declaredType });
+  }
+
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to prepare photo-bank image");
+    }
+    context.drawImage(bitmap, 0, 0);
+    const converted = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => {
+        if (value) {
+          resolve(value);
+        } else {
+          reject(new Error("Unable to convert photo-bank image"));
+        }
+      }, "image/png");
+    });
+    return new File([converted], fileName.replace(/\.[^.]+$/, ".png"), { type: "image/png" });
+  } finally {
+    bitmap.close();
+  }
+};
