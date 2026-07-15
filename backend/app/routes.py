@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import mimetypes
 import zipfile
 from collections.abc import Mapping
 from time import perf_counter
@@ -848,8 +849,8 @@ async def analyze_product_image(
     image_payloads: list[tuple[bytes, str]] = []
     for upload in uploads:
         content = await upload.read()
-        _validate_upload(upload, content)
-        image_payloads.append((content, upload.content_type or "image/jpeg"))
+        content_type = _validate_upload(upload, content)
+        image_payloads.append((content, content_type))
     try:
         parsed_facts = json.loads(known_facts)
     except json.JSONDecodeError as exc:
@@ -1760,10 +1761,34 @@ def _preparation_error(prepared: OfficialListingPreparationResult) -> str:
     )
 
 
-def _validate_upload(image: UploadFile, content: bytes) -> None:
-    if not image.content_type or not image.content_type.startswith("image/"):
+def _validate_upload(image: UploadFile, content: bytes) -> str:
+    content_type = _normalized_image_content_type(image, content)
+    if content_type is None:
         raise HTTPException(status_code=415, detail="Only image uploads are supported")
     if not content:
         raise HTTPException(status_code=422, detail="Image is empty")
     if len(content) > get_settings().max_upload_bytes:
         raise HTTPException(status_code=413, detail="Image is too large")
+    return content_type
+
+
+def _normalized_image_content_type(image: UploadFile, content: bytes) -> str | None:
+    supported = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    declared = (image.content_type or "").partition(";")[0].strip().lower()
+    if declared in supported:
+        return declared
+
+    signatures = (
+        (b"\xff\xd8\xff", "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+    )
+    for signature, content_type in signatures:
+        if content.startswith(signature):
+            return content_type
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
+
+    guessed, _ = mimetypes.guess_type(image.filename or "")
+    return guessed if guessed in supported else None

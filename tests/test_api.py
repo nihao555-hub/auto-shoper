@@ -61,6 +61,7 @@ async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
 
 class FakeAIClient:
     received_image_count = 0
+    received_image_types: list[str] = []
     received_field_guidance: str | None = None
     edit_prompts: list[str] = []
 
@@ -72,6 +73,7 @@ class FakeAIClient:
         field_guidance: str | None = None,
     ) -> ProductImageAnalysis:
         self.received_image_count = len(images)
+        self.received_image_types = [content_type for _, content_type in images]
         self.received_field_guidance = field_guidance
         return ProductImageAnalysis(
             observed_fields={},
@@ -411,6 +413,26 @@ def test_category_schema_uses_iop_gateway_parameters() -> None:
             "cat_id": "21111199",
             "language": "en_US",
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_product_analysis_normalizes_photo_bank_octet_stream() -> None:
+    app.dependency_overrides[get_ai_client] = fake_ai_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/products/analyze-image",
+            files=[
+                (
+                    "images",
+                    ("photo-bank.png", b"\x89PNG\r\n\x1a\nimage", "application/octet-stream"),
+                )
+            ],
+            data={"known_facts": "{}"},
+        )
+        assert response.status_code == 200
+        assert fake_ai.received_image_types == ["image/png"]
     finally:
         app.dependency_overrides.clear()
 

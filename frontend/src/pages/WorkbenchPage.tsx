@@ -926,8 +926,20 @@ export function WorkbenchPage({
             const response = await fetch(image.url);
             if (response.ok) {
               const blob = await response.blob();
+              const declaredType = blob.type.split(";", 1)[0].toLowerCase();
+              const extensionType = image.name.toLowerCase().endsWith(".png")
+                ? "image/png"
+                : image.name.toLowerCase().endsWith(".webp")
+                  ? "image/webp"
+                  : image.name.toLowerCase().endsWith(".gif")
+                    ? "image/gif"
+                    : "image/jpeg";
               sourceFile = new File([blob], image.name || `photobank-${index}.jpg`, {
-                type: blob.type || "image/jpeg",
+                type:
+                  declaredType.startsWith("image/") &&
+                  declaredType !== "image/application/octet-stream"
+                    ? declaredType
+                    : extensionType,
               });
             }
           } catch {
