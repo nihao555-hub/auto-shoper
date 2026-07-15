@@ -422,6 +422,11 @@ async def get_category_children(
         for child in children
         if child["id"] != category_id
     }
+    if category_id == "0" and not unique_children:
+        raise HTTPException(
+            status_code=502,
+            detail="Alibaba 未返回可识别的一级类目，请稍后重试或联系管理员检查类目接口权限",
+        )
     return {
         "parent": parent,
         "categories": sorted(unique_children.values(), key=lambda item: item["name"].casefold()),

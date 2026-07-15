@@ -79,6 +79,56 @@ def test_root_category_payload_can_return_top_level_records_directly() -> None:
     assert missing == []
 
 
+def test_root_category_payload_recovers_embedded_children_without_child_ids() -> None:
+    records = extract_category_records(
+        {
+            "result": {
+                "category": {
+                    "category_id": 0,
+                    "category_name": "Root",
+                    "is_leaf_category": False,
+                    "level": 0,
+                    "children": [
+                        {
+                            "category_id": 12,
+                            "category_name": "Arts & Crafts",
+                            "is_leaf_category": False,
+                            "level": 1,
+                        },
+                        {
+                            "category_id": 34,
+                            "category_name": "Office & School Supplies",
+                            "is_leaf_category": False,
+                            "level": 1,
+                        },
+                    ],
+                }
+            }
+        }
+    )
+
+    parent, children, missing = category_children("0", records)
+
+    assert parent is not None
+    assert parent["id"] == "0"
+    assert [child["id"] for child in children] == ["12", "34"]
+    assert missing == []
+
+
+def test_category_parser_supports_alibaba_child_category_id_alias() -> None:
+    records = extract_category_records(
+        {
+            "categoryId": "12",
+            "categoryName": "Arts & Crafts",
+            "isLeafCategory": False,
+            "childCategoryIds": [34, 56],
+        }
+    )
+
+    assert records[0]["leaf"] is False
+    assert records[0]["child_ids"] == ["34", "56"]
+
+
 class _CategoryClient:
     async def call(
         self,
@@ -128,6 +178,57 @@ def test_category_children_endpoint_loads_live_child_details() -> None:
             "name": "Arts & Crafts",
             "leaf": True,
             "level": None,
+            "child_ids": [],
+        }
+    ]
+
+
+class _EmbeddedRootCategoryClient:
+    async def call(
+        self,
+        operation: str,
+        parameters: dict[str, object] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+    ) -> dict[str, object]:
+        assert str((parameters or {})["cat_id"]) == "0"
+        return {
+            "result": {
+                "category": {
+                    "category_id": 0,
+                    "category_name": "Root",
+                    "is_leaf_category": False,
+                    "level": 0,
+                    "children": [
+                        {
+                            "category_id": 12,
+                            "category_name": "Arts & Crafts",
+                            "is_leaf_category": False,
+                            "level": 1,
+                        }
+                    ],
+                }
+            }
+        }
+
+
+async def _embedded_root_category_client() -> AsyncIterator[_EmbeddedRootCategoryClient]:
+    yield _EmbeddedRootCategoryClient()
+
+
+def test_category_children_endpoint_returns_embedded_root_categories() -> None:
+    app.dependency_overrides[get_alibaba_client] = _embedded_root_category_client
+    try:
+        response = TestClient(app).get("/api/v1/alibaba/categories/0/children")
+    finally:
+        app.dependency_overrides.pop(get_alibaba_client, None)
+
+    assert response.status_code == 200
+    assert response.json()["categories"] == [
+        {
+            "id": "12",
+            "name": "Arts & Crafts",
+            "leaf": False,
+            "level": 1,
             "child_ids": [],
         }
     ]

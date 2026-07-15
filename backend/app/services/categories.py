@@ -11,8 +11,23 @@ class CategoryRecord(TypedDict):
 
 _ID_KEYS = ("category_id", "categoryId", "cat_id", "catId", "id")
 _NAME_KEYS = ("name", "category_name", "categoryName", "display_name", "displayName")
-_LEAF_KEYS = ("leaf_category", "leafCategory", "is_leaf", "isLeaf")
-_CHILD_KEYS = ("child_ids", "childIds", "children_ids", "childrenIds")
+_LEAF_KEYS = (
+    "leaf_category",
+    "leafCategory",
+    "is_leaf_category",
+    "isLeafCategory",
+    "is_leaf",
+    "isLeaf",
+    "leaf",
+)
+_CHILD_KEYS = (
+    "child_ids",
+    "childIds",
+    "child_category_ids",
+    "childCategoryIds",
+    "children_ids",
+    "childrenIds",
+)
 
 
 def extract_category_records(payload: object) -> list[CategoryRecord]:
@@ -52,6 +67,26 @@ def category_children(
         return None, records, []
 
     child_ids = parent["child_ids"]
+    if not child_ids and not parent["leaf"]:
+        other_records = [record for record in records if record["id"] != category_id]
+        if parent["level"] is not None:
+            direct_level = parent["level"] + 1
+            level_children = [
+                record for record in other_records if record["level"] == direct_level
+            ]
+            if level_children:
+                return parent, level_children, []
+        known_levels = [record["level"] for record in other_records if record["level"] is not None]
+        if known_levels:
+            nearest_level = min(known_levels)
+            return (
+                parent,
+                [record for record in other_records if record["level"] == nearest_level],
+                [],
+            )
+        # Some category responses embed only the immediate children and omit both
+        # child_ids and level. In that shape, every other normalized record is a child.
+        return parent, other_records, []
     embedded_children = [record for record in records if record["id"] in child_ids]
     missing_child_ids = [
         child_id
