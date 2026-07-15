@@ -395,7 +395,7 @@ def test_operations_catalog_contains_core_publish_flow() -> None:
         "display_update",
     } <= operations
     category_operation = next(item for item in catalog if item["key"] == "category_get")
-    assert category_operation["operation"] == "/alibaba/icbu/category/get/new"
+    assert category_operation["operation"] == "/icbu/product/category/get"
 
 
 def test_unconfigured_alibaba_client_is_rejected() -> None:

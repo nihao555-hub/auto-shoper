@@ -36,6 +36,33 @@ def test_extract_category_records_normalizes_alibaba_shapes() -> None:
     ]
 
 
+def test_extract_category_records_keeps_nameless_structural_root() -> None:
+    records = extract_category_records(
+        {
+            "result": {
+                "success": True,
+                "result": {
+                    "category_id": 0,
+                    "name": "",
+                    "leaf_category": False,
+                    "level": 0,
+                    "child_ids": [12, 34],
+                },
+            }
+        }
+    )
+
+    assert records == [
+        {
+            "id": "0",
+            "name": "",
+            "leaf": False,
+            "level": 0,
+            "child_ids": ["12", "34"],
+        }
+    ]
+
+
 def test_category_children_reports_embedded_and_missing_children() -> None:
     records = [
         {
@@ -142,7 +169,7 @@ class _CategoryClient:
                 "result": {
                     "category": {
                         "category_id": 0,
-                        "name": "Root",
+                        "name": "",
                         "leaf_category": False,
                         "child_ids": [12],
                     }

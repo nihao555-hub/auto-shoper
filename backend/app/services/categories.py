@@ -37,14 +37,16 @@ def extract_category_records(payload: object) -> list[CategoryRecord]:
         if isinstance(value, Mapping):
             category_id = _first(value, _ID_KEYS)
             name = _first(value, _NAME_KEYS)
-            if category_id not in (None, "") and isinstance(name, str) and name.strip():
+            normalized_name = name.strip() if isinstance(name, str) else ""
+            child_ids = _as_string_list(_first(value, _CHILD_KEYS))
+            if category_id not in (None, "") and (normalized_name or child_ids):
                 normalized_id = str(category_id)
                 records[normalized_id] = {
                     "id": normalized_id,
-                    "name": name.strip(),
+                    "name": normalized_name,
                     "leaf": _as_bool(_first(value, _LEAF_KEYS)),
                     "level": _as_int(value.get("level")),
-                    "child_ids": _as_string_list(_first(value, _CHILD_KEYS)),
+                    "child_ids": child_ids,
                 }
             for nested in value.values():
                 visit(nested)

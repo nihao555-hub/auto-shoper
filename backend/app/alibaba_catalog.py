@@ -3,7 +3,7 @@ from backend.app.models import AlibabaOperation
 OPERATIONS = {
     "category_get": AlibabaOperation(
         key="category_get",
-        operation="/alibaba/icbu/category/get/new",
+        operation="/icbu/product/category/get",
         purpose="获取类目树或类目详情",
         safety="AI 可推荐类目，最终叶子类目必须人工确认",
     ),
