@@ -398,6 +398,25 @@ def test_operations_catalog_contains_core_publish_flow() -> None:
     assert category_operation["operation"] == "/icbu/product/category/get"
 
 
+def test_category_schema_uses_official_request_envelope() -> None:
+    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    try:
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/alibaba/categories/21111199/schema",
+            params={"language": "en_US"},
+        )
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {
+            "param_product_top_publish_request": {
+                "cat_id": "21111199",
+                "language": "en_US",
+            }
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_unconfigured_alibaba_client_is_rejected() -> None:
     settings = Settings(
         _env_file=None,

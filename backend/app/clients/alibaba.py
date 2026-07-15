@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -123,21 +124,43 @@ class AlibabaClient:
 
     @classmethod
     def _business_error(cls, data: dict[str, Any]) -> str | None:
-        result = data.get("result")
-        if not isinstance(result, dict):
-            return None
         success_keys = ("success", "biz_success", "bizSuccess")
-        if not any(result.get(key) is False for key in success_keys):
-            return None
+        for result in cls._nested_dicts(data):
+            error_response = result.get("error_response")
+            if isinstance(error_response, dict):
+                return cls._nested_error_message(error_response, data)
+            if any(result.get(key) is False for key in success_keys):
+                return cls._nested_error_message(result, data)
+        return None
+
+    @classmethod
+    def _nested_dicts(cls, value: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        yield value
+        for nested in value.values():
+            if isinstance(nested, dict):
+                yield from cls._nested_dicts(nested)
+
+    @staticmethod
+    def _nested_error_message(result: dict[str, Any], root: dict[str, Any]) -> str:
         details: list[str] = []
-        for key in ("message", "message_info", "error_message", "msg"):
+        for key in ("message", "message_info", "error_message", "sub_msg", "msg"):
             if result.get(key):
                 details.append(str(result[key]))
                 break
-        code = result.get("msg_code") or result.get("error_code")
+        code = (
+            result.get("msg_code")
+            or result.get("error_code")
+            or result.get("sub_code")
+            or result.get("code")
+        )
         if code:
             details.append(f"code={code}")
-        trace_id = result.get("trace_id") or data.get("_trace_id_")
+        trace_id = (
+            result.get("trace_id")
+            or result.get("_trace_id_")
+            or root.get("trace_id")
+            or root.get("_trace_id_")
+        )
         if trace_id:
             details.append(f"trace_id={trace_id}")
         message = "; ".join(details) or "business operation failed"

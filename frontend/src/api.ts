@@ -857,7 +857,7 @@ export const publishBatch = async (
 export const findSchemaData = (
   payload: Record<string, unknown>,
 ): Record<string, unknown> | string | null => {
-  const preferredKeys = ["schema", "schema_data", "schemaData", "xml", "result"];
+  const preferredKeys = ["schema", "schema_data", "schemaData", "xml", "data", "result"];
   for (const key of preferredKeys) {
     const value = payload[key];
     if (typeof value === "string" && value.includes("<")) {

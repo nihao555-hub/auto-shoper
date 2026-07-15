@@ -77,6 +77,14 @@ async def test_call_rejects_gop_and_business_errors_with_trace_ids() -> None:
                 },
                 "_trace_id_": "trace-2",
             },
+            {
+                "alibaba_icbu_product_schema_get_response": {
+                    "biz_success": False,
+                    "message": "category schema unavailable",
+                    "msg_code": "SCHEMA_EMPTY",
+                    "trace_id": "trace-3",
+                }
+            },
         ]
     )
 
@@ -89,5 +97,10 @@ async def test_call_rejects_gop_and_business_errors_with_trace_ids() -> None:
             await client.call("/first")
         with pytest.raises(AlibabaAPIError, match="invalid inventory; code=600003"):
             await client.call("/second")
+        with pytest.raises(
+            AlibabaAPIError,
+            match="category schema unavailable; code=SCHEMA_EMPTY; trace_id=trace-3",
+        ):
+            await client.call("/third")
     finally:
         await client.close()

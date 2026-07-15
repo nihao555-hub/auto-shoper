@@ -535,6 +535,15 @@ async def list_products(
     return await _alibaba_call(client, "product_list", parameters)
 
 
+def _schema_get_parameters(category_id: str, language: str) -> dict[str, Any]:
+    return {
+        "param_product_top_publish_request": {
+            "cat_id": category_id,
+            "language": language,
+        }
+    }
+
+
 @router.get("/alibaba/categories/{category_id}/schema")
 async def get_schema(
     category_id: str,
@@ -544,7 +553,7 @@ async def get_schema(
     return await _alibaba_call(
         client,
         "schema_get",
-        {"cat_id": category_id, "language": language},
+        _schema_get_parameters(category_id, language),
     )
 
 
@@ -901,7 +910,7 @@ async def get_schema_guidance(
     schema = await _alibaba_call(
         client,
         "schema_get",
-        {"cat_id": category_id, "language": language},
+        _schema_get_parameters(category_id, language),
     )
     try:
         return build_schema_guidance(schema)
