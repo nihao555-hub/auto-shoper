@@ -29,6 +29,15 @@ from backend.app.services.oauth_diagnostics import mask, recent_events, record_e
 router = APIRouter(prefix="/api/v1/alibaba", tags=["alibaba-store-connections"])
 logger = logging.getLogger(__name__)
 
+SHIPPING_TEMPLATE_ID_KEYS = {
+    "shipping_template_id",
+    "shippingTemplateId",
+    "freight_template_id",
+    "freightTemplateId",
+    "shipping_line_template_id",
+    "shippingLineTemplateId",
+}
+
 
 def _extract_count(payload: object) -> int | None:
     if isinstance(payload, dict):
@@ -191,6 +200,33 @@ def _first_product_id(payload: object) -> str:
     return ""
 
 
+def _product_ids(payload: object, limit: int = 5) -> list[str]:
+    product_ids: list[str] = []
+
+    def collect(value: object) -> None:
+        if len(product_ids) >= limit:
+            return
+        if isinstance(value, Mapping):
+            product_id = _first_scalar(
+                {key: value.get(key) for key in ("product_id", "productId")},
+                {"product_id", "productId"},
+            )
+            if product_id and product_id not in product_ids:
+                product_ids.append(product_id)
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    if not product_ids:
+        fallback = _first_product_id(payload)
+        if fallback:
+            product_ids.append(fallback)
+    return product_ids
+
+
 def _first_named_record(
     payload: object,
     *,
@@ -219,15 +255,15 @@ async def _fetch_product_payloads(
     product_payload: object,
 ) -> list[object]:
     payloads: list[object] = [product_payload]
-    product_id = _first_product_id(product_payload)
-    if product_id:
+    for product_id in _product_ids(product_payload):
         with suppress(AlibabaAPIError):
-            payloads.append(
-                await client.call(
-                    OPERATIONS["product_get"].operation,
-                    {"product_get_request": {"productId": product_id}},
-                )
+            detail = await client.call(
+                OPERATIONS["product_get"].operation,
+                {"product_get_request": {"productId": product_id}},
             )
+            payloads.append(detail)
+            if _first_scalar(detail, SHIPPING_TEMPLATE_ID_KEYS):
+                break
     return payloads
 
 
@@ -340,14 +376,7 @@ def _template_defaults(
         ),
         "shippingTemplateId": _first_scalar(
             product_payloads,
-            {
-                "shipping_template_id",
-                "shippingTemplateId",
-                "freight_template_id",
-                "freightTemplateId",
-                "shipping_line_template_id",
-                "shippingLineTemplateId",
-            },
+            SHIPPING_TEMPLATE_ID_KEYS,
         ),
         "shippingTemplateLabel": _first_text(
             product_payloads,
@@ -402,7 +431,7 @@ async def _sync_store(
     try:
         product_payload = await client.call(
             OPERATIONS["product_list"].operation,
-            {"current_page": 1, "page_size": 1, "language": "ENGLISH"},
+            {"current_page": 1, "page_size": 5, "language": "ENGLISH"},
         )
         product_count = _extract_count(product_payload)
         product_state = "synced"

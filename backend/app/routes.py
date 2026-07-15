@@ -727,23 +727,6 @@ async def list_product_groups(
     )
 
 
-@router.get("/alibaba/shipping-templates")
-async def list_shipping_templates(
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
-    current_page: int = 1,
-    page_size: int = 50,
-) -> dict[str, Any]:
-    try:
-        return await client.call_top(
-            OPERATIONS["shipping_template_list"].operation,
-            {"page_num": current_page, "count": page_size},
-        )
-    except AlibabaConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except AlibabaAPIError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-
 @router.get("/alibaba/photo-bank/images")
 async def list_photos(
     group_id: str,

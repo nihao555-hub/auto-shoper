@@ -326,11 +326,6 @@ export const listPhotoBankGroups = async (): Promise<Record<string, unknown>> =>
 export const listProductGroups = async (): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(await apiFetch(`${API_ROOT}/alibaba/product-groups`));
 
-export const listShippingTemplates = async (): Promise<Record<string, unknown>> =>
-  parseResponse<Record<string, unknown>>(
-    await apiFetch(`${API_ROOT}/alibaba/shipping-templates?current_page=1&page_size=100`),
-  );
-
 export const listPhotoBankImages = async (
   groupId: string,
   page = 1,
@@ -401,17 +396,6 @@ export const findProductGroups = (payload: Record<string, unknown>): StoreLinked
   ).map((record) => ({
     id: readString(record, ["group_id", "groupId"]),
     name: readString(record, ["group_name", "groupName"]),
-  }));
-
-export const findShippingTemplates = (payload: Record<string, unknown>): StoreLinkedOption[] =>
-  collectRecords(
-    payload,
-    (record) =>
-      Boolean(readString(record, ["id", "template_id", "templateId"])) &&
-      Boolean(readString(record, ["title", "name", "template_name", "templateName"])),
-  ).map((record) => ({
-    id: readString(record, ["id", "template_id", "templateId"]),
-    name: readString(record, ["title", "name", "template_name", "templateName"]),
   }));
 
 export const findPhotoBankImages = (payload: Record<string, unknown>): PhotoBankImage[] =>

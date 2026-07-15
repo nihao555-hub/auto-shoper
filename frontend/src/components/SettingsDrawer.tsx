@@ -3,10 +3,8 @@ import { useEffect, useState } from "react";
 import {
   findPhotoBankGroups,
   findProductGroups,
-  findShippingTemplates,
   listPhotoBankGroups,
   listProductGroups,
-  listShippingTemplates,
 } from "../api";
 import type { StoreLinkedOption } from "../api";
 import { getMissingStoreTemplateFields } from "../data";
@@ -42,13 +40,11 @@ const uniqueOptions = (options: StoreLinkedOption[]): StoreLinkedOption[] =>
 type StoreOptionErrors = {
   productGroup: string;
   photoBankGroup: string;
-  shippingTemplate: string;
 };
 
 const emptyStoreOptionErrors: StoreOptionErrors = {
   productGroup: "",
   photoBankGroup: "",
-  shippingTemplate: "",
 };
 
 const optionErrorMessage = (label: string, result: PromiseRejectedResult): string =>
@@ -68,7 +64,6 @@ export function SettingsDrawer({
   const [section, setSection] = useState<SettingsSection>("trade");
   const [productGroups, setProductGroups] = useState<StoreLinkedOption[]>([]);
   const [photoBankGroups, setPhotoBankGroups] = useState<StoreLinkedOption[]>([]);
-  const [shippingTemplates, setShippingTemplates] = useState<StoreLinkedOption[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [optionErrors, setOptionErrors] = useState<StoreOptionErrors>(emptyStoreOptionErrors);
   const missingRequired = getMissingStoreTemplateFields(draft);
@@ -90,15 +85,11 @@ export function SettingsDrawer({
     let cancelled = false;
     setOptionsLoading(true);
     setOptionErrors(emptyStoreOptionErrors);
-    void Promise.allSettled([
-      listProductGroups(),
-      listPhotoBankGroups(),
-      listShippingTemplates(),
-    ]).then((results) => {
+    void Promise.allSettled([listProductGroups(), listPhotoBankGroups()]).then((results) => {
       if (cancelled) {
         return;
       }
-      const [productResult, photoResult, shippingResult] = results;
+      const [productResult, photoResult] = results;
       const errors = { ...emptyStoreOptionErrors };
       if (productResult.status === "fulfilled") {
         setProductGroups(uniqueOptions(findProductGroups(productResult.value)));
@@ -109,11 +100,6 @@ export function SettingsDrawer({
         setPhotoBankGroups(uniqueOptions(findPhotoBankGroups(photoResult.value)));
       } else {
         errors.photoBankGroup = optionErrorMessage("图片银行分组", photoResult);
-      }
-      if (shippingResult.status === "fulfilled") {
-        setShippingTemplates(uniqueOptions(findShippingTemplates(shippingResult.value)));
-      } else {
-        errors.shippingTemplate = optionErrorMessage("运费模板", shippingResult);
       }
       setOptionErrors(errors);
       setOptionsLoading(false);
@@ -132,18 +118,14 @@ export function SettingsDrawer({
       const photoBankGroup = photoBankGroups.find(
         (option) => option.id === current.photoBankGroupId,
       );
-      const shippingTemplate = shippingTemplates.find(
-        (option) => option.id === current.shippingTemplateId,
-      );
       const next = {
         ...current,
         productGroupLabel: productGroup?.name ?? current.productGroupLabel,
         photoBankGroupLabel: photoBankGroup?.name ?? current.photoBankGroupLabel,
-        shippingTemplateLabel: shippingTemplate?.name ?? current.shippingTemplateLabel,
       };
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
-  }, [open, optionsLoading, photoBankGroups, productGroups, shippingTemplates]);
+  }, [open, optionsLoading, photoBankGroups, productGroups]);
 
   useEffect(() => {
     if (!open) {
@@ -178,8 +160,8 @@ export function SettingsDrawer({
   };
 
   const updateLinkedOption = (
-    idKey: "productGroupId" | "photoBankGroupId" | "shippingTemplateId",
-    labelKey: "productGroupLabel" | "photoBankGroupLabel" | "shippingTemplateLabel",
+    idKey: "productGroupId" | "photoBankGroupId",
+    labelKey: "productGroupLabel" | "photoBankGroupLabel",
     value: string,
     options: StoreLinkedOption[],
   ) => {
@@ -340,27 +322,17 @@ export function SettingsDrawer({
                     value={draft.inventoryCode}
                     onChange={(value) => update("inventoryCode", value)}
                   />
-                  <StoreOptionSelect
-                    label="运费模板"
-                    id={draft.shippingTemplateId}
-                    value={draft.shippingTemplateLabel}
-                    options={shippingTemplates}
-                    loading={optionsLoading}
-                    error={optionErrors.shippingTemplate}
-                    onChange={(value) =>
-                      updateLinkedOption(
-                        "shippingTemplateId",
-                        "shippingTemplateLabel",
-                        value,
-                        shippingTemplates,
-                      )
-                    }
-                  />
                   <TextField
                     label="常用发货港口"
                     value={draft.port}
                     onChange={(value) => update("port", value)}
                   />
+                  <div className="field field-wide">
+                    <span>运费模板</span>
+                    <small className="field-hint">
+                      不在通用模板中设置；系统会优先复用历史商品的真实模板，未获取到时在商品类目资料中补充。
+                    </small>
+                  </div>
                 </div>
               </>
             ) : null}

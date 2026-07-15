@@ -42,7 +42,6 @@ class Settings(BaseSettings):
         default="https://openapi-api.alibaba.com/rest",
         validation_alias=AliasChoices("ALIBABA_API_BASE_URL", "ALIBABA_GATEWAY"),
     )
-    alibaba_top_api_base_url: str = "https://eco.taobao.com/router/rest"
     alibaba_append_operation_to_url: bool = False
     alibaba_timeout_seconds: float = 30
     alibaba_oauth_authorize_url: str = Field(

@@ -4870,6 +4870,9 @@ function WbInspector({
                           {task?.validation_errors?.[0] ||
                             task?.explanation ||
                             field.tip ||
+                            (isShippingTemplateIdField(field)
+                              ? "请填写阿里国际站真实运费模板 ID，不要填写模板名称；若历史商品已使用模板，系统会优先自动带入。"
+                              : undefined) ||
                             (hasSchemaValue(value)
                               ? "已填写，可继续修改"
                               : field.responsibility_reason)}
@@ -4903,7 +4906,13 @@ function WbInspector({
                           field={field}
                           value={value}
                           inputId={inputId}
-                          placeholder={task?.example ? `示例：${task.example}` : "请输入真实信息"}
+                          placeholder={
+                            isShippingTemplateIdField(field)
+                              ? "请输入真实运费模板 ID"
+                              : task?.example
+                                ? `示例：${task.example}`
+                                : "请输入真实信息"
+                          }
                           onChange={(nextValue) => setSchemaField(field, nextValue)}
                         />
                       )}
@@ -5026,16 +5035,16 @@ function WbInspector({
                 </div>
               </div>
               <div className="wb-auto-value">
-                <span>系统自动</span>
+                <span>{settings.shippingTemplateId ? "历史商品自动复用" : "类目确认后补充"}</span>
                 <p>
                   运费模板{" "}
                   {settings.shippingTemplateLabel ||
-                    (settings.shippingTemplateId ? `ID ${settings.shippingTemplateId}` : "待设置")}
+                    (settings.shippingTemplateId
+                      ? `ID ${settings.shippingTemplateId}`
+                      : "不阻断当前步骤")}
                 </p>
                 {!settings.shippingTemplateId ? (
-                  <button type="button" className="wb-link" onClick={onOpenSettings}>
-                    去店铺默认设置
-                  </button>
+                  <small>选择最终类目后，按 Alibaba Schema 要求填写真实模板 ID。</small>
                 ) : null}
               </div>
             </section>
@@ -7069,6 +7078,15 @@ function schemaDefaultForField(field: SchemaFieldGuidance, settings: StoreSettin
     return schemaOptionValue(field, settings.origin);
   }
   return null;
+}
+
+function isShippingTemplateIdField(field: SchemaFieldGuidance): boolean {
+  const text = schemaFieldSearchText(field);
+  return (
+    text.includes("shippingtemplateid") ||
+    text.includes("运费模板id") ||
+    text.includes("运费模板编号")
+  );
 }
 
 function schemaOptionValue(field: SchemaFieldGuidance, setting: string): string | null {

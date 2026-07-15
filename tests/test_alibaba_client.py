@@ -27,12 +27,6 @@ def test_signature_uses_operation_and_sorted_parameters() -> None:
     assert AlibabaClient.generate_signature(params, "secret", "/operation") == expected
 
 
-def test_top_signature_uses_hmac_md5_and_sorted_parameters() -> None:
-    params = {"b": "2", "a": "1"}
-    expected = hmac.new(b"secret", b"a1b2", hashlib.md5).hexdigest().upper()
-    assert AlibabaClient.generate_top_signature(params, "secret") == expected
-
-
 @pytest.mark.asyncio
 async def test_call_serializes_json_and_does_not_send_secret() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -95,56 +89,5 @@ async def test_call_rejects_gop_and_business_errors_with_trace_ids() -> None:
             await client.call("/first")
         with pytest.raises(AlibabaAPIError, match="invalid inventory; code=600003"):
             await client.call("/second")
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_top_call_uses_session_and_reports_nested_errors() -> None:
-    responses = iter(
-        [
-            {
-                "alibaba_wholesale_shippingline_template_list_response": {
-                    "list_template_response": {
-                        "total": 1,
-                        "items": [{"id": 123, "title": "快捷模板"}],
-                    }
-                }
-            },
-            {
-                "error_response": {
-                    "code": 27,
-                    "msg": "Invalid session",
-                    "sub_code": "invalid-sessionkey",
-                    "request_id": "request-1",
-                }
-            },
-        ]
-    )
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        body = (await request.aread()).decode()
-        assert request.url == "https://eco.taobao.com/router/rest"
-        assert "method=alibaba.wholesale.shippingline.template.list" in body
-        assert "session=token" in body
-        assert "sign_method=hmac" in body
-        assert "v=2.0" in body
-        assert "secret" not in body
-        return httpx.Response(200, json=next(responses))
-
-    client = AlibabaClient(alibaba_settings(), httpx.MockTransport(handler))
-    try:
-        result = await client.call_top(
-            "alibaba.wholesale.shippingline.template.list",
-            {"page_num": 1, "count": 10},
-        )
-        assert result["alibaba_wholesale_shippingline_template_list_response"][
-            "list_template_response"
-        ]["total"] == 1
-        with pytest.raises(
-            AlibabaAPIError,
-            match="Invalid session; code=invalid-sessionkey; request_id=request-1",
-        ):
-            await client.call_top("alibaba.wholesale.shippingline.template.list")
     finally:
         await client.close()

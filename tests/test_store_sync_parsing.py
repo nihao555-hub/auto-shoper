@@ -1,6 +1,8 @@
 from backend.app.store_routes import (
     _extract_count,
+    _fetch_product_payloads,
     _first_product_id,
+    _product_ids,
     _template_defaults,
 )
 
@@ -23,6 +25,47 @@ def test_extracts_official_product_list_count_and_id() -> None:
 
     assert _extract_count(payload) == 12
     assert _first_product_id(payload) == "123456"
+
+
+def test_collects_distinct_product_ids_with_limit() -> None:
+    payload = {
+        "products": [
+            {"product_id": 101},
+            {"productId": 102},
+            {"product_id": 101},
+            {"product_id": 103},
+        ]
+    }
+
+    assert _product_ids(payload, limit=2) == ["101", "102"]
+
+
+async def test_fetch_product_payloads_stops_after_finding_shipping_template() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def call(
+            self,
+            operation: str,
+            parameters: dict[str, object],
+        ) -> dict[str, object]:
+            request = parameters["product_get_request"]
+            assert isinstance(request, dict)
+            product_id = str(request["productId"])
+            self.calls.append(product_id)
+            if product_id == "102":
+                return {"product": {"shippingLineTemplateId": 9001}}
+            return {"product": {"productId": product_id}}
+
+    client = FakeClient()
+    payloads = await _fetch_product_payloads(
+        client,  # type: ignore[arg-type]
+        {"products": [{"product_id": 101}, {"product_id": 102}, {"product_id": 103}]},
+    )
+
+    assert client.calls == ["101", "102"]
+    assert len(payloads) == 3
 
 
 def test_builds_template_defaults_from_store_payloads() -> None:
