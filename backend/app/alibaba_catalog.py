@@ -37,6 +37,18 @@ OPERATIONS = {
         purpose="分页查询图片银行分组",
         safety="可自动执行",
     ),
+    "product_group_get": AlibabaOperation(
+        key="product_group_get",
+        operation="/alibaba/icbu/product/group/get",
+        purpose="查询当前店铺商品分组",
+        safety="只读店铺配置",
+    ),
+    "shipping_template_list": AlibabaOperation(
+        key="shipping_template_list",
+        operation="/alibaba/wholesale/shippingline/template/list",
+        purpose="查询当前店铺运费模板",
+        safety="只读店铺配置",
+    ),
     "draft_create": AlibabaOperation(
         key="draft_create",
         operation="/icbu/product/schema/add/draft",

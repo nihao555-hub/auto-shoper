@@ -366,18 +366,45 @@ export default function App() {
     setSettingsSyncing(true);
     try {
       const syncedStore = await syncAlibabaStore(storeId);
-      const imported = Object.entries(syncedStore.template_defaults ?? {}).filter(
-        ([key, value]) =>
-          typeof value === "string" &&
-          value.trim() &&
-          typeof settings[key as keyof StoreSettings] === "string" &&
-          !(settings[key as keyof StoreSettings] as string).trim(),
-      ) as Array<[keyof StoreSettings, string]>;
-      if (imported.length) {
-        const nextSettings = { ...settings };
-        for (const [key, value] of imported) {
-          Object.assign(nextSettings, { [key]: value });
+      const defaults = syncedStore.template_defaults ?? {};
+      const nextSettings = { ...settings };
+      const changedKeys = new Set<keyof StoreSettings>();
+      const linkedFields = [
+        ["productGroupId", "productGroupLabel"],
+        ["photoBankGroupId", "photoBankGroupLabel"],
+        ["shippingTemplateId", "shippingTemplateLabel"],
+      ] as const;
+      const linkedKeys = new Set<string>(linkedFields.flat());
+
+      for (const [idKey, labelKey] of linkedFields) {
+        const id = defaults[idKey];
+        if (typeof id !== "string" || !id.trim()) {
+          continue;
         }
+        const label = defaults[labelKey];
+        const resolvedLabel = typeof label === "string" && label.trim() ? label.trim() : id.trim();
+        if (nextSettings[idKey] !== id.trim()) {
+          nextSettings[idKey] = id.trim();
+          changedKeys.add(idKey);
+        }
+        if (nextSettings[labelKey] !== resolvedLabel) {
+          nextSettings[labelKey] = resolvedLabel;
+          changedKeys.add(labelKey);
+        }
+      }
+
+      for (const [key, value] of Object.entries(defaults)) {
+        if (linkedKeys.has(key) || typeof value !== "string" || !value.trim()) {
+          continue;
+        }
+        const settingKey = key as keyof StoreSettings;
+        if (typeof nextSettings[settingKey] === "string" && !nextSettings[settingKey].trim()) {
+          Object.assign(nextSettings, { [settingKey]: value.trim() });
+          changedKeys.add(settingKey);
+        }
+      }
+
+      if (changedKeys.size) {
         setSettings(nextSettings);
         if (user) {
           window.localStorage.setItem(
@@ -390,8 +417,8 @@ export default function App() {
       notify(
         "success",
         "店铺摘要已同步",
-        imported.length
-          ? `已自动填充 ${imported.length} 个模板字段。`
+        changedKeys.size
+          ? `已更新 ${changedKeys.size} 个模板字段。`
           : "未找到可自动填充的模板字段。",
       );
     } catch (error) {
@@ -552,6 +579,7 @@ export default function App() {
         onSyncFromStore={activeStoreId ? () => syncStore(activeStoreId) : undefined}
         syncing={settingsSyncing}
         canSyncFromStore={Boolean(activeStoreId)}
+        canLoadStoreOptions={dataMode === "live" && Boolean(activeStoreId)}
       />
       <ToastStack
         messages={toasts}

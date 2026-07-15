@@ -1,5 +1,14 @@
 import { FileText, ShieldCheck, Storefront, Truck, Warning, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import {
+  findPhotoBankGroups,
+  findProductGroups,
+  findShippingTemplates,
+  listPhotoBankGroups,
+  listProductGroups,
+  listShippingTemplates,
+} from "../api";
+import type { StoreLinkedOption } from "../api";
 import { getMissingStoreTemplateFields } from "../data";
 import type { StoreSettings } from "../types";
 
@@ -11,6 +20,7 @@ type SettingsDrawerProps = {
   onSyncFromStore?: () => void | Promise<void>;
   syncing?: boolean;
   canSyncFromStore?: boolean;
+  canLoadStoreOptions?: boolean;
 };
 
 type SettingsSection = "trade" | "logistics" | "content" | "credentials";
@@ -26,6 +36,9 @@ const sections: Array<{
   { key: "credentials", label: "资质库", icon: ShieldCheck },
 ];
 
+const uniqueOptions = (options: StoreLinkedOption[]): StoreLinkedOption[] =>
+  Array.from(new Map(options.map((option) => [option.id, option])).values());
+
 export function SettingsDrawer({
   open,
   settings,
@@ -34,9 +47,15 @@ export function SettingsDrawer({
   onSyncFromStore,
   syncing = false,
   canSyncFromStore = false,
+  canLoadStoreOptions = false,
 }: SettingsDrawerProps) {
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<SettingsSection>("trade");
+  const [productGroups, setProductGroups] = useState<StoreLinkedOption[]>([]);
+  const [photoBankGroups, setPhotoBankGroups] = useState<StoreLinkedOption[]>([]);
+  const [shippingTemplates, setShippingTemplates] = useState<StoreLinkedOption[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState("");
   const missingRequired = getMissingStoreTemplateFields(draft);
 
   useEffect(() => {
@@ -48,6 +67,68 @@ export function SettingsDrawer({
     }
     return () => document.body.classList.remove("has-overlay");
   }, [open, settings]);
+
+  useEffect(() => {
+    if (!open || !canLoadStoreOptions) {
+      return;
+    }
+    let cancelled = false;
+    setOptionsLoading(true);
+    setOptionsError("");
+    void Promise.allSettled([
+      listProductGroups(),
+      listPhotoBankGroups(),
+      listShippingTemplates(),
+    ]).then((results) => {
+      if (cancelled) {
+        return;
+      }
+      const [productResult, photoResult, shippingResult] = results;
+      const failures: string[] = [];
+      if (productResult.status === "fulfilled") {
+        setProductGroups(uniqueOptions(findProductGroups(productResult.value)));
+      } else {
+        failures.push("商品分组");
+      }
+      if (photoResult.status === "fulfilled") {
+        setPhotoBankGroups(uniqueOptions(findPhotoBankGroups(photoResult.value)));
+      } else {
+        failures.push("图片银行分组");
+      }
+      if (shippingResult.status === "fulfilled") {
+        setShippingTemplates(uniqueOptions(findShippingTemplates(shippingResult.value)));
+      } else {
+        failures.push("运费模板");
+      }
+      setOptionsError(failures.length ? `${failures.join("、")}加载失败，请关闭后重试。` : "");
+      setOptionsLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canLoadStoreOptions, open]);
+
+  useEffect(() => {
+    if (!open || optionsLoading) {
+      return;
+    }
+    setDraft((current) => {
+      const productGroup = productGroups.find((option) => option.id === current.productGroupId);
+      const photoBankGroup = photoBankGroups.find(
+        (option) => option.id === current.photoBankGroupId,
+      );
+      const shippingTemplate = shippingTemplates.find(
+        (option) => option.id === current.shippingTemplateId,
+      );
+      const next = {
+        ...current,
+        productGroupLabel: productGroup?.name ?? current.productGroupLabel,
+        photoBankGroupLabel: photoBankGroup?.name ?? current.photoBankGroupLabel,
+        shippingTemplateLabel: shippingTemplate?.name ?? current.shippingTemplateLabel,
+      };
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [open, optionsLoading, photoBankGroups, productGroups, shippingTemplates]);
 
   useEffect(() => {
     if (!open) {
@@ -79,6 +160,20 @@ export function SettingsDrawer({
 
   const update = <Key extends keyof StoreSettings>(key: Key, value: StoreSettings[Key]) => {
     setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateLinkedOption = (
+    idKey: "productGroupId" | "photoBankGroupId" | "shippingTemplateId",
+    labelKey: "productGroupLabel" | "photoBankGroupLabel" | "shippingTemplateLabel",
+    value: string,
+    options: StoreLinkedOption[],
+  ) => {
+    const selected = options.find((option) => option.id === value);
+    setDraft((current) => ({
+      ...current,
+      [idKey]: value,
+      [labelKey]: selected?.name ?? "",
+    }));
   };
 
   return (
@@ -152,15 +247,37 @@ export function SettingsDrawer({
                     options={["Sets", "Pieces", "Boxes"]}
                     onChange={(value) => update("priceUnit", value)}
                   />
-                  <TextField
+                  <StoreOptionSelect
                     label="商品分组"
+                    id={draft.productGroupId}
                     value={draft.productGroupLabel}
-                    onChange={(value) => update("productGroupLabel", value)}
+                    options={productGroups}
+                    loading={optionsLoading}
+                    error={optionsError}
+                    onChange={(value) =>
+                      updateLinkedOption(
+                        "productGroupId",
+                        "productGroupLabel",
+                        value,
+                        productGroups,
+                      )
+                    }
                   />
-                  <TextField
+                  <StoreOptionSelect
                     label="图片银行分组"
+                    id={draft.photoBankGroupId}
                     value={draft.photoBankGroupLabel}
-                    onChange={(value) => update("photoBankGroupLabel", value)}
+                    options={photoBankGroups}
+                    loading={optionsLoading}
+                    error={optionsError}
+                    onChange={(value) =>
+                      updateLinkedOption(
+                        "photoBankGroupId",
+                        "photoBankGroupLabel",
+                        value,
+                        photoBankGroups,
+                      )
+                    }
                   />
                 </div>
                 <SettingsHeading title="允许带出商家资产" />
@@ -208,10 +325,21 @@ export function SettingsDrawer({
                     value={draft.inventoryCode}
                     onChange={(value) => update("inventoryCode", value)}
                   />
-                  <TextField
+                  <StoreOptionSelect
                     label="运费模板"
+                    id={draft.shippingTemplateId}
                     value={draft.shippingTemplateLabel}
-                    onChange={(value) => update("shippingTemplateLabel", value)}
+                    options={shippingTemplates}
+                    loading={optionsLoading}
+                    error={optionsError}
+                    onChange={(value) =>
+                      updateLinkedOption(
+                        "shippingTemplateId",
+                        "shippingTemplateLabel",
+                        value,
+                        shippingTemplates,
+                      )
+                    }
                   />
                   <TextField
                     label="常用发货港口"
@@ -348,6 +476,41 @@ function SelectField({
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function StoreOptionSelect({
+  label,
+  id,
+  value,
+  options,
+  loading,
+  error,
+  onChange,
+}: {
+  label: string;
+  id: string;
+  value: string;
+  options: StoreLinkedOption[];
+  loading: boolean;
+  error: string;
+  onChange: (value: string) => void;
+}) {
+  const hasCurrentOption = options.some((option) => option.id === id);
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={id} onChange={(event) => onChange(event.target.value)} disabled={loading}>
+        <option value="">{loading ? "正在读取店铺选项…" : `请选择真实${label}`}</option>
+        {id && !hasCurrentOption ? <option value={id}>{value || id}（当前配置）</option> : null}
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name}
+          </option>
+        ))}
+      </select>
+      {error ? <small className="field-hint">{error}</small> : null}
     </label>
   );
 }

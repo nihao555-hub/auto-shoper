@@ -307,6 +307,11 @@ export type PhotoBankGroup = {
   name: string;
 };
 
+export type StoreLinkedOption = {
+  id: string;
+  name: string;
+};
+
 export type PhotoBankImage = {
   id: string;
   name: string;
@@ -316,6 +321,14 @@ export type PhotoBankImage = {
 export const listPhotoBankGroups = async (): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
     await apiFetch(`${API_ROOT}/alibaba/photo-bank/groups?current_page=1&page_size=50`),
+  );
+
+export const listProductGroups = async (): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(await apiFetch(`${API_ROOT}/alibaba/product-groups`));
+
+export const listShippingTemplates = async (): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/shipping-templates?current_page=1&page_size=100`),
   );
 
 export const listPhotoBankImages = async (
@@ -377,6 +390,28 @@ export const findPhotoBankGroups = (payload: Record<string, unknown>): PhotoBank
   ).map((record) => ({
     id: readString(record, ["id", "group_id", "groupId"]),
     name: readString(record, ["name", "group_name", "groupName"]),
+  }));
+
+export const findProductGroups = (payload: Record<string, unknown>): StoreLinkedOption[] =>
+  collectRecords(
+    payload,
+    (record) =>
+      Boolean(readString(record, ["group_id", "groupId"])) &&
+      Boolean(readString(record, ["group_name", "groupName"])),
+  ).map((record) => ({
+    id: readString(record, ["group_id", "groupId"]),
+    name: readString(record, ["group_name", "groupName"]),
+  }));
+
+export const findShippingTemplates = (payload: Record<string, unknown>): StoreLinkedOption[] =>
+  collectRecords(
+    payload,
+    (record) =>
+      Boolean(readString(record, ["id", "template_id", "templateId"])) &&
+      Boolean(readString(record, ["title", "name", "template_name", "templateName"])),
+  ).map((record) => ({
+    id: readString(record, ["id", "template_id", "templateId"]),
+    name: readString(record, ["title", "name", "template_name", "templateName"]),
   }));
 
 export const findPhotoBankImages = (payload: Record<string, unknown>): PhotoBankImage[] =>

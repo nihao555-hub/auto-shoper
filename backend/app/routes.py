@@ -716,6 +716,30 @@ async def list_photo_groups(
     )
 
 
+@router.get("/alibaba/product-groups")
+async def list_product_groups(
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "product_group_get",
+        {"group_id": -1, "extra_context": "{}"},
+    )
+
+
+@router.get("/alibaba/shipping-templates")
+async def list_shipping_templates(
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    current_page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    return await _alibaba_call(
+        client,
+        "shipping_template_list",
+        {"page_num": current_page, "count": page_size},
+    )
+
+
 @router.get("/alibaba/photo-bank/images")
 async def list_photos(
     group_id: str,
