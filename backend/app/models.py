@@ -102,6 +102,26 @@ class ProductImageAnalysis(BaseModel):
     warnings: list[str]
 
 
+class CategoryRecommendationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    category_hint: str = Field(default="", max_length=500)
+    visible_traits: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CategoryRecommendationItem(BaseModel):
+    category_id: str
+    path: list[dict[str, Any]]
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
+class CategoryRecommendationResult(BaseModel):
+    recommendations: list[CategoryRecommendationItem]
+    strategy: Literal["ai", "keyword_fallback"]
+    warning: str | None = None
+
+
 class ProductContentTranslationRequest(BaseModel):
     source_language: str = Field(default="English", min_length=2, max_length=80)
     target_language_code: str = Field(min_length=2, max_length=20)

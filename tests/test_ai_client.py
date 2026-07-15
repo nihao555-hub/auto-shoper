@@ -92,6 +92,58 @@ async def test_image_analysis_sends_one_consolidated_multi_image_request() -> No
 
 
 @pytest.mark.asyncio
+async def test_category_ranking_discards_ids_outside_real_candidates() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(await request.aread())
+        assert "Never invent" in payload["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "rankings": [
+                                        {
+                                            "category_id": "34",
+                                            "confidence": 0.94,
+                                            "reason": "商品是水彩纸。",
+                                        },
+                                        {
+                                            "category_id": "invented-id",
+                                            "confidence": 1,
+                                            "reason": "不在候选中。",
+                                        },
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = AIClient(ai_settings(), httpx.MockTransport(handler))
+    try:
+        result = await client.rank_category_candidates(
+            title="Watercolor Paper Pad",
+            keywords=["watercolor paper"],
+            category_hint="Art Supplies > Paper",
+            visible_traits=["paper pad"],
+            candidates=[
+                {"category_id": "34", "path": "Arts & Crafts > Watercolor Paper", "leaf": True}
+            ],
+        )
+    finally:
+        await client.close()
+
+    assert result == [
+        {"category_id": "34", "confidence": 0.94, "reason": "商品是水彩纸。"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_image_analysis_retries_one_provider_timeout() -> None:
     calls = 0
     provider_data = {

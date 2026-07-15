@@ -68,6 +68,7 @@ import {
   listPhotoBankImages,
   planProductImages,
   publishBatch,
+  recommendAlibabaCategories,
   recordListingMetricEvent,
   translateProductContent,
   updateListingFeatureFlags,
@@ -76,6 +77,7 @@ import {
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
 import type {
   AlibabaCategoryOption,
+  AlibabaCategoryRecommendation,
   AlibabaConnectedStore,
   CapabilityResponse,
   DataMode,
@@ -4580,6 +4582,13 @@ function WbInspector({
   const [categoryPath, setCategoryPath] = useState<AlibabaCategoryOption[]>([]);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [categoryError, setCategoryError] = useState("");
+  const [categoryRecommendations, setCategoryRecommendations] = useState<
+    AlibabaCategoryRecommendation[]
+  >([]);
+  const [categoryRecommendationBusy, setCategoryRecommendationBusy] = useState(false);
+  const [categoryRecommendationError, setCategoryRecommendationError] = useState("");
+  const [categoryRecommendationWarning, setCategoryRecommendationWarning] = useState("");
+  const [manualCategoryPickerOpen, setManualCategoryPickerOpen] = useState(false);
   const addImageInputRef = useRef<HTMLInputElement>(null);
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
     const schemaField = getRequiredSchemaFields(product).find(
@@ -4644,19 +4653,47 @@ function WbInspector({
       setCategoryBusy(false);
     }
   };
+  const loadCategoryRecommendations = async () => {
+    setCategoryRecommendationBusy(true);
+    setCategoryRecommendationError("");
+    setCategoryRecommendationWarning("");
+    try {
+      const response = await recommendAlibabaCategories({
+        title: product.title,
+        keywords: product.keywords,
+        categoryHint: product.facts.categoryLabel,
+        visibleTraits: product.visibleTraits,
+      });
+      setCategoryRecommendations(response.recommendations);
+      setCategoryRecommendationWarning(response.warning ?? "");
+      if (!response.recommendations.length) {
+        setCategoryRecommendationError("暂未匹配到可确认的叶子类目，请浏览全部类目后手动选择。");
+        setManualCategoryPickerOpen(true);
+        void loadCategoryOptions("0");
+      }
+    } catch (error) {
+      setCategoryRecommendations([]);
+      setCategoryRecommendationError(
+        error instanceof Error ? error.message : "智能类目匹配失败，请改用人工选择。",
+      );
+      setManualCategoryPickerOpen(true);
+      void loadCategoryOptions("0");
+    } finally {
+      setCategoryRecommendationBusy(false);
+    }
+  };
   const openCategoryPicker = () => {
     setCategoryPickerOpen(true);
     setCategoryPath([]);
-    void loadCategoryOptions("0");
+    setCategoryOptions([]);
+    setCategoryError("");
+    setManualCategoryPickerOpen(false);
+    void loadCategoryRecommendations();
   };
-  const chooseCategory = async (option: AlibabaCategoryOption) => {
-    const nextPath =
-      categoryPath.at(-1)?.id === option.id ? categoryPath : [...categoryPath, option];
-    if (!option.leaf) {
-      setCategoryPath(nextPath);
-      void loadCategoryOptions(option.id, option);
-      return;
-    }
+  const confirmLeafCategory = async (
+    option: AlibabaCategoryOption,
+    nextPath: AlibabaCategoryOption[],
+  ) => {
     const categoryLabel = nextPath.map((item) => item.name).join(" > ");
     const selectedProduct: ProductRecord = {
       ...product,
@@ -4700,6 +4737,8 @@ function WbInspector({
       setCategoryPickerOpen(false);
       setCategoryOptions([]);
       setCategoryPath([]);
+      setCategoryRecommendations([]);
+      setManualCategoryPickerOpen(false);
     } catch (error) {
       setCategoryError(
         error instanceof Error
@@ -4709,6 +4748,29 @@ function WbInspector({
     } finally {
       setCategoryBusy(false);
     }
+  };
+  const chooseCategory = async (option: AlibabaCategoryOption) => {
+    const nextPath =
+      categoryPath.at(-1)?.id === option.id ? categoryPath : [...categoryPath, option];
+    if (!option.leaf) {
+      setCategoryPath(nextPath);
+      void loadCategoryOptions(option.id, option);
+      return;
+    }
+    await confirmLeafCategory(option, nextPath);
+  };
+  const chooseRecommendedCategory = async (recommendation: AlibabaCategoryRecommendation) => {
+    const leaf = recommendation.path.at(-1);
+    if (!leaf) {
+      setCategoryRecommendationError("推荐类目路径不完整，请改用人工选择。");
+      return;
+    }
+    await confirmLeafCategory({ ...leaf, leaf: true }, recommendation.path);
+  };
+  const openManualCategoryPicker = () => {
+    setManualCategoryPickerOpen(true);
+    setCategoryPath([]);
+    void loadCategoryOptions("0");
   };
   const goBackCategoryLevel = () => {
     const nextPath = categoryPath.slice(0, -1);
@@ -4933,14 +4995,7 @@ function WbInspector({
           {categoryPickerOpen ? (
             <div className="wb-category-picker">
               <div className="wb-category-picker-bar">
-                {categoryPath.length ? (
-                  <button type="button" className="wb-link" onClick={goBackCategoryLevel}>
-                    <CaretLeft size={14} />
-                    返回上一级
-                  </button>
-                ) : (
-                  <span>选择一级类目</span>
-                )}
+                <span>智能匹配真实类目</span>
                 <button
                   type="button"
                   className="wb-link"
@@ -4949,26 +5004,104 @@ function WbInspector({
                   取消
                 </button>
               </div>
-              {categoryPath.length ? (
-                <p className="wb-category-path">
-                  已选择：{categoryPath.map((item) => item.name).join(" > ")}
-                </p>
-              ) : null}
-              {categoryBusy ? (
-                <div className="wb-category-loading">
+              <p className="wb-category-path">
+                推荐结果全部来自 Alibaba 实时类目树，需要你确认后才会写入商品。
+              </p>
+              {categoryRecommendationBusy ? (
+                <div className="wb-category-loading wb-category-recommendation-loading">
                   <CircleNotch size={17} className="spin" />
-                  正在读取 Alibaba 类目
+                  正在根据商品标题、关键词和图片信息匹配
                 </div>
               ) : null}
-              {categoryError ? <p className="wb-category-error">{categoryError}</p> : null}
-              {!categoryBusy && categoryOptions.length ? (
-                <div className="wb-category-options">
-                  {categoryOptions.map((option) => (
-                    <button key={option.id} type="button" onClick={() => chooseCategory(option)}>
-                      <span>{option.name}</span>
-                      {option.leaf ? <Check size={14} /> : <CaretRight size={14} />}
-                    </button>
+              {categoryRecommendationWarning ? (
+                <p className="wb-category-warning">{categoryRecommendationWarning}</p>
+              ) : null}
+              {categoryRecommendationError ? (
+                <p className="wb-category-error">{categoryRecommendationError}</p>
+              ) : null}
+              {categoryRecommendations.length ? (
+                <div className="wb-category-recommendations">
+                  {categoryRecommendations.map((recommendation) => (
+                    <article key={recommendation.category_id}>
+                      <div>
+                        <strong>{recommendation.path.map((item) => item.name).join(" > ")}</strong>
+                        <small>{recommendation.reason}</small>
+                      </div>
+                      <div className="wb-category-recommendation-action">
+                        <span>{Math.round(recommendation.confidence * 100)}% 匹配</span>
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          onClick={() => void chooseRecommendedCategory(recommendation)}
+                          disabled={categoryBusy}
+                        >
+                          {categoryBusy ? <CircleNotch size={14} className="spin" /> : null}
+                          确认此类目
+                        </button>
+                      </div>
+                    </article>
                   ))}
+                </div>
+              ) : null}
+              {!manualCategoryPickerOpen ? (
+                <button
+                  type="button"
+                  className="wb-category-manual-trigger"
+                  onClick={openManualCategoryPicker}
+                  disabled={categoryBusy || categoryRecommendationBusy}
+                >
+                  推荐不合适？浏览全部 Alibaba 类目
+                  <CaretRight size={14} />
+                </button>
+              ) : null}
+              {categoryError && !manualCategoryPickerOpen ? (
+                <p className="wb-category-error">{categoryError}</p>
+              ) : null}
+              {manualCategoryPickerOpen ? (
+                <div className="wb-category-manual-picker">
+                  <div className="wb-category-picker-bar">
+                    {categoryPath.length ? (
+                      <button type="button" className="wb-link" onClick={goBackCategoryLevel}>
+                        <CaretLeft size={14} />
+                        返回上一级
+                      </button>
+                    ) : (
+                      <span>浏览全部类目</span>
+                    )}
+                    <button
+                      type="button"
+                      className="wb-link"
+                      onClick={() => setManualCategoryPickerOpen(false)}
+                    >
+                      收起
+                    </button>
+                  </div>
+                  {categoryPath.length ? (
+                    <p className="wb-category-path">
+                      已选择：{categoryPath.map((item) => item.name).join(" > ")}
+                    </p>
+                  ) : null}
+                  {categoryBusy ? (
+                    <div className="wb-category-loading">
+                      <CircleNotch size={17} className="spin" />
+                      正在读取 Alibaba 类目
+                    </div>
+                  ) : null}
+                  {categoryError ? <p className="wb-category-error">{categoryError}</p> : null}
+                  {!categoryBusy && categoryOptions.length ? (
+                    <div className="wb-category-options">
+                      {categoryOptions.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => void chooseCategory(option)}
+                        >
+                          <span>{option.name}</span>
+                          {option.leaf ? <Check size={14} /> : <CaretRight size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

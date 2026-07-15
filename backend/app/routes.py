@@ -31,6 +31,8 @@ from backend.app.models import (
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
     AsyncSchemaOptionsRequest,
+    CategoryRecommendationRequest,
+    CategoryRecommendationResult,
     DraftField,
     DraftFieldDifference,
     DraftSnapshotResult,
@@ -77,7 +79,12 @@ from backend.app.models import (
     SchemaParseResult,
 )
 from backend.app.services.auth import get_current_user
-from backend.app.services.categories import category_children, extract_category_records
+from backend.app.services.categories import (
+    CategoryRecord,
+    category_children,
+    extract_category_records,
+    recommend_category_paths,
+)
 from backend.app.services.field_policy import (
     effective_listing_fields,
     get_listing_field,
@@ -392,11 +399,12 @@ async def get_listing_metrics(
     database: Annotated[Database, Depends(get_database)],
 ) -> dict[str, object]:
     return database.get_listing_metrics(user.workspace_id)
-@router.get("/alibaba/categories/{category_id}/children")
-async def get_category_children(
+
+
+async def _load_category_level(
+    client: AlibabaClient,
     category_id: str,
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
-) -> dict[str, Any]:
+) -> tuple[CategoryRecord | None, list[CategoryRecord]]:
     payload = await _alibaba_call(client, "category_get", {"cat_id": category_id})
     records = extract_category_records(payload)
     parent, children, missing_child_ids = category_children(category_id, records)
@@ -442,10 +450,61 @@ async def get_category_children(
             status_code=502,
             detail="Alibaba 未返回可识别的一级类目，请稍后重试或联系管理员检查类目接口权限",
         )
-    return {
-        "parent": parent,
-        "categories": sorted(unique_children.values(), key=lambda item: item["name"].casefold()),
-    }
+    return parent, sorted(unique_children.values(), key=lambda item: item["name"].casefold())
+
+
+@router.get("/alibaba/categories/{category_id}/children")
+async def get_category_children(
+    category_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+) -> dict[str, Any]:
+    parent, children = await _load_category_level(client, category_id)
+    return {"parent": parent, "categories": children}
+
+
+@router.post(
+    "/alibaba/categories/recommend",
+    response_model=CategoryRecommendationResult,
+)
+async def recommend_categories(
+    request: CategoryRecommendationRequest,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    ai_client: Annotated[AIClient, Depends(get_ai_client)],
+) -> CategoryRecommendationResult:
+    warning: str | None = None
+
+    async def load_children(category_id: str) -> list[CategoryRecord]:
+        _, children = await _load_category_level(client, category_id)
+        return children
+
+    async def rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        nonlocal warning
+        try:
+            return await ai_client.rank_category_candidates(
+                title=request.title,
+                keywords=request.keywords,
+                category_hint=request.category_hint,
+                visible_traits=request.visible_traits,
+                candidates=candidates,
+            )
+        except AIProviderError:
+            warning = "AI 类目排序暂不可用，当前结果已切换为关键词匹配；请人工核对后确认。"
+            return []
+
+    recommendations, strategy = await recommend_category_paths(
+        load_children=load_children,
+        rank_candidates=rank_candidates,
+        search_text=" ".join(
+            [request.title, request.category_hint, *request.keywords, *request.visible_traits]
+        ),
+    )
+    return CategoryRecommendationResult.model_validate(
+        {
+            "recommendations": recommendations,
+            "strategy": strategy,
+            "warning": warning,
+        }
+    )
 
 
 @router.get("/alibaba/categories/{category_id}")

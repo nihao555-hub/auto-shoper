@@ -367,6 +367,19 @@ export type AlibabaCategoryLevel = {
   categories: AlibabaCategoryOption[];
 };
 
+export type AlibabaCategoryRecommendation = {
+  category_id: string;
+  path: AlibabaCategoryOption[];
+  confidence: number;
+  reason: string;
+};
+
+export type AlibabaCategoryRecommendationResult = {
+  recommendations: AlibabaCategoryRecommendation[];
+  strategy: "ai" | "keyword_fallback";
+  warning: string | null;
+};
+
 export type ListingFieldGroup = {
   key: string;
   label: string;

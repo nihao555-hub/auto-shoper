@@ -42,6 +42,16 @@ class _ProviderTranslation(BaseModel):
     description: str = ""
 
 
+class _ProviderCategoryRanking(BaseModel):
+    category_id: str
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class _ProviderCategoryRankings(BaseModel):
+    rankings: list[_ProviderCategoryRanking] = Field(default_factory=list, max_length=3)
+
+
 class AIClient:
     def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
         if not settings.openai_api_key:
@@ -258,6 +268,62 @@ class AIClient:
             selling_points=translated.selling_points,
             description=translated.description,
         )
+
+    async def rank_category_candidates(
+        self,
+        *,
+        title: str,
+        keywords: list[str],
+        category_hint: str,
+        visible_traits: list[str],
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not candidates:
+            return []
+        candidate_ids = {str(candidate["category_id"]) for candidate in candidates}
+        prompt = (
+            "Select the best Alibaba.com product categories for the supplied product. "
+            "You may only choose category_id values from candidates. Never invent, translate, "
+            "or alter an ID. Rank semantic product fit, not word similarity alone. Return JSON "
+            'only with shape {"rankings":[{"category_id":"...","confidence":0.0,'
+            '"reason":"short Simplified Chinese explanation"}]}. Return at most three unique '
+            "rankings. The reason must explain why the product belongs in that category. "
+            f"Product title: {title}. Keywords: {json.dumps(keywords, ensure_ascii=False)}. "
+            f"Existing AI category hint: {category_hint or 'none'}. "
+            f"Visible traits: {json.dumps(visible_traits, ensure_ascii=False)}. "
+            f"Candidates: {json.dumps(candidates, ensure_ascii=False)}"
+        )
+        response = await self._post_with_retry(
+            "/chat/completions",
+            json={
+                "model": self.settings.text_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            },
+        )
+        if response.is_error:
+            raise AIProviderError(self._provider_error(response))
+        try:
+            response_content = response.json()["choices"][0]["message"]["content"]
+            ranked = _ProviderCategoryRankings.model_validate(self._parse_json(response_content))
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            ValidationError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise AIProviderError("AI provider returned an invalid category ranking") from exc
+
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in ranked.rankings:
+            if item.category_id not in candidate_ids or item.category_id in seen:
+                continue
+            seen.add(item.category_id)
+            result.append(item.model_dump())
+        return result
 
     async def generate_image(self, prompt: str, size: str, count: int) -> dict[str, Any]:
         response = await self._post_with_retry(

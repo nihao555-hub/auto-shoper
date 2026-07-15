@@ -1,5 +1,6 @@
 import type {
   AlibabaCategoryLevel,
+  AlibabaCategoryRecommendationResult,
   AlibabaConnectedStore,
   AlibabaOAuthStatus,
   AlibabaStoreDirectory,
@@ -454,6 +455,25 @@ export const getCategorySchema = async (categoryId: string): Promise<Record<stri
 export const listCategoryChildren = async (categoryId: string): Promise<AlibabaCategoryLevel> =>
   parseResponse<AlibabaCategoryLevel>(
     await apiFetch(`${API_ROOT}/alibaba/categories/${encodeURIComponent(categoryId)}/children`),
+  );
+
+export const recommendAlibabaCategories = async (product: {
+  title: string;
+  keywords: string[];
+  categoryHint: string;
+  visibleTraits: string[];
+}): Promise<AlibabaCategoryRecommendationResult> =>
+  parseResponse<AlibabaCategoryRecommendationResult>(
+    await apiFetch(`${API_ROOT}/alibaba/categories/recommend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: product.title,
+        keywords: product.keywords,
+        category_hint: product.categoryHint,
+        visible_traits: product.visibleTraits,
+      }),
+    }),
   );
 
 export const getSchemaGuidance = async (
