@@ -424,20 +424,20 @@ async def get_category_children(
         for child in children
         if child["id"] != category_id
     }
-    logger.warning(
-        "Alibaba category tree diagnostics category_id=%s payload_type=%s "
-        "top_level_keys=%s records=%d parent_found=%s children=%d "
-        "missing_child_ids=%d result=%d",
-        category_id,
-        type(payload).__name__,
-        sorted(str(key) for key in payload) if isinstance(payload, Mapping) else [],
-        len(records),
-        parent is not None,
-        len(children),
-        len(missing_child_ids),
-        len(unique_children),
-    )
     if category_id == "0" and not unique_children:
+        logger.warning(
+            "Alibaba category tree diagnostics category_id=%s payload_type=%s "
+            "top_level_keys=%s records=%d parent_found=%s children=%d "
+            "missing_child_ids=%d result=%d",
+            category_id,
+            type(payload).__name__,
+            sorted(str(key) for key in payload) if isinstance(payload, Mapping) else [],
+            len(records),
+            parent is not None,
+            len(children),
+            len(missing_child_ids),
+            len(unique_children),
+        )
         raise HTTPException(
             status_code=502,
             detail="Alibaba 未返回可识别的一级类目，请稍后重试或联系管理员检查类目接口权限",

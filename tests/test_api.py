@@ -381,7 +381,8 @@ def test_publish_requires_explicit_confirmation() -> None:
 
 def test_operations_catalog_contains_core_publish_flow() -> None:
     client = TestClient(app)
-    operations = {item["key"] for item in client.get("/api/v1/alibaba/operations").json()}
+    catalog = client.get("/api/v1/alibaba/operations").json()
+    operations = {item["key"] for item in catalog}
     assert {
         "category_get",
         "schema_get",
@@ -393,6 +394,8 @@ def test_operations_catalog_contains_core_publish_flow() -> None:
         "inventory_update",
         "display_update",
     } <= operations
+    category_operation = next(item for item in catalog if item["key"] == "category_get")
+    assert category_operation["operation"] == "/alibaba/icbu/category/get/new"
 
 
 def test_unconfigured_alibaba_client_is_rejected() -> None:
