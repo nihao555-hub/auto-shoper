@@ -536,12 +536,7 @@ async def list_products(
 
 
 def _schema_get_parameters(category_id: str, language: str) -> dict[str, Any]:
-    return {
-        "param_product_top_publish_request": {
-            "cat_id": category_id,
-            "language": language,
-        }
-    }
+    return {"cat_id": category_id, "language": language}
 
 
 @router.get("/alibaba/categories/{category_id}/schema")
