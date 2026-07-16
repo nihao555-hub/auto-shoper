@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from httpx import MockTransport, Request, Response
 
 from backend.app.clients.ai import AIProviderError
-from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
+from backend.app.clients.alibaba import AlibabaAPIError, AlibabaClient, AlibabaConfigurationError
 from backend.app.config import Settings, get_settings
 from backend.app.dependencies import get_ai_client, get_alibaba_client, get_alibaba_top_client
 from backend.app.main import app
@@ -818,6 +818,46 @@ def test_render_draft_uses_product_and_category_ids() -> None:
                 "language": "en_US",
             }
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_render_draft_retries_with_top_level_ids_when_gateway_rejects_nested_shape() -> None:
+    fake = FakeAlibabaClient()
+
+    async def call(
+        operation: str,
+        parameters: dict[str, object] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+    ) -> dict[str, object]:
+        del files
+        current = parameters or {}
+        fake.calls.append((operation, current))
+        if "param_product_top_publish_request" in current:
+            raise AlibabaAPIError(
+                "Alibaba API error: product_id is mandatory; code=MissingParameter"
+            )
+        return {"success": True, "parameters": current}
+
+    fake.call = call  # type: ignore[method-assign]
+
+    async def dependency() -> AsyncIterator[AlibabaClient]:
+        yield fake  # type: ignore[misc]
+
+    app.dependency_overrides[get_alibaba_client] = dependency
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/alibaba/products/drafts/render",
+            json={"category_id": "123", "product_id": "456", "language": "en_US"},
+        )
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {
+            "cat_id": "123",
+            "product_id": "456",
+            "language": "en_US",
+        }
+        assert len(fake.calls) == 2
     finally:
         app.dependency_overrides.clear()
 

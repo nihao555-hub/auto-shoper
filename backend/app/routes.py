@@ -606,16 +606,11 @@ async def render_draft(
     request: AlibabaDraftRenderRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(
+    return await _render_draft_readback(
         client,
-        "draft_render",
-        {
-            "param_product_top_publish_request": {
-                "language": request.language,
-                "cat_id": request.category_id,
-                "product_id": request.product_id,
-            }
-        },
+        language=request.language,
+        category_id=request.category_id,
+        product_id=request.product_id,
     )
 
 
@@ -1866,15 +1861,11 @@ async def _capture_draft_snapshots(
         readback_error: str | None = None
         if product_id:
             try:
-                platform_response = await client.call(
-                    OPERATIONS["draft_render"].operation,
-                    {
-                        "param_product_top_publish_request": {
-                            "language": item.language,
-                            "cat_id": item.category_id,
-                            "product_id": product_id,
-                        }
-                    },
+                platform_response = await _render_draft_readback(
+                    client,
+                    language=item.language,
+                    category_id=item.category_id,
+                    product_id=product_id,
                 )
             except AlibabaAPIError as exc:
                 readback_error = str(exc)
@@ -1937,6 +1928,32 @@ def _find_product_id(payload: object) -> str | None:
     return _find_response_value(payload, "product_id") or _find_response_value(
         payload,
         "product_id_list",
+    )
+
+
+async def _render_draft_readback(
+    client: AlibabaClient,
+    *,
+    language: str,
+    category_id: str,
+    product_id: str,
+) -> dict[str, Any]:
+    nested_parameters = {
+        "param_product_top_publish_request": {
+            "language": language,
+            "cat_id": category_id,
+            "product_id": product_id,
+        }
+    }
+    try:
+        return await client.call(OPERATIONS["draft_render"].operation, nested_parameters)
+    except AlibabaAPIError as exc:
+        error = str(exc).lower()
+        if "missingparameter" not in error or "product_id" not in error:
+            raise
+    return await client.call(
+        OPERATIONS["draft_render"].operation,
+        {"language": language, "cat_id": category_id, "product_id": product_id},
     )
 
 
