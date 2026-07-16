@@ -2,14 +2,15 @@ import hashlib
 import hmac
 import json
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import httpx
 
 from backend.app.clients.alibaba import AlibabaAPIError, AlibabaConfigurationError
 from backend.app.config import Settings
+
+CHINA_STANDARD_TIME = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 class AlibabaTopClient:
@@ -88,7 +89,7 @@ class AlibabaTopClient:
             "session": self.settings.alibaba_access_token or "",
             "sign_method": "hmac",
             "simplify": "true",
-            "timestamp": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": datetime.now(CHINA_STANDARD_TIME).strftime("%Y-%m-%d %H:%M:%S"),
             "v": "2.0",
         }
 
