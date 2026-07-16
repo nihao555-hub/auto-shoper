@@ -57,7 +57,6 @@ import {
   findSchemaData,
   generateProductImages,
   getAsyncFieldOptions,
-  getCategoryPublishCapabilities,
   getCategorySchema,
   getListingFeatureFlags,
   getListingMetrics,
@@ -5008,16 +5007,7 @@ function WbInspector({
     setCategoryBusy(true);
     setCategoryError("");
     try {
-      const [payload, publishCapabilities] = await Promise.all([
-        getCategorySchema(option.id),
-        getCategoryPublishCapabilities(option.id),
-      ]);
-      if (
-        !publishCapabilities.support_post_whole_sale &&
-        !publishCapabilities.support_post_sourcing
-      ) {
-        throw new Error("当前店铺没有该类目的下单品或询盘品发布权限");
-      }
+      const payload = await getCategorySchema(option.id);
       const schemaData = findSchemaData(payload);
       if (!schemaData) {
         throw new Error("Alibaba 未返回类目 Schema");
@@ -5026,7 +5016,6 @@ function WbInspector({
       const confirmedProduct = syncProductSchemaFields(
         {
           ...selectedProduct,
-          publishCapabilities,
           schemaData,
           schemaGuidance,
         },
