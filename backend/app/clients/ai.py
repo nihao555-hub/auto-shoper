@@ -366,6 +366,12 @@ class AIClient:
             f"{reference_note}"
             f"Only change the presentation as requested: {prompt}"
         )
+        if self.settings.image_provider.casefold() == "grsai":
+            return await self._edit_product_image_grsai(
+                references,
+                preservation_prompt,
+                size,
+            )
         active_references = references
         response: httpx.Response | None = None
         attempts = 3
@@ -419,6 +425,96 @@ class AIClient:
             "requires_confirmation": True,
             "source_image_preservation_required": True,
         }
+
+    async def _edit_product_image_grsai(
+        self,
+        references: list[tuple[bytes, str, str]],
+        prompt: str,
+        size: str,
+    ) -> dict[str, Any]:
+        """Use GrsAI's unified async API instead of its capacity-sensitive legacy edit route."""
+        active_references = references
+        task: dict[str, Any] | None = None
+        attempts = 3
+        for attempt in range(attempts):
+            images = [
+                f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+                for image_bytes, _file_name, content_type in active_references
+            ]
+            try:
+                response = await self.client.post(
+                    "/api/generate",
+                    json={
+                        "model": self.settings.image_model,
+                        "prompt": prompt,
+                        "images": images,
+                        "aspectRatio": size,
+                        "replyType": "async",
+                    },
+                    timeout=45,
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt + 1 >= attempts:
+                    if isinstance(exc, httpx.TimeoutException):
+                        raise AIProviderError("Image provider timed out; please retry") from exc
+                    raise AIProviderError("Image provider connection failed; please retry") from exc
+                active_references = active_references[:1]
+                await asyncio.sleep(1.5 * (2**attempt))
+                continue
+            if not response.is_error:
+                parsed = response.json()
+                if not isinstance(parsed, dict):
+                    raise AIProviderError("Image provider returned an invalid response")
+                task = parsed
+                break
+            provider_error = self._provider_error(response)
+            retryable = response.status_code in {429, 500, 502, 503, 504} or any(
+                marker in provider_error.casefold()
+                for marker in ("excessive system load", "busy", "overload")
+            )
+            if attempt + 1 >= attempts or not retryable:
+                raise AIProviderError(provider_error)
+            active_references = active_references[:1]
+            await asyncio.sleep(1.5 * (2**attempt))
+
+        if task is None:
+            raise AIProviderError("Image provider request failed")
+        task_id = task.get("id")
+        for poll_attempt in range(72):
+            status = str(task.get("status") or "").casefold()
+            if status == "succeeded":
+                results = task.get("results")
+                if not isinstance(results, list) or not results:
+                    raise AIProviderError("Image provider returned no image")
+                return {
+                    "data": results,
+                    "requires_confirmation": True,
+                    "source_image_preservation_required": True,
+                }
+            if status in {"failed", "violation"}:
+                raise AIProviderError(str(task.get("error") or f"Image generation {status}"))
+            if not isinstance(task_id, str) or not task_id:
+                raise AIProviderError("Image provider returned no task id")
+            if poll_attempt + 1 >= 72:
+                break
+            await asyncio.sleep(2.5)
+            try:
+                poll_response = await self.client.get(
+                    "/api/result",
+                    params={"id": task_id},
+                    timeout=30,
+                )
+            except (httpx.TimeoutException, httpx.TransportError):
+                continue
+            if poll_response.status_code in {429, 500, 502, 503, 504}:
+                continue
+            if poll_response.is_error:
+                raise AIProviderError(self._provider_error(poll_response))
+            parsed = poll_response.json()
+            if not isinstance(parsed, dict):
+                raise AIProviderError("Image provider returned an invalid task result")
+            task = parsed
+        raise AIProviderError("Image generation is still processing; please retry later")
 
     async def _post_with_retry(self, path: str, **kwargs: Any) -> httpx.Response:
         attempts = 2

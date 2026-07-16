@@ -164,6 +164,7 @@ def _task_from_guidance(
         supported=guidance.supported,
         support_message=guidance.support_message,
         repeatable_group=guidance.repeatable_group,
+        repeatable_groups=guidance.repeatable_groups,
     )
 
 

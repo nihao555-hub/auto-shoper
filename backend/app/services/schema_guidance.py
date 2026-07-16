@@ -13,6 +13,12 @@ from backend.app.services.schema_rules import parse_schema_data
 
 MAX_PROMPT_OPTIONS_PER_FIELD = 40
 SKIPPED_TYPES = {"label", "hidden"}
+PLATFORM_MANAGED_FIELD_ROOTS = {
+    "ApiPostLevelAttrAdapter",
+    "productFeature",
+    "productQuality",
+    "supportLogisticsSku",
+}
 CHOICE_TYPES = {"singleCheck", "multiCheck"}
 SUPPORTED_TYPES = {
     "input",
@@ -48,12 +54,14 @@ def build_schema_guidance(
     parsed = parse_schema_data(schema_data)
     ai_fillable: list[SchemaFieldGuidance] = []
     manual: list[SchemaFieldGuidance] = []
+    option_fallbacks = _shared_option_fallbacks(parsed.fields)
     for field in parsed.fields:
-        _collect(field, ai_fillable, manual)
+        _collect(field, ai_fillable, manual, option_fallbacks=option_fallbacks)
     return SchemaGuidanceResult(
         ai_fillable_fields=ai_fillable,
         manual_fact_fields=manual,
         required_field_ids=parsed.required_field_ids,
+        main_image_max_size_bytes=_main_image_max_size(parsed.fields),
     )
 
 
@@ -62,15 +70,21 @@ def _collect(
     ai_fillable: list[SchemaFieldGuidance],
     manual: list[SchemaFieldGuidance],
     parents: list[ParsedSchemaField] | None = None,
+    option_fallbacks: dict[str, list[SchemaOption]] | None = None,
 ) -> None:
     parent_fields = parents or []
+    effective_options = field.options or (option_fallbacks or {}).get(field.id, [])
     key = _field_key(field)
+    field_root = field.path[0] if field.path else field.id
+    empty_container = field.type in {"complex", "multiComplex"} and not field.children
     describable = (
         bool(key)
+        and field_root not in PLATFORM_MANAGED_FIELD_ROOTS
+        and not empty_container
         and not field.disabled
         and not field.read_only
         and (field.type or "") not in SKIPPED_TYPES
-        and (bool(field.options) or not field.children)
+        and (bool(effective_options) or not field.children)
     )
     if describable:
         async_query_method = _rule_value(field.rules, "asyncQueryRule")
@@ -86,13 +100,18 @@ def _collect(
         if (
             responsibility == "ai_candidate"
             and field.type in CHOICE_TYPES
-            and not field.options
+            and not effective_options
             and async_query_method is None
         ):
             responsibility, label, reason, allowed_sources = _unsupported_choice_responsibility()
-        if field.type in CHOICE_TYPES and not field.options and async_query_method is None:
+        if field.type in CHOICE_TYPES and not effective_options and async_query_method is None:
             supported = False
             support_message = "Alibaba 未返回该选择字段的可提交选项，禁止按文本猜测填写"
+        repeatable_groups = [
+            ".".join(parent.path)
+            for parent in parent_fields
+            if parent.type == "multiComplex"
+        ]
         guidance = SchemaFieldGuidance(
             field=key,
             name=field.name,
@@ -112,13 +131,14 @@ def _collect(
             max_value=_rule_value(field.rules, "maxValueRule"),
             min_input_num=_integer_rule(field.rules, "minInputNumRule"),
             max_input_num=_integer_rule(field.rules, "maxInputNumRule"),
+            max_image_size_bytes=_integer_rule(field.rules, "maxImageSizeRule"),
             pattern=_rule_value(field.rules, "regxRule") or _rule_value(field.rules, "regexRule"),
             value_attributes=_rule_values(field.rules, "valueAttributeRule"),
             conditional_disable=field.conditional_disable,
             supported=supported,
             support_message=support_message,
             tip=_tip(field.rules),
-            options=field.options,
+            options=effective_options,
             parent_path=".".join(field.path[:-1]) or None,
             repeatable_group=next(
                 (
@@ -128,13 +148,46 @@ def _collect(
                 ),
                 None,
             ),
+            repeatable_groups=repeatable_groups,
         )
         if guidance.responsibility == "ai_candidate":
             ai_fillable.append(guidance)
         else:
             manual.append(guidance)
     for child in field.children:
-        _collect(child, ai_fillable, manual, [*parent_fields, field])
+        _collect(
+            child,
+            ai_fillable,
+            manual,
+            [*parent_fields, field],
+            option_fallbacks,
+        )
+
+
+def _main_image_max_size(fields: list[ParsedSchemaField]) -> int | None:
+    for field in fields:
+        if field.id.lower() == "scimages":
+            return _integer_rule(field.rules, "maxImageSizeRule")
+        nested = _main_image_max_size(field.children)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _shared_option_fallbacks(
+    fields: list[ParsedSchemaField],
+) -> dict[str, list[SchemaOption]]:
+    """Expose only options Alibaba explicitly documents as shared components."""
+
+    box_options = next(
+        (
+            field.options
+            for field in fields
+            if field.id == "boxPackaging" and field.options
+        ),
+        [],
+    )
+    return {"boxPackagingSku": box_options} if box_options else {}
 
 
 def _responsibility(

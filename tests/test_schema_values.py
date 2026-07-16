@@ -1,6 +1,11 @@
 from xml.etree import ElementTree
 
-from backend.app.services.schema_values import build_schema_xml, validate_filled_schema_xml
+from backend.app.services.schema_rules import parse_schema_data
+from backend.app.services.schema_values import (
+    build_schema_xml,
+    extract_schema_values,
+    validate_filled_schema_xml,
+)
 
 SCHEMA_XML = """
 <itemSchema>
@@ -53,6 +58,91 @@ SCHEMA_XML = """
   </field>
 </itemSchema>
 """
+
+PRICE_MODE_SCHEMA = """
+<itemSchema>
+  <field id="scPrice" type="singleCheck">
+    <rules><rule name="requiredRule" value="true"/></rules>
+    <options>
+      <option value="1"/><option value="2"/><option value="3"/>
+    </options>
+  </field>
+  <field id="ladderPrice" type="complex">
+    <rules><rule name="minInputNumRule" value="1"/></rules>
+    <fields>
+      <field id="ladderPrice_0" type="complex"><fields>
+        <field id="quantity" type="input">
+          <rules><rule name="requiredRule" value="true"/></rules>
+        </field>
+        <field id="price" type="input">
+          <rules><rule name="requiredRule" value="true"/></rules>
+        </field>
+      </fields></field>
+    </fields>
+  </field>
+  <field id="fob" type="complex"><fields>
+    <field id="range_min" type="input">
+      <rules><rule name="requiredRule" value="true"/></rules>
+    </field>
+    <field id="range_max" type="input">
+      <rules><rule name="requiredRule" value="true"/></rules>
+    </field>
+  </fields></field>
+  <field id="sku" type="multiComplex"><fields>
+    <field id="price" type="input">
+      <rules><rule name="requiredRule" value="true"/></rules>
+    </field>
+  </fields></field>
+</itemSchema>
+"""
+
+
+def test_price_mode_children_are_not_reported_as_global_schema_requirements() -> None:
+    required = parse_schema_data(PRICE_MODE_SCHEMA).required_field_ids
+
+    assert required == ["scPrice"]
+
+
+def test_price_mode_validates_only_the_selected_component() -> None:
+    tiered = build_schema_xml(
+        PRICE_MODE_SCHEMA,
+        {
+            "scPrice": "1",
+            "ladderPrice": {
+                "ladderPrice_0": {"quantity": "50", "price": "2.35"}
+            },
+        },
+    )
+    range_price = build_schema_xml(
+        PRICE_MODE_SCHEMA,
+        {
+            "scPrice": "2",
+            "fob": {"range_min": "2.35", "range_max": "2.75"},
+        },
+    )
+
+    assert tiered.ready_to_submit is True
+    assert not any(issue.field.startswith("fob") for issue in tiered.errors)
+    assert range_price.ready_to_submit is True
+    assert not any(issue.field.startswith("ladderPrice") for issue in range_price.errors)
+
+
+def test_price_mode_requires_its_component_and_rejects_irrelevant_components() -> None:
+    missing = build_schema_xml(PRICE_MODE_SCHEMA, {"scPrice": "2"})
+    irrelevant = build_schema_xml(
+        PRICE_MODE_SCHEMA,
+        {
+            "scPrice": "1",
+            "fob": {"range_min": "2.35", "range_max": "2.75"},
+        },
+    )
+
+    assert ("fob", "priceModeRule") in {
+        (issue.field, issue.rule) for issue in missing.errors
+    }
+    issues = {(issue.field, issue.rule) for issue in irrelevant.errors}
+    assert ("ladderPrice", "priceModeRule") in issues
+    assert ("fob", "priceModeRule") in issues
 
 
 def test_build_schema_xml_fills_official_value_shapes() -> None:
@@ -112,6 +202,46 @@ def test_build_schema_xml_fills_official_value_shapes() -> None:
     sku = next(field for field in root.findall("field") if field.attrib["id"] == "sku")
     assert len(sku.findall("complex-values")) == 2
     assert sku.findall("complex-values")[1].findtext("field[@id='price']/value") == "1.10"
+
+
+def test_nested_gallery_round_trips_through_filled_schema_extraction() -> None:
+    schema = """
+    <itemSchema>
+      <field id="detailImage" type="multiComplex">
+        <fields>
+          <field id="gallery" type="input" />
+          <field id="images" type="multiComplex">
+            <fields>
+              <field id="imageURL" type="input" />
+              <field id="imageDesc" type="input" />
+            </fields>
+          </field>
+        </fields>
+      </field>
+    </itemSchema>
+    """
+    values = {
+        "detailImage": [
+            {
+                "gallery": "300",
+                "images": [
+                    {
+                        "imageURL": "https://sc04.alicdn.com/kf/detail-1.jpg",
+                        "imageDesc": "Cold pressed watercolor paper",
+                    },
+                    {
+                        "imageURL": "https://sc04.alicdn.com/kf/detail-2.jpg",
+                        "imageDesc": "Cotton texture close-up",
+                    },
+                ],
+            }
+        ]
+    }
+
+    built = build_schema_xml(schema, values)
+
+    assert built.ready_to_submit is True
+    assert extract_schema_values(built.xml) == values
 
 
 def test_build_schema_xml_enforces_dynamic_rules_and_conditional_children() -> None:
@@ -197,6 +327,81 @@ def test_build_schema_xml_accepts_custom_negative_option_with_input_value() -> N
     assert value is not None
     assert value.text == "-2"
     assert value.attrib["inputValue"] == "100% cotton paper"
+
+
+def test_known_sale_property_fills_label_but_omits_optional_empty_attributes() -> None:
+    schema = """
+    <schema>
+      <field id="color" type="multiCheck">
+        <rules>
+          <rule name="valueAttributeRule" value="inputValue"/>
+          <rule name="valueAttributeRule" value="img"/>
+          <rule name="valueAttributeRule" value="remark"/>
+        </rules>
+        <options><option displayName="Blue" value="123085"/></options>
+      </field>
+    </schema>
+    """
+    result = build_schema_xml(schema, {"color": ["123085"]})
+    assert result.ready_to_submit is True
+    value = ElementTree.fromstring(result.xml).find("field/values/value")
+    assert value is not None
+    assert value.attrib == {"inputValue": "Blue"}
+
+
+def test_sku_metadata_attributes_remain_required_when_schema_has_no_options() -> None:
+    schema = """
+    <schema>
+      <field id="props" type="multiInput">
+        <rules>
+          <rule name="valueAttributeRule" value="propId"/>
+          <rule name="valueAttributeRule" value="propName"/>
+          <rule name="valueAttributeRule" value="propValueId"/>
+          <rule name="valueAttributeRule" value="propValueName"/>
+        </rules>
+      </field>
+    </schema>
+    """
+    incomplete = build_schema_xml(
+        schema,
+        {
+            "props": [
+                {
+                    "value": "191288010:123085",
+                    "attributes": {"propId": "191288010", "propValueId": "123085"},
+                }
+            ]
+        },
+    )
+    assert {(issue.field, issue.rule) for issue in incomplete.errors} == {
+        ("props", "valueAttributeRule")
+    }
+
+
+def test_box_packaging_requires_count_and_loaded_total_weight() -> None:
+    schema = """
+    <schema>
+      <field id="boxPackaging" type="multiCheck">
+        <options><option displayName="Small carton" value="18958013"/></options>
+      </field>
+    </schema>
+    """
+    incomplete = build_schema_xml(schema, {"boxPackaging": ["18958013"]})
+    assert {(issue.field, issue.rule) for issue in incomplete.errors} == {
+        ("boxPackaging", "valueAttributeRule")
+    }
+    complete = build_schema_xml(
+        schema,
+        {
+            "boxPackaging": [
+                {
+                    "value": "18958013",
+                    "attributes": {"maxCount": "200", "totalWeight": "9.19"},
+                }
+            ]
+        },
+    )
+    assert complete.ready_to_submit is True
 
 
 def test_validate_filled_schema_xml_rechecks_submission_values() -> None:

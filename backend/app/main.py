@@ -14,6 +14,8 @@ from backend.app.store_routes import router as store_router
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 settings = get_settings()
+STAGED_VIDEO_DIRECTORY = Path(settings.staged_video_directory).resolve()
+STAGED_VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title=settings.app_name,
@@ -31,6 +33,11 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(store_router)
 app.include_router(router, dependencies=[Depends(get_current_user)])
+app.mount(
+    "/public/videos",
+    StaticFiles(directory=STAGED_VIDEO_DIRECTORY),
+    name="staged-videos",
+)
 
 
 @app.get("/health")
@@ -38,10 +45,13 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-if FRONTEND_DIST.is_dir():
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+
+if FRONTEND_INDEX.is_file() and FRONTEND_ASSETS.is_dir():
     app.mount(
         "/assets",
-        StaticFiles(directory=FRONTEND_DIST / "assets"),
+        StaticFiles(directory=FRONTEND_ASSETS),
         name="frontend-assets",
     )
 
@@ -52,4 +62,4 @@ if FRONTEND_DIST.is_dir():
         requested_file = (FRONTEND_DIST / path).resolve()
         if FRONTEND_DIST.resolve() in requested_file.parents and requested_file.is_file():
             return FileResponse(requested_file)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(FRONTEND_INDEX)

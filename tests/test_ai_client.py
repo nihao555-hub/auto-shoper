@@ -14,6 +14,7 @@ def ai_settings() -> Settings:
         openai_base_url="https://example.test/v1",
         text_model="vision-model",
         image_model="image-model",
+        image_provider="openai",
     )
 
 
@@ -426,3 +427,48 @@ async def test_product_image_edit_retries_overload_with_primary_reference() -> N
 
     assert calls == 2
     assert result["data"][0]["url"].endswith("edit.png")
+
+
+@pytest.mark.asyncio
+async def test_grsai_product_image_edit_uses_unified_async_api(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            payload = json.loads((await request.aread()).decode())
+            assert request.url.path == "/v1/api/generate"
+            assert payload["model"] == "image-model"
+            assert payload["replyType"] == "async"
+            assert payload["images"][0].startswith("data:image/jpeg;base64,")
+            return httpx.Response(200, json={"id": "task-1", "status": "running"})
+        assert request.url.path == "/v1/api/result"
+        assert request.url.params["id"] == "task-1"
+        return httpx.Response(
+            200,
+            json={
+                "id": "task-1",
+                "status": "succeeded",
+                "results": [{"url": "https://example.test/generated.png"}],
+            },
+        )
+
+    monkeypatch.setattr("backend.app.clients.ai.asyncio.sleep", no_sleep)
+    settings = ai_settings().model_copy(update={"image_provider": "grsai"})
+    client = AIClient(settings, httpx.MockTransport(handler))
+    try:
+        result = await client.edit_product_image(
+            [(b"image", "product.jpg", "image/jpeg")],
+            "use a white studio background",
+            "1024x1024",
+            1,
+        )
+    finally:
+        await client.close()
+
+    assert [request.method for request in requests] == ["POST", "GET"]
+    assert result["data"][0]["url"].endswith("generated.png")
+    assert result["requires_confirmation"] is True

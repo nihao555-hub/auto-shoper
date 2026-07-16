@@ -83,6 +83,10 @@ export type ProductSkuRow = {
   attributes: string;
   price: string;
   stock: string;
+  propertyValues?: Array<{
+    value: string;
+    attributes: Record<string, string>;
+  }>;
 };
 
 export type ProductImage = {
@@ -90,6 +94,7 @@ export type ProductImage = {
   url: string;
   name: string;
   sourceFile?: File;
+  fileSize?: number;
   photoBankUrl?: string;
   photoBankFileId?: string;
   source?: "upload" | "photobank" | "generated";
@@ -130,6 +135,7 @@ export type SchemaFieldGuidance = {
   max_value?: string;
   min_input_num?: number;
   max_input_num?: number;
+  max_image_size_bytes?: number;
   pattern?: string;
   value_attributes?: string[];
   conditional_disable?: SchemaDependencyGroup[];
@@ -139,12 +145,14 @@ export type SchemaFieldGuidance = {
   options: SchemaOption[];
   parent_path?: string;
   repeatable_group?: string;
+  repeatable_groups?: string[];
 };
 
 export type SchemaGuidanceResult = {
   ai_fillable_fields: SchemaFieldGuidance[];
   manual_fact_fields: SchemaFieldGuidance[];
   required_field_ids: string[];
+  main_image_max_size_bytes?: number;
 };
 
 export type FieldTaskStatus = "completed" | "confirm" | "fill" | "invalid";
@@ -185,6 +193,7 @@ export type FieldTask = {
   supported?: boolean;
   support_message?: string;
   repeatable_group?: string;
+  repeatable_groups?: string[];
 };
 
 export type FieldTaskSummary = Record<FieldTaskStatus, number>;
@@ -215,6 +224,15 @@ export type ProductTranslation = {
   translatedAt: string;
 };
 
+export type AlibabaVideo = {
+  id: string;
+  title: string;
+  coverUrl: string;
+  videoUrl: string;
+  status: string;
+  duration?: number;
+};
+
 export type ProductRecord = {
   id: string;
   reference: string;
@@ -236,12 +254,17 @@ export type ProductRecord = {
   categoryEvidence?: string;
   stage: ProductStage;
   facts: ProductFacts;
+  publishCapabilities?: AlibabaProductTypeCapabilities;
   errors: string[];
   draftProductId?: string;
   draftReadback?: Record<string, unknown>;
   draftDifferences?: DraftFieldDifference[];
   draftReadbackError?: string;
   draftReadbackVerified?: boolean;
+  mainVideo?: AlibabaVideo;
+  detailVideo?: AlibabaVideo;
+  videoRelationErrors?: string[];
+  videoRelationsVerified?: boolean;
   schemaData?: Record<string, unknown> | string;
   schemaGuidance?: SchemaGuidanceResult;
   schemaFields?: Record<string, DraftField>;
@@ -365,6 +388,12 @@ export type AlibabaCategoryOption = {
 export type AlibabaCategoryLevel = {
   parent: AlibabaCategoryOption | null;
   categories: AlibabaCategoryOption[];
+};
+
+export type AlibabaProductTypeCapabilities = {
+  support_post_whole_sale: boolean;
+  support_post_sourcing: boolean;
+  trace_id?: string | null;
 };
 
 export type AlibabaCategoryRecommendation = {

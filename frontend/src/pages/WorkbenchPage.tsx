@@ -49,6 +49,7 @@ import {
   createDraftBatch,
   createListingTemplate,
   deleteListingTemplate,
+  findAlibabaVideos,
   findPhotoBankFileId,
   findPhotoBankGroups,
   findPhotoBankImages,
@@ -56,12 +57,14 @@ import {
   findSchemaData,
   generateProductImages,
   getAsyncFieldOptions,
+  getCategoryPublishCapabilities,
   getCategorySchema,
   getListingFeatureFlags,
   getListingMetrics,
   getListingTasks,
   getSchemaGuidance,
   importListingProducts,
+  listAlibabaVideos,
   listCategoryChildren,
   listListingTemplates,
   listPhotoBankGroups,
@@ -70,8 +73,10 @@ import {
   publishBatch,
   recommendAlibabaCategories,
   recordListingMetricEvent,
+  relateAlibabaVideo,
   translateProductContent,
   updateListingFeatureFlags,
+  uploadAlibabaVideoFile,
   uploadPhotoBankImage,
 } from "../api";
 import { createEmptyFacts, getMainProductImage, getMissingStoreTemplateFields } from "../data";
@@ -80,6 +85,7 @@ import type {
   AlibabaCategoryOption,
   AlibabaCategoryRecommendation,
   AlibabaConnectedStore,
+  AlibabaVideo,
   CapabilityResponse,
   DataMode,
   DraftField,
@@ -91,6 +97,7 @@ import type {
   ListingFeatureFlags,
   ListingMetrics,
   ListingTemplate,
+  ProductImage,
   ProductImageCandidate,
   ProductRecord,
   ProductTranslation,
@@ -165,6 +172,23 @@ const mergeListingFields = (
             attributes: String(row.attributes ?? row.specification ?? row.spec ?? ""),
             price: String(row.price ?? ""),
             stock: String(row.stock ?? row.inventory ?? ""),
+            propertyValues: Array.isArray(row.propertyValues)
+              ? row.propertyValues.flatMap((item) => {
+                  if (!item || typeof item !== "object" || Array.isArray(item)) {
+                    return [];
+                  }
+                  const record = item as Record<string, unknown>;
+                  const attributes =
+                    record.attributes &&
+                    typeof record.attributes === "object" &&
+                    !Array.isArray(record.attributes)
+                      ? Object.fromEntries(
+                          Object.entries(record.attributes).map(([key, value]) => [key, String(value)]),
+                        )
+                      : {};
+                  return [{ value: String(record.value ?? ""), attributes }];
+                })
+              : undefined,
           },
         ];
       })
@@ -794,7 +818,20 @@ export function WorkbenchPage({
   }, [featureFlags.workflow_v2, onProductsChange, products]);
 
   const handleFiles = (files: FileList | File[], targetProductId: string | null = null) => {
-    const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    const supportedImages = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    const oversizedImages = supportedImages.filter(
+      (file) => file.size > ALIBABA_PHOTO_BANK_MAX_BYTES,
+    );
+    const imageFiles = supportedImages.filter(
+      (file) => file.size <= ALIBABA_PHOTO_BANK_MAX_BYTES,
+    );
+    if (oversizedImages.length) {
+      notify(
+        "warning",
+        `${oversizedImages.length} 张图片超过 5 MB`,
+        "Alibaba 图片银行不接受超过 5 MB 的图片，请压缩后重新选择。",
+      );
+    }
     if (!imageFiles.length) {
       notify("warning", "没有可用图片", "请选择 JPG、PNG 或 WebP 商品图片。");
       return;
@@ -807,6 +844,7 @@ export function WorkbenchPage({
         url: URL.createObjectURL(file),
         name: file.name,
         sourceFile: file,
+        fileSize: file.size,
         source: "upload" as const,
       }));
     if (targetProductId) {
@@ -937,6 +975,7 @@ export function WorkbenchPage({
             url: image.url,
             name: image.name || `图片银行图片 ${index + 1}`,
             sourceFile,
+            fileSize: sourceFile?.size ?? image.fileSize,
             photoBankUrl: image.url,
             photoBankFileId: image.id,
             source: "photobank" as const,
@@ -1471,57 +1510,93 @@ export function WorkbenchPage({
     }
   };
 
-  const addGeneratedImage = (candidate: ProductImageCandidate) => {
+  const prepareGeneratedCandidate = async (
+    candidate: ProductImageCandidate,
+    index = 0,
+  ): Promise<ProductImage> => {
+    if (!candidate.image_url) {
+      throw new Error("生成结果没有可用图片");
+    }
+    const response = await fetch(candidate.image_url);
+    if (!response.ok) {
+      throw new Error(`生成图片读取失败（HTTP ${response.status}）`);
+    }
+    const sourceFile = await preparePhotoBankFile(
+      await response.blob(),
+      `ai-${candidate.slot}-${Date.now()}-${index}.png`,
+    );
+    return {
+      id: `generated-${candidate.slot}-${Date.now()}-${index}`,
+      url: URL.createObjectURL(sourceFile),
+      name: `${candidate.label}候选图`,
+      sourceFile,
+      fileSize: sourceFile.size,
+      source: "generated",
+    };
+  };
+
+  const addGeneratedImage = async (candidate: ProductImageCandidate) => {
     if (!activeProduct || !candidate.image_url) {
       return;
     }
-    if (activeProduct.images.some((image) => image.url === candidate.image_url)) {
+    if (
+      addedImageSlots.includes(candidate.slot) ||
+      activeProduct.images.some((image) => image.url === candidate.image_url)
+    ) {
       notify("info", "图片已在图库中", "无需重复添加。");
       return;
     }
-    updateProduct({
-      ...activeProduct,
-      images: [
-        ...activeProduct.images,
-        {
-          id: `generated-${candidate.slot}-${Date.now()}`,
-          url: candidate.image_url,
-          name: `${candidate.label}候选`,
-          source: "generated" as const,
-        },
-      ],
-    });
+    setImageGenerationBusy(true);
+    let generatedImage: ProductImage;
+    try {
+      generatedImage = await prepareGeneratedCandidate(candidate);
+    } catch (error) {
+      notify(
+        "error",
+        "生成图暂时无法加入商品",
+        error instanceof Error ? error.message : "请重新生成后再试。",
+      );
+      setImageGenerationBusy(false);
+      return;
+    }
+    updateProduct({ ...activeProduct, images: [...activeProduct.images, generatedImage] });
     setAddedImageSlots((current) =>
       current.includes(candidate.slot) ? current : [...current, candidate.slot],
     );
     setImagePlan((current) => current.filter((slot) => slot.slot !== candidate.slot));
     notify("success", "已加入商品图库", `${candidate.label}可继续确认或设为主图。`);
+    setImageGenerationBusy(false);
   };
 
-  const addGeneratedImages = (candidates: ProductImageCandidate[]) => {
+  const addGeneratedImages = async (candidates: ProductImageCandidate[]) => {
     if (!activeProduct) {
       return;
     }
     const available = candidates.filter(
       (candidate) =>
         candidate.image_url &&
+        !addedImageSlots.includes(candidate.slot) &&
         !activeProduct.images.some((image) => image.url === candidate.image_url),
     );
     if (!available.length) {
       notify("info", "候选图已全部加入", "无需重复添加。");
       return;
     }
+    setImageGenerationBusy(true);
+    const prepared = await Promise.allSettled(
+      available.map((candidate, index) => prepareGeneratedCandidate(candidate, index)),
+    );
+    const generatedImages = prepared.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    if (!generatedImages.length) {
+      notify("error", "生成图暂时无法加入商品", "图片读取失败，请重新生成后再试。");
+      setImageGenerationBusy(false);
+      return;
+    }
     updateProduct({
       ...activeProduct,
-      images: [
-        ...activeProduct.images,
-        ...available.map((candidate, index) => ({
-          id: `generated-${candidate.slot}-${Date.now()}-${index}`,
-          url: candidate.image_url ?? "",
-          name: `${candidate.label}候选`,
-          source: "generated" as const,
-        })),
-      ],
+      images: [...activeProduct.images, ...generatedImages],
     });
     setAddedImageSlots((current) => [
       ...new Set([...current, ...available.map((candidate) => candidate.slot)]),
@@ -1529,7 +1604,15 @@ export function WorkbenchPage({
     setImagePlan((current) =>
       current.filter((slot) => !available.some((candidate) => candidate.slot === slot.slot)),
     );
-    notify("success", `已加入 ${available.length} 张候选图`, "仍需逐张检查产品一致性后发布。");
+    const failedCount = prepared.length - generatedImages.length;
+    notify(
+      failedCount ? "warning" : "success",
+      `已加入 ${generatedImages.length} 张候选图`,
+      failedCount
+        ? `${failedCount} 张图片读取失败，可单独重新生成；其余图片仍需检查产品一致性。`
+        : "仍需逐张检查产品一致性后发布。",
+    );
+    setImageGenerationBusy(false);
   };
 
   const validateAll = (sourceProducts = products) => {
@@ -1603,8 +1686,13 @@ export function WorkbenchPage({
         targets.map(async (product) => {
           const images = await Promise.all(
             product.images.map(async (image) => {
-              if (image.photoBankUrl || !image.sourceFile) {
+              if (image.photoBankUrl) {
                 return image;
+              }
+              if (!image.sourceFile) {
+                throw new Error(
+                  `${product.reference} 的 ${image.name} 尚未准备为可上传图片，请删除后重新添加。`,
+                );
               }
               const upload = await uploadPhotoBankImage(
                 image.sourceFile,
@@ -1639,6 +1727,45 @@ export function WorkbenchPage({
       const results = await createDraftBatch(batchId, prepared, settings);
       const preparedByReference = new Map(prepared.map((product) => [product.reference, product]));
       const resultByReference = new Map(results.map((result) => [result.reference, result]));
+      const videoRelations = await Promise.all(
+        results.map(async (result) => {
+          const preparedProduct = preparedByReference.get(result.reference);
+          const selectedVideos = preparedProduct
+            ? ([
+                ["main", preparedProduct.mainVideo],
+                ["detail", preparedProduct.detailVideo],
+              ] as const).filter((entry): entry is readonly ["main" | "detail", AlibabaVideo] =>
+                Boolean(entry[1]),
+              )
+            : [];
+          if (!result.success || !preparedProduct || !selectedVideos.length) {
+            return { reference: result.reference, errors: [] as string[] };
+          }
+          const productId = getProductId(result.response);
+          if (!productId) {
+            return {
+              reference: result.reference,
+              errors: ["草稿已创建，但返回结果没有商品 ID，无法关联已选择的视频。"],
+            };
+          }
+          const errors: string[] = [];
+          for (const [placement, video] of selectedVideos) {
+            try {
+              await relateAlibabaVideo(video.id, productId, placement);
+            } catch (error) {
+              errors.push(
+                `${placement === "main" ? "主图视频" : "详情视频"}“${video.title}”关联失败：${
+                  error instanceof Error ? error.message : "Alibaba 视频接口返回失败"
+                }`,
+              );
+            }
+          }
+          return { reference: result.reference, errors };
+        }),
+      );
+      const videoRelationByReference = new Map(
+        videoRelations.map((result) => [result.reference, result.errors]),
+      );
       onProductsChange(
         products.map((product) => {
           const result = resultByReference.get(product.reference);
@@ -1646,26 +1773,42 @@ export function WorkbenchPage({
           if (!result || !preparedProduct) {
             return product;
           }
+          const videoRelationErrors = videoRelationByReference.get(product.reference) ?? [];
+          const readbackError = result.success ? getReadbackError(result.response) : undefined;
+          const readbackDifferences = result.success
+            ? getReadbackDifferences(result.response)
+            : undefined;
+          const readbackHasChanges = readbackDifferences?.some(
+            (difference) => difference.status === "changed",
+          );
           return {
             ...preparedProduct,
             stage: result.success ? "drafted" : "error",
             errors: result.success ? [] : [result.error ?? "草稿创建失败"],
             draftProductId: result.success ? getProductId(result.response) : undefined,
             draftReadback: result.success ? getReadback(result.response) : undefined,
-            draftDifferences: result.success ? getReadbackDifferences(result.response) : undefined,
-            draftReadbackError: result.success ? getReadbackError(result.response) : undefined,
+            draftDifferences: readbackDifferences,
+            draftReadbackError: readbackError,
+            videoRelationErrors: videoRelationErrors.length ? videoRelationErrors : undefined,
+            videoRelationsVerified: result.success && videoRelationErrors.length === 0,
             draftReadbackVerified:
               result.success &&
               Boolean(getReadback(result.response)) &&
-              !getReadbackError(result.response),
+              !readbackError &&
+              !readbackHasChanges &&
+              videoRelationErrors.length === 0,
           };
         }),
       );
       const succeeded = results.filter((result) => result.success).length;
       notify(
-        succeeded === results.length ? "success" : "warning",
+        succeeded === results.length && videoRelations.every((item) => !item.errors.length)
+          ? "success"
+          : "warning",
         `草稿创建完成: ${succeeded}/${results.length}`,
-        "失败商品已隔离，不影响其他商品。",
+        videoRelations.some((item) => item.errors.length)
+          ? "草稿已创建，但部分视频关联失败；请在草稿列表查看具体原因，修复前不会允许正式发布。"
+          : "失败商品已隔离，不影响其他商品。",
       );
       const firstSucceeded = results.find((result) => result.success);
       if (firstSucceeded) {
@@ -1682,6 +1825,59 @@ export function WorkbenchPage({
     } finally {
       setBusy(false);
     }
+  };
+
+  const retryVideoRelations = async (productId: string) => {
+    const product = products.find((item) => item.id === productId);
+    if (!product?.draftProductId) {
+      notify("error", "无法重试视频关联", "当前商品没有可用的 Alibaba 草稿商品 ID。");
+      return;
+    }
+    const selectedVideos = ([
+      ["main", product.mainVideo],
+      ["detail", product.detailVideo],
+    ] as const).filter((entry): entry is readonly ["main" | "detail", AlibabaVideo] =>
+      Boolean(entry[1]),
+    );
+    if (!selectedVideos.length) {
+      notify("warning", "没有待关联的视频", "请返回资料页，在创建草稿前选择商品视频。");
+      return;
+    }
+    setBusy(true);
+    const errors: string[] = [];
+    for (const [placement, video] of selectedVideos) {
+      try {
+        await relateAlibabaVideo(video.id, product.draftProductId, placement);
+      } catch (error) {
+        errors.push(
+          `${placement === "main" ? "主图视频" : "详情视频"}“${video.title}”关联失败：${
+            error instanceof Error ? error.message : "Alibaba 视频接口返回失败"
+          }`,
+        );
+      }
+    }
+    onProductsChange((current) =>
+      current.map((item) =>
+        item.id === product.id
+          ? {
+              ...item,
+              videoRelationErrors: errors.length ? errors : undefined,
+              videoRelationsVerified: errors.length === 0,
+              draftReadbackVerified:
+                errors.length === 0 &&
+                Boolean(item.draftReadback) &&
+                !item.draftReadbackError &&
+                !item.draftDifferences?.some((difference) => difference.status === "changed"),
+            }
+          : item,
+      ),
+    );
+    notify(
+      errors.length ? "error" : "success",
+      errors.length ? "视频关联仍未完成" : "商品视频已成功关联",
+      errors[0],
+    );
+    setBusy(false);
   };
 
   const translateDrafts = async () => {
@@ -1798,6 +1994,20 @@ export function WorkbenchPage({
           : product,
       ),
     );
+  };
+
+  const acceptReadbackChanges = (productId: string) => {
+    onProductsChange((current) =>
+      current.map((product) =>
+        product.id === productId &&
+        product.draftReadback &&
+        !product.draftReadbackError &&
+        !product.videoRelationErrors?.length
+          ? { ...product, draftReadbackVerified: true }
+          : product,
+      ),
+    );
+    notify("success", "已确认平台保存结果", "该草稿现在可以进入最终发布确认。 ");
   };
 
   const confirmTranslation = (productId: string) => {
@@ -2469,6 +2679,8 @@ export function WorkbenchPage({
                   void createDrafts(new Set([id]));
                 }
               }}
+              onRetryVideo={(id) => void retryVideoRelations(id)}
+              onAcceptReadback={acceptReadbackChanges}
               onFix={(id) => {
                 setActiveProductId(id);
                 setInspectorOpen(true);
@@ -3210,6 +3422,9 @@ function UploadStep({
                     <span>
                       {product.title || `${product.images.length} 张商品图片 · 等待 AI 分析`}
                     </span>
+                    <small className="upload-gallery-rule">
+                      阿里主图轮播：当前主图排第 1，其余按缩略图顺序取前 6 张；全部图片用于详情。
+                    </small>
                     <span
                       className={`upload-source-tag ${
                         product.images.some((image) => image.source === "photobank")
@@ -4083,11 +4298,16 @@ function updateRepeatableGroupLocally(
     return product;
   }
   const fieldTasks = product.fieldTasks.map((task) => {
-    if (task.repeatable_group !== groupPath) {
+    const repeatableGroups = task.repeatable_groups?.length
+      ? task.repeatable_groups
+      : task.repeatable_group
+        ? [task.repeatable_group]
+        : [];
+    if (repeatableGroups[0] !== groupPath) {
       return task;
     }
     const relativePath = task.field_path.slice(groupPath.length + 1).split(".");
-    const values = rows.map((row) => getNestedRecordValue(row, relativePath));
+    const values = collectRepeatableFieldValues(rows, relativePath);
     const complete =
       rows.length > 0 &&
       values.every(
@@ -4589,7 +4809,77 @@ function WbInspector({
   const [categoryRecommendationError, setCategoryRecommendationError] = useState("");
   const [categoryRecommendationWarning, setCategoryRecommendationWarning] = useState("");
   const [manualCategoryPickerOpen, setManualCategoryPickerOpen] = useState(false);
+  const [videoPlacement, setVideoPlacement] = useState<"main" | "detail" | null>(null);
+  const [videoLibrary, setVideoLibrary] = useState<AlibabaVideo[]>([]);
+  const [videoSearch, setVideoSearch] = useState("");
+  const [videoBusy, setVideoBusy] = useState(false);
+  const [videoError, setVideoError] = useState("");
+  const [videoUploadMessage, setVideoUploadMessage] = useState("");
   const addImageInputRef = useRef<HTMLInputElement>(null);
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadVideoLibrary = async (placement: "main" | "detail", search = videoSearch) => {
+    setVideoPlacement(placement);
+    setVideoBusy(true);
+    setVideoError("");
+    try {
+      const payload = await listAlibabaVideos(1, 50, search);
+      const videos = findAlibabaVideos(payload);
+      setVideoLibrary(videos);
+      if (!videos.length) {
+        setVideoError("Alibaba 视频库暂时没有可选视频，请先在国际站视频银行上传并完成审核。");
+      }
+    } catch (error) {
+      setVideoLibrary([]);
+      setVideoError(
+        error instanceof Error
+          ? error.message
+          : "Alibaba 视频库加载失败，请检查当前应用的视频 API 权限。",
+      );
+    } finally {
+      setVideoBusy(false);
+    }
+  };
+
+  const selectVideo = (video: AlibabaVideo) => {
+    if (!videoPlacement) {
+      return;
+    }
+    onChange({
+      ...product,
+      [videoPlacement === "main" ? "mainVideo" : "detailVideo"]: video,
+      videoRelationErrors: undefined,
+      videoRelationsVerified: false,
+      draftReadbackVerified: product.draftProductId ? false : product.draftReadbackVerified,
+    });
+    setVideoPlacement(null);
+  };
+  const uploadVideoFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !videoPlacement) {
+      return;
+    }
+    const maxBytes = videoPlacement === "main" ? 100 * 1024 * 1024 : 500 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setVideoError(
+        `${videoPlacement === "main" ? "主图" : "详情"}视频不能超过 ${maxBytes / (1024 * 1024)} MB`,
+      );
+      return;
+    }
+    setVideoBusy(true);
+    setVideoError("");
+    setVideoUploadMessage("");
+    try {
+      await uploadAlibabaVideoFile(file, videoPlacement);
+      setVideoUploadMessage("视频已提交 Alibaba 处理；审核完成后会出现在视频库中。请稍后刷新。 ");
+      await loadVideoLibrary(videoPlacement, "");
+    } catch (error) {
+      setVideoError(error instanceof Error ? error.message : "本地视频上传失败");
+    } finally {
+      setVideoBusy(false);
+    }
+  };
   const setFact = (key: keyof ProductRecord["facts"], value: string) => {
     const schemaFields = getRequiredSchemaFields(product).filter(
       (field) => schemaFactKey(field) === key,
@@ -4718,7 +5008,16 @@ function WbInspector({
     setCategoryBusy(true);
     setCategoryError("");
     try {
-      const payload = await getCategorySchema(option.id);
+      const [payload, publishCapabilities] = await Promise.all([
+        getCategorySchema(option.id),
+        getCategoryPublishCapabilities(option.id),
+      ]);
+      if (
+        !publishCapabilities.support_post_whole_sale &&
+        !publishCapabilities.support_post_sourcing
+      ) {
+        throw new Error("当前店铺没有该类目的下单品或询盘品发布权限");
+      }
       const schemaData = findSchemaData(payload);
       if (!schemaData) {
         throw new Error("Alibaba 未返回类目 Schema");
@@ -4727,6 +5026,7 @@ function WbInspector({
       const confirmedProduct = syncProductSchemaFields(
         {
           ...selectedProduct,
+          publishCapabilities,
           schemaData,
           schemaGuidance,
         },
@@ -4791,6 +5091,7 @@ function WbInspector({
           url: URL.createObjectURL(file),
           name: file.name,
           sourceFile: file,
+          fileSize: file.size,
           source: "upload" as const,
         })),
       ],
@@ -4809,13 +5110,25 @@ function WbInspector({
     });
   };
   const setSkuRows = (skuRows: NonNullable<ProductRecord["facts"]["skuRows"]>) => {
+    const schemaFields: Record<string, DraftField> = {
+      ...product.schemaFields,
+      sku_rows: { value: skuRows, source: "user_provided" as const },
+    };
+    const skuGroupPath = findOfficialSkuGroupPath(product);
+    if (skuGroupPath) {
+      if (!skuRows.length) {
+        delete schemaFields[skuGroupPath];
+      } else if (skuRows.every((row) => row.propertyValues?.length)) {
+        schemaFields[skuGroupPath] = {
+          value: buildOfficialSkuSchemaRows(skuRows),
+          source: "user_provided",
+        };
+      }
+    }
     onChange({
       ...product,
       facts: { ...product.facts, skuRows },
-      schemaFields: {
-        ...product.schemaFields,
-        sku_rows: { value: skuRows, source: "user_provided" },
-      },
+      schemaFields,
     });
   };
   const setSchemaField = (field: SchemaFieldGuidance, value: unknown) => {
@@ -4894,6 +5207,8 @@ function WbInspector({
   const complianceNote = product.facts.certifications[0] ?? "";
   const missingFacts = getFactErrors(product);
   const allSchemaFields = getAllSchemaFields(product);
+  const supportsMainVideo = allSchemaFields.some(isMainVideoSchemaField);
+  const supportsDetailVideo = allSchemaFields.some(isDetailVideoSchemaField);
   const requiredSchemaFields = getRequiredSchemaFields(product);
   const requiredSchemaFieldIds = new Set(product.schemaGuidance?.required_field_ids ?? []);
   const taskByField = new Map((product.fieldTasks ?? []).map((task) => [task.field_path, task]));
@@ -4910,17 +5225,24 @@ function WbInspector({
   const humanFactCount = allSchemaFields.length - aiCandidateCount;
   const repeatableGroups = new Map<string, SchemaFieldGuidance[]>();
   for (const field of allSchemaFields) {
-    if (field.repeatable_group) {
-      const grouped = repeatableGroups.get(field.repeatable_group) ?? [];
+    if (isSchemaFieldDisabled(product, field)) {
+      continue;
+    }
+    const outerGroup = field.repeatable_groups?.[0] ?? field.repeatable_group;
+    if (outerGroup) {
+      const grouped = repeatableGroups.get(outerGroup) ?? [];
       grouped.push(field);
-      repeatableGroups.set(field.repeatable_group, grouped);
+      repeatableGroups.set(outerGroup, grouped);
     }
   }
   const inputSchemaFields = allSchemaFields.filter((field) => {
-    if (field.repeatable_group) {
+    if (field.repeatable_group || field.repeatable_groups?.length) {
       return false;
     }
-    if (isImageSchemaField(field) || isTitleSchemaField(field)) {
+    if (isSchemaFieldDisabled(product, field)) {
+      return false;
+    }
+    if (isImageSchemaField(field) || isTitleSchemaField(field) || isVideoSchemaField(field)) {
       return false;
     }
     return true;
@@ -4939,8 +5261,8 @@ function WbInspector({
     ([groupPath]) => !requiredSchemaFieldIds.has(groupPath),
   );
   const missingRequiredSchemaCount = requiredSchemaFields.filter((field) =>
-    field.repeatable_group
-      ? !hasSchemaValue(repeatableGroupValue(product, field.repeatable_group))
+    field.repeatable_group || field.repeatable_groups?.length
+      ? !hasRepeatableSchemaFieldValue(product, field)
       : !hasSchemaValue(getSchemaFieldValue(product, field)),
   ).length;
 
@@ -4951,6 +5273,7 @@ function WbInspector({
         groupPath={groupPath}
         fields={fields}
         value={repeatableGroupValue(product, groupPath)}
+        photoBankGroupId={settings.photoBankGroupId}
         onChange={(value) => setRepeatableGroup(groupPath, value)}
       />
     ));
@@ -5059,7 +5382,11 @@ function WbInspector({
           open={Boolean(product.facts.skuRows?.length)}
         >
           <summary>SKU 规格、价格与库存（{product.facts.skuRows?.length ?? 0}）</summary>
-          <SkuTableEditor rows={product.facts.skuRows ?? []} onChange={setSkuRows} />
+          <SkuTableEditor
+            rows={product.facts.skuRows ?? []}
+            combinations={buildOfficialSkuCombinations(product)}
+            onChange={setSkuRows}
+          />
         </details>
 
         <section className="wb-inspector-section wb-category-confirmation">
@@ -5083,6 +5410,17 @@ function WbInspector({
               <span>
                 <strong>{product.facts.categoryLabel}</strong>
                 <small>叶子类目 ID {product.facts.categoryId}</small>
+                {product.publishCapabilities ? (
+                  <small>
+                    店铺可发布：
+                    {[
+                      product.publishCapabilities.support_post_whole_sale ? "下单品" : "",
+                      product.publishCapabilities.support_post_sourcing ? "询盘品" : "",
+                    ]
+                      .filter(Boolean)
+                      .join("、")}
+                  </small>
+                ) : null}
               </span>
             </div>
           ) : (
@@ -5215,6 +5553,186 @@ function WbInspector({
             <p className="wb-category-error">{categoryError}</p>
           ) : null}
         </section>
+
+        {supportsMainVideo || supportsDetailVideo ? (
+          <section className="wb-inspector-section wb-video-library">
+            <div className="wb-video-library-heading">
+              <div>
+                <h3>Alibaba 商品视频</h3>
+                <p>从当前店铺的视频库选择；创建草稿取得商品 ID 后，系统会自动完成关联。</p>
+              </div>
+            </div>
+            <div className="wb-video-selections">
+              {supportsMainVideo ? (
+                <article className={product.mainVideo ? "is-selected" : ""}>
+                  {product.mainVideo?.coverUrl ? (
+                    <img src={product.mainVideo.coverUrl} alt="主图视频封面" />
+                  ) : (
+                    <div className="wb-video-placeholder">主图视频</div>
+                  )}
+                  <div>
+                    <strong>{product.mainVideo?.title || "未选择主图视频"}</strong>
+                    <small>展示在商品主图区域</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => void loadVideoLibrary("main")}
+                    disabled={videoBusy || Boolean(product.draftProductId)}
+                  >
+                    {product.mainVideo ? "更换" : "选择"}
+                  </button>
+                  {product.mainVideo ? (
+                    <button
+                      type="button"
+                      className="wb-link is-danger"
+                      disabled={Boolean(product.draftProductId)}
+                      onClick={() =>
+                        onChange({
+                          ...product,
+                          mainVideo: undefined,
+                          videoRelationErrors: undefined,
+                          videoRelationsVerified: false,
+                          draftReadbackVerified: product.draftProductId
+                            ? false
+                            : product.draftReadbackVerified,
+                        })
+                      }
+                    >
+                      移除
+                    </button>
+                  ) : null}
+                </article>
+              ) : null}
+              {supportsDetailVideo ? (
+                <article className={product.detailVideo ? "is-selected" : ""}>
+                  {product.detailVideo?.coverUrl ? (
+                    <img src={product.detailVideo.coverUrl} alt="详情视频封面" />
+                  ) : (
+                    <div className="wb-video-placeholder">详情视频</div>
+                  )}
+                  <div>
+                    <strong>{product.detailVideo?.title || "未选择详情视频"}</strong>
+                    <small>展示在商品详情区域</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => void loadVideoLibrary("detail")}
+                    disabled={videoBusy || Boolean(product.draftProductId)}
+                  >
+                    {product.detailVideo ? "更换" : "选择"}
+                  </button>
+                  {product.detailVideo ? (
+                    <button
+                      type="button"
+                      className="wb-link is-danger"
+                      disabled={Boolean(product.draftProductId)}
+                      onClick={() =>
+                        onChange({
+                          ...product,
+                          detailVideo: undefined,
+                          videoRelationErrors: undefined,
+                          videoRelationsVerified: false,
+                          draftReadbackVerified: product.draftProductId
+                            ? false
+                            : product.draftReadbackVerified,
+                        })
+                      }
+                    >
+                      移除
+                    </button>
+                  ) : null}
+                </article>
+              ) : null}
+            </div>
+            {videoPlacement ? (
+              <div className="wb-video-picker">
+                <input
+                  ref={videoFileInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v"
+                  onChange={(event) => void uploadVideoFile(event)}
+                />
+                <div className="wb-video-picker-toolbar">
+                  <label>
+                    <span className="sr-only">搜索视频标题</span>
+                    <input
+                      value={videoSearch}
+                      onChange={(event) => setVideoSearch(event.target.value)}
+                      placeholder="搜索 Alibaba 视频库"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={videoBusy}
+                    onClick={() => void loadVideoLibrary(videoPlacement, videoSearch)}
+                  >
+                    {videoBusy ? <CircleNotch size={14} className="spin" /> : <MagnifyingGlass size={14} />}
+                    搜索
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={videoBusy}
+                    onClick={() => videoFileInputRef.current?.click()}
+                  >
+                    <UploadSimple size={14} />
+                    上传本地视频
+                  </button>
+                  <button type="button" className="wb-link" onClick={() => setVideoPlacement(null)}>
+                    取消
+                  </button>
+                </div>
+                {videoUploadMessage ? (
+                  <div className="wb-schema-dynamic-option" role="status">
+                    <CheckCircle size={15} weight="fill" />
+                    <span>{videoUploadMessage}</span>
+                  </div>
+                ) : null}
+                {videoError ? (
+                  <div className="wb-schema-dynamic-option is-blocked" role="alert">
+                    <WarningCircle size={15} />
+                    <span>{videoError}</span>
+                  </div>
+                ) : null}
+                {videoBusy ? (
+                  <div className="wb-category-loading">
+                    <CircleNotch size={17} className="spin" />
+                    正在读取 Alibaba 视频库
+                  </div>
+                ) : null}
+                {!videoBusy && videoLibrary.length ? (
+                  <div className="wb-video-results">
+                    {videoLibrary.map((video) => (
+                      <button key={video.id} type="button" onClick={() => selectVideo(video)}>
+                        {video.coverUrl ? (
+                          <img src={video.coverUrl} alt="" />
+                        ) : (
+                          <span className="wb-video-placeholder">视频</span>
+                        )}
+                        <span>
+                          <strong>{video.title}</strong>
+                          <small>
+                            ID {video.id}
+                            {video.status ? ` · 状态 ${video.status}` : ""}
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <p className="wb-schema-note">
+              {product.draftProductId
+                ? "草稿创建后视频选择已锁定；关联失败可在草稿回读页直接重试。"
+                : "可从店铺视频库选择，也可上传本地 MP4、MOV 或 M4V；本地视频提交 Alibaba 处理并审核通过后，再从视频库选择。"}
+            </p>
+          </section>
+        ) : null}
 
         <section className="wb-inspector-section wb-image-generation wb-image-generation-prominent">
           <div className="wb-image-generation-heading">
@@ -5803,6 +6321,120 @@ function WbInspector({
 
 type DraftCheckStatus = "ok" | "ai_pending" | "missing" | "failed";
 
+type OfficialSkuPropertyValue = {
+  value: string;
+  attributes: Record<string, string>;
+};
+
+type OfficialSkuCombination = {
+  key: string;
+  label: string;
+  propertyValues: OfficialSkuPropertyValue[];
+};
+
+function findOfficialSkuGroupPath(product: ProductRecord): string | null {
+  const skuField = getAllSchemaFields(product).find((field) => {
+    const leaf = field.field.split(".").at(-1)?.toLowerCase();
+    return ["skuouterid", "skustock", "props"].includes(leaf || "") &&
+      schemaRepeatableGroups(field).some((group) => group.split(".").at(-1) === "sku");
+  });
+  return skuField
+    ? schemaRepeatableGroups(skuField).find((group) => group.split(".").at(-1) === "sku") || null
+    : null;
+}
+
+function buildOfficialSkuCombinations(product: ProductRecord): OfficialSkuCombination[] {
+  const salePropertyFields = getAllSchemaFields(product).filter(
+    (field) => field.field.startsWith("saleProp.") && field.type === "multiCheck",
+  );
+  if (!salePropertyFields.length) {
+    return [];
+  }
+  const dimensions: OfficialSkuCombination[][] = [];
+  for (const field of salePropertyFields) {
+    const selected = product.schemaFields?.[field.field]?.value;
+    if (!Array.isArray(selected) || !selected.length) {
+      return [];
+    }
+    const propName = field.field.split(".").at(-1) || field.field;
+    const propId = propName.replace(/^p-/, "");
+    const values = selected.flatMap((item) => {
+      const attributed = schemaAttributedValue(item);
+      if (!attributed.value) {
+        return [];
+      }
+      const option = field.options.find((candidate) => candidate.value === attributed.value);
+      const propValueName =
+        attributed.attributes.inputValue || option?.display_name || attributed.value;
+      const propertyValue: OfficialSkuPropertyValue = {
+        value: `${propId}:${attributed.value}`,
+        attributes: {
+          propId,
+          propName,
+          propValueId: attributed.value,
+          propValueName,
+        },
+      };
+      return [
+        {
+          key: officialSkuCombinationKey([propertyValue]),
+          label: `${field.name || propName}: ${propValueName}`,
+          propertyValues: [propertyValue],
+        },
+      ];
+    });
+    if (!values.length) {
+      return [];
+    }
+    dimensions.push(values);
+  }
+  return dimensions.reduce<OfficialSkuCombination[]>(
+    (combinations, dimension) =>
+      combinations.flatMap((combination) =>
+        dimension.map((item) => {
+          const propertyValues = [...combination.propertyValues, ...item.propertyValues];
+          return {
+            key: officialSkuCombinationKey(propertyValues),
+            label: [combination.label, item.label].filter(Boolean).join(" / "),
+            propertyValues,
+          };
+        }),
+      ),
+    [{ key: "", label: "", propertyValues: [] }],
+  );
+}
+
+function officialSkuCombinationKey(values: OfficialSkuPropertyValue[]): string {
+  return values
+    .map((item) => `${item.attributes.propId}:${item.attributes.propValueId}`)
+    .join("|");
+}
+
+function buildOfficialSkuSchemaRows(
+  rows: NonNullable<ProductRecord["facts"]["skuRows"]>,
+): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const value: Record<string, unknown> = {
+      props: row.propertyValues ?? [],
+    };
+    if (row.sku.trim()) {
+      value.skuOuterId = row.sku.trim();
+    }
+    if (row.price.trim()) {
+      value.price = row.price.trim();
+    }
+    if (row.stock.trim()) {
+      value.skuStock = [
+        {
+          value: row.stock.trim(),
+          attributes: { warehouseCode: "CN_LOCAL_01", srcValue: "0" },
+        },
+      ];
+    }
+    return value;
+  });
+}
+
 function getDraftCheckStatus(product: ProductRecord): DraftCheckStatus {
   if (product.stage === "error") {
     return "failed";
@@ -5818,9 +6450,11 @@ function getDraftCheckStatus(product: ProductRecord): DraftCheckStatus {
 
 function SkuTableEditor({
   rows,
+  combinations,
   onChange,
 }: {
   rows: NonNullable<ProductRecord["facts"]["skuRows"]>;
+  combinations: OfficialSkuCombination[];
   onChange: (rows: NonNullable<ProductRecord["facts"]["skuRows"]>) => void;
 }) {
   const update = (id: string, key: "sku" | "attributes" | "price" | "stock", value: string) => {
@@ -5838,17 +6472,54 @@ function SkuTableEditor({
       },
     ]);
   };
+  const syncCombinations = () => {
+    const byCombination = new Map(
+      rows
+        .filter((row) => row.propertyValues?.length)
+        .map((row) => [officialSkuCombinationKey(row.propertyValues ?? []), row]),
+    );
+    onChange(
+      combinations.map((combination, index) => {
+        const current = byCombination.get(combination.key);
+        return {
+          id: current?.id || `sku-combination-${Date.now()}-${index}`,
+          sku: current?.sku || "",
+          attributes: combination.label,
+          price: current?.price || "",
+          stock: current?.stock || "",
+          propertyValues: combination.propertyValues,
+        };
+      }),
+    );
+  };
+  const hasUnmappedRows = rows.some((row) => !row.propertyValues?.length);
   return (
     <section className="wb-sku-editor">
       <header>
         <div>
           <strong>每一行是一种可销售规格</strong>
-          <p>例如：红色 / 20 cm。价格和库存必须来自 ERP 或人工确认。</p>
+          <p>先选择上方 Alibaba 销售属性，再自动生成全部组合；价格和库存必须是真实值。</p>
         </div>
-        <button type="button" className="button button-secondary" onClick={add}>
-          <Plus size={14} /> 添加 SKU
-        </button>
+        {combinations.length ? (
+          <button type="button" className="button button-secondary" onClick={syncCombinations}>
+            <ArrowCounterClockwise size={14} /> 同步销售属性组合
+          </button>
+        ) : (
+          <button type="button" className="button button-secondary" onClick={add}>
+            <Plus size={14} /> 添加 SKU
+          </button>
+        )}
       </header>
+      {!combinations.length ? (
+        <p className="wb-schema-inline-error">
+          当前尚未选择颜色、尺寸等 Alibaba 销售属性；有多规格时请先完成销售属性。
+        </p>
+      ) : null}
+      {hasUnmappedRows ? (
+        <p className="wb-schema-inline-error">
+          现有 SKU 只有文字规格，缺少 Alibaba 属性 ID。请点击“同步销售属性组合”重新生成。
+        </p>
+      ) : null}
       {rows.length ? (
         <div className="wb-sku-table">
           <div className="wb-sku-table-head">
@@ -5869,8 +6540,9 @@ function SkuTableEditor({
                 />
                 <input
                   value={row.attributes ?? ""}
+                  readOnly={Boolean(row.propertyValues?.length)}
                   onChange={(event) => update(id, "attributes", event.target.value)}
-                  placeholder="颜色: 红色 / 尺寸: M"
+                  placeholder="请先同步销售属性组合"
                   aria-label={`第 ${index + 1} 行规格组合`}
                 />
                 <input
@@ -5907,65 +6579,138 @@ function MultiComplexEditor({
   groupPath,
   fields,
   value,
+  photoBankGroupId,
   onChange,
 }: {
   groupPath: string;
   fields: SchemaFieldGuidance[];
   value: Array<Record<string, unknown>>;
+  photoBankGroupId?: string;
   onChange: (value: Array<Record<string, unknown>>) => void;
 }) {
-  const rows = value.length ? value : [{}];
-  const updateRow = (index: number, field: SchemaFieldGuidance, nextValue: unknown) => {
-    const relativePath = field.field.slice(groupPath.length + 1).split(".");
-    const nextRows = rows.map((row, rowIndex) =>
-      rowIndex === index ? setNestedRecordValue(row, relativePath, nextValue) : row,
-    );
-    onChange(nextRows);
-  };
   return (
     <section className="wb-multi-complex">
       <header>
         <div>
           <strong>{groupPath.split(".").at(-1) || "多组信息"}</strong>
-          <span>Alibaba 多组字段；每一行代表一组真实 SKU 或属性组合</span>
+          <span>Alibaba 多组字段；每一组都会按实时 Schema 原样提交</span>
         </div>
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={() => onChange([...rows, {}])}
-        >
-          <Plus size={14} />
-          添加一组
-        </button>
       </header>
-      <div className="wb-multi-complex-table">
-        {rows.map((row, rowIndex) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: repeatable rows are positional Schema values and carry no publishable client id
-          <article key={`${groupPath}-${rowIndex}`}>
-            <b>第 {rowIndex + 1} 组</b>
-            {fields.map((field) => {
-              const relativePath = field.field.slice(groupPath.length + 1).split(".");
-              const currentValue = getNestedRecordValue(row, relativePath);
-              const inputId = `multi-${groupPath}-${rowIndex}-${field.field}`;
-              return (
-                <label key={field.field} htmlFor={inputId}>
-                  <span>{field.name || relativePath.at(-1)}</span>
-                  {field.supported === false ? (
-                    <span className="wb-schema-inline-error">
-                      {field.support_message || "该字段暂时无法安全填写"}
-                    </span>
-                  ) : (
-                    <SchemaValueControl
-                      field={field}
-                      value={currentValue}
-                      inputId={inputId}
-                      placeholder="请输入真实信息"
-                      onChange={(nextValue) => updateRow(rowIndex, field, nextValue)}
-                    />
-                  )}
-                </label>
-              );
-            })}
+      <MultiComplexRows
+        groupPath={groupPath}
+        fields={fields}
+        value={value}
+        photoBankGroupId={photoBankGroupId}
+        onChange={onChange}
+      />
+    </section>
+  );
+}
+
+function MultiComplexRows({
+  groupPath,
+  fields,
+  value,
+  photoBankGroupId,
+  onChange,
+}: {
+  groupPath: string;
+  fields: SchemaFieldGuidance[];
+  value: Array<Record<string, unknown>>;
+  photoBankGroupId?: string;
+  onChange: (value: Array<Record<string, unknown>>) => void;
+}) {
+  const rows = value.length ? value : [{}];
+  const directFields = fields.filter((field) => {
+    const groups = schemaRepeatableGroups(field);
+    return groups.at(-1) === groupPath;
+  });
+  const childGroups = Array.from(
+    new Set(
+      fields.flatMap((field) => {
+        const groups = schemaRepeatableGroups(field);
+        const index = groups.indexOf(groupPath);
+        return index >= 0 && groups[index + 1] ? [groups[index + 1]] : [];
+      }),
+    ),
+  );
+  const updateRow = (index: number, field: SchemaFieldGuidance, nextValue: unknown) => {
+    const relativePath = field.field.slice(groupPath.length + 1).split(".");
+    onChange(
+      rows.map((row, rowIndex) =>
+        rowIndex === index ? setNestedRecordValue(row, relativePath, nextValue) : row,
+      ),
+    );
+  };
+  const updateNestedRows = (
+    index: number,
+    nestedGroupPath: string,
+    nextValue: Array<Record<string, unknown>>,
+  ) => {
+    const relativePath = nestedGroupPath.slice(groupPath.length + 1).split(".");
+    onChange(
+      rows.map((row, rowIndex) =>
+        rowIndex === index ? setNestedRecordValue(row, relativePath, nextValue) : row,
+      ),
+    );
+  };
+  return (
+    <div className="wb-multi-complex-table">
+      {rows.map((row, rowIndex) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: repeatable rows are positional Schema values and carry no publishable client id
+        <article key={`${groupPath}-${rowIndex}`}>
+          <b>第 {rowIndex + 1} 组</b>
+          {directFields.map((field) => {
+            const relativePath = field.field.slice(groupPath.length + 1).split(".");
+            const currentValue = getNestedRecordValue(row, relativePath);
+            const inputId = `multi-${groupPath}-${rowIndex}-${field.field}`;
+            return (
+              <label key={field.field} htmlFor={inputId}>
+                <span>{field.name || relativePath.at(-1)}</span>
+                {field.supported === false ? (
+                  <span className="wb-schema-inline-error">
+                    {field.support_message || "该字段暂时无法安全填写"}
+                  </span>
+                ) : (
+                  <SchemaValueControl
+                    field={field}
+                    value={currentValue}
+                    inputId={inputId}
+                    placeholder="请输入真实信息"
+                    photoBankGroupId={photoBankGroupId}
+                    onChange={(nextValue) => updateRow(rowIndex, field, nextValue)}
+                  />
+                )}
+              </label>
+            );
+          })}
+          {childGroups.map((childGroup) => {
+            const relativePath = childGroup.slice(groupPath.length + 1).split(".");
+            const nestedValue = normalizeRepeatableGroupValue(getNestedRecordValue(row, relativePath));
+            const nestedFields = fields.filter((field) =>
+              schemaRepeatableGroups(field).includes(childGroup),
+            );
+            return (
+              <section className="wb-multi-complex-nested" key={childGroup}>
+                <strong>{childGroup.split(".").at(-1)}</strong>
+                <MultiComplexRows
+                  groupPath={childGroup}
+                  fields={nestedFields}
+                  value={nestedValue}
+                  photoBankGroupId={photoBankGroupId}
+                  onChange={(nextValue) => updateNestedRows(rowIndex, childGroup, nextValue)}
+                />
+              </section>
+            );
+          })}
+          <div className="wb-multi-complex-actions">
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => onChange([...rows, {}])}
+            >
+              <Plus size={14} /> 添加一组
+            </button>
             <button
               type="button"
               className="wb-link is-danger"
@@ -5974,11 +6719,18 @@ function MultiComplexEditor({
             >
               删除本组
             </button>
-          </article>
-        ))}
-      </div>
-    </section>
+          </div>
+        </article>
+      ))}
+    </div>
   );
+}
+
+function schemaRepeatableGroups(field: SchemaFieldGuidance): string[] {
+  if (field.repeatable_groups?.length) {
+    return field.repeatable_groups;
+  }
+  return field.repeatable_group ? [field.repeatable_group] : [];
 }
 
 function SchemaValueControl({
@@ -5986,14 +6738,36 @@ function SchemaValueControl({
   value,
   inputId,
   placeholder,
+  photoBankGroupId,
   onChange,
 }: {
   field: SchemaFieldGuidance;
   value: unknown;
   inputId: string;
   placeholder: string;
+  photoBankGroupId?: string;
   onChange: (value: unknown) => void;
 }) {
+  if (schemaFieldLeafId(field) === "imageurl") {
+    return (
+      <PhotoBankUrlControl
+        value={schemaScalarText(value)}
+        inputId={inputId}
+        groupId={photoBankGroupId ?? ""}
+        onChange={onChange}
+      />
+    );
+  }
+  if (isBoxPackagingField(field)) {
+    return (
+      <BoxPackagingControl
+        field={field}
+        value={value}
+        inputId={inputId}
+        onChange={onChange}
+      />
+    );
+  }
   if (field.value_attributes?.length) {
     return (
       <SchemaAttributedValueControl
@@ -6103,6 +6877,151 @@ function SchemaValueControl({
   );
 }
 
+function PhotoBankUrlControl({
+  value,
+  inputId,
+  groupId,
+  onChange,
+}: {
+  value: string;
+  inputId: string;
+  groupId: string;
+  onChange: (value: unknown) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const uploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!groupId) {
+      setError("请先在通用模板中选择图片银行分组");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload = await uploadPhotoBankImage(file, groupId);
+      const photoBankUrl = findPhotoBankUrl(payload);
+      if (!photoBankUrl) {
+        throw new Error("Alibaba 未返回图片银行地址");
+      }
+      onChange(photoBankUrl);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "图片银行上传失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="wb-photobank-url-control">
+      {value ? <img src={value} alt="已选择的图片银行素材" /> : null}
+      <input
+        id={inputId}
+        type="url"
+        value={value}
+        placeholder="图片银行地址会自动填入"
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <label className={`button button-secondary ${busy ? "is-disabled" : ""}`}>
+        {busy ? <CircleNotch size={14} className="spin" /> : <CloudArrowUp size={14} />}
+        {busy ? "上传中" : "本地上传到图片银行"}
+        <input type="file" accept="image/*" disabled={busy} onChange={uploadImage} />
+      </label>
+      {error ? <small className="wb-schema-inline-error">{error}</small> : null}
+    </div>
+  );
+}
+
+function BoxPackagingControl({
+  field,
+  value,
+  inputId,
+  onChange,
+}: {
+  field: SchemaFieldGuidance;
+  value: unknown;
+  inputId: string;
+  onChange: (value: unknown) => void;
+}) {
+  const selected = (Array.isArray(value) ? value : []).map(schemaAttributedValue);
+  const selectedByValue = new Map(selected.map((item) => [item.value, item]));
+  const updateAttributes = (optionValue: string, attribute: string, nextValue: string) => {
+    onChange(
+      selected.map((item) =>
+        item.value === optionValue
+          ? { ...item, attributes: { ...item.attributes, [attribute]: nextValue } }
+          : item,
+      ),
+    );
+  };
+  if (!field.options.length) {
+    return (
+      <span className="wb-schema-inline-error" id={inputId}>
+        Alibaba 未返回可用箱规，说明当前店铺尚未创建箱规；请先在国际站后台创建后重新拉取类目。
+      </span>
+    );
+  }
+  return (
+    <div className="wb-box-packaging" id={inputId}>
+      {field.options.map((option) => {
+        const current = selectedByValue.get(option.value);
+        return (
+          <div key={option.value} className={current ? "is-selected" : ""}>
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(current)}
+                disabled={option.valid === false}
+                onChange={() =>
+                  onChange(
+                    current
+                      ? selected.filter((item) => item.value !== option.value)
+                      : [
+                          ...selected,
+                          {
+                            value: option.value,
+                            attributes: { maxCount: "", totalWeight: "" },
+                          },
+                        ],
+                  )
+                }
+              />
+              <span>{option.display_name || option.value}</span>
+            </label>
+            {current ? (
+              <div className="wb-field wb-field-split">
+                <label>
+                  <span>每箱最多装入数量</span>
+                  <input
+                    inputMode="numeric"
+                    value={current.attributes.maxCount || ""}
+                    onChange={(event) =>
+                      updateAttributes(option.value, "maxCount", event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>装满后总重（kg）</span>
+                  <input
+                    inputMode="decimal"
+                    value={current.attributes.totalWeight || ""}
+                    onChange={(event) =>
+                      updateAttributes(option.value, "totalWeight", event.target.value)
+                    }
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SchemaScalarInput({
   field,
   value,
@@ -6128,12 +7047,18 @@ function SchemaScalarInput({
       />
     );
   }
-  const numeric = ["decimal", "integer", "long"].includes(field.value_type || "");
+  const numeric = ["double", "decimal", "integer", "long"].includes(field.value_type || "");
   return (
     <input
       id={inputId}
       type={field.value_type === "date" ? "date" : field.value_type === "url" ? "url" : "text"}
-      inputMode={numeric ? (field.value_type === "decimal" ? "decimal" : "numeric") : undefined}
+      inputMode={
+        numeric
+          ? ["double", "decimal"].includes(field.value_type || "")
+            ? "decimal"
+            : "numeric"
+          : undefined
+      }
       value={value}
       minLength={field.min_length}
       maxLength={field.max_length}
@@ -6275,11 +7200,43 @@ function repeatableGroupValue(
   groupPath: string,
 ): Array<Record<string, unknown>> {
   const value = product.schemaFields?.[groupPath]?.value;
+  return normalizeRepeatableGroupValue(value);
+}
+
+function normalizeRepeatableGroupValue(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> =>
         Boolean(item && typeof item === "object"),
       )
     : [];
+}
+
+function collectRepeatableFieldValues(
+  rows: Array<Record<string, unknown>>,
+  path: string[],
+): unknown[] {
+  const result: unknown[] = [];
+  const visit = (value: unknown, offset: number) => {
+    if (offset >= path.length) {
+      result.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item, offset);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      result.push(undefined);
+      return;
+    }
+    visit((value as Record<string, unknown>)[path[offset]], offset + 1);
+  };
+  for (const row of rows) {
+    visit(row, 0);
+  }
+  return result;
 }
 
 function setNestedRecordValue(
@@ -7020,6 +7977,8 @@ function PreviewStep({
   onPublish,
   onPublishOne,
   onRetry,
+  onRetryVideo,
+  onAcceptReadback,
   onFix,
 }: {
   products: ProductRecord[];
@@ -7033,6 +7992,8 @@ function PreviewStep({
   onPublish: () => void;
   onPublishOne: (id: string) => void;
   onRetry: (id: string) => void;
+  onRetryVideo: (id: string) => void;
+  onAcceptReadback: (id: string) => void;
   onFix: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -7246,6 +8207,15 @@ function PreviewStep({
                                 重试
                               </button>
                             ) : null}
+                            {product.videoRelationErrors?.length ? (
+                              <button
+                                type="button"
+                                className="row-action is-danger"
+                                onClick={() => onRetryVideo(product.id)}
+                              >
+                                重试视频关联
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               className="row-action"
@@ -7296,7 +8266,10 @@ function PreviewStep({
                                     </p>
                                   </div>
                                 </div>
-                                <ReadbackDiff product={product} />
+                                <ReadbackDiff
+                                  product={product}
+                                  onAcceptChanges={() => onAcceptReadback(product.id)}
+                                />
                               </div>
                             )}
                           </td>
@@ -7432,7 +8405,31 @@ function getProductErrors(product: ProductRecord): string[] {
     errors.push("AI 内容尚未确认");
   }
   errors.push(...getFactErrors(product));
+  const schemaImageLimit = getSchemaMainImageLimit(product);
+  if (schemaImageLimit) {
+    const mainImage = getMainProductImage(product);
+    const orderedImages = [
+      mainImage,
+      ...product.images.filter((image) => image.id !== mainImage.id),
+    ];
+    for (const image of orderedImages.slice(0, 6)) {
+      const size = image.fileSize ?? image.sourceFile?.size;
+      if (size && size > schemaImageLimit) {
+        errors.push(
+          `${image.name} 超过当前 Alibaba 类目主图限制（${formatFileSize(schemaImageLimit)}）`,
+        );
+      }
+    }
+  }
   return errors;
+}
+
+function getSchemaMainImageLimit(product: ProductRecord): number | undefined {
+  return product.schemaGuidance?.main_image_max_size_bytes;
+}
+
+function formatFileSize(bytes: number): string {
+  return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
 }
 
 function getRequiredSchemaFields(product: ProductRecord): SchemaFieldGuidance[] {
@@ -7462,7 +8459,7 @@ function getRequiredSchemaFields(product: ProductRecord): SchemaFieldGuidance[] 
       });
     }
   }
-  return Array.from(byId.values());
+  return Array.from(byId.values()).filter((field) => !isSchemaFieldDisabled(product, field));
 }
 
 function getAllSchemaFields(product: ProductRecord): SchemaFieldGuidance[] {
@@ -7476,11 +8473,100 @@ function getAllSchemaFields(product: ProductRecord): SchemaFieldGuidance[] {
   return Array.from(new Map(fields.map((field) => [field.field, field])).values());
 }
 
+function isSchemaFieldDisabled(product: ProductRecord, field: SchemaFieldGuidance): boolean {
+  const groups = field.conditional_disable ?? [];
+  if (!groups.length) {
+    return false;
+  }
+  return groups.some((group) => {
+    const matches = group.expressions.map((expression) =>
+      schemaDependencyMatches(
+        product,
+        expression.field_id,
+        expression.symbol,
+        expression.value ?? "",
+      ),
+    );
+    return group.operator === "or" ? matches.some(Boolean) : matches.every(Boolean);
+  });
+}
+
+function schemaDependencyMatches(
+  product: ProductRecord,
+  dependencyFieldId: string,
+  symbol: string,
+  expected: string,
+): boolean {
+  const dependencyField = getAllSchemaFields(product).find(
+    (candidate) =>
+      !candidate.repeatable_group &&
+      !candidate.repeatable_groups?.length &&
+      (candidate.field === dependencyFieldId || schemaFieldLeafId(candidate) === dependencyFieldId.toLowerCase()),
+  );
+  const rawValue = dependencyField ? getSchemaFieldValue(product, dependencyField) : undefined;
+  const values = Array.isArray(rawValue)
+    ? rawValue.map(schemaScalarText).filter(Boolean)
+    : [schemaScalarText(rawValue)].filter(Boolean);
+  const comparable = Array.isArray(rawValue) ? values : values[0] ?? "";
+  if (symbol === "is null") {
+    return values.length === 0;
+  }
+  if (symbol === "contains" || symbol === "not contains") {
+    const contains = Array.isArray(comparable)
+      ? comparable.includes(expected)
+      : comparable.includes(expected);
+    return symbol === "contains" ? contains : !contains;
+  }
+  if (symbol === "==" || symbol === "!=") {
+    const equal = String(comparable) === expected;
+    return symbol === "==" ? equal : !equal;
+  }
+  if ([">", "<", ">=", "<="].includes(symbol)) {
+    const left = Number(comparable);
+    const right = Number(expected);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+      return false;
+    }
+    if (symbol === ">") return left > right;
+    if (symbol === "<") return left < right;
+    if (symbol === ">=") return left >= right;
+    return left <= right;
+  }
+  if (symbol.includes("value in fieldOptions") || symbol.includes("value not in fieldOptions")) {
+    const allowed = new Set((dependencyField?.options ?? []).map((option) => option.value));
+    const inOptions = values.length > 0 && values.every((value) => allowed.has(value));
+    return symbol.includes(" not in ") ? !inOptions : inOptions;
+  }
+  return false;
+}
+
+function hasRepeatableSchemaFieldValue(
+  product: ProductRecord,
+  field: SchemaFieldGuidance,
+): boolean {
+  const groups = schemaRepeatableGroups(field);
+  const outerGroup = groups[0] ?? field.repeatable_group;
+  if (!outerGroup) {
+    return hasSchemaValue(getSchemaFieldValue(product, field));
+  }
+  const rows = repeatableGroupValue(product, outerGroup);
+  if (!rows.length) {
+    return false;
+  }
+  const relativePath = field.field.slice(outerGroup.length + 1).split(".");
+  const values = collectRepeatableFieldValues(rows, relativePath);
+  return values.length > 0 && values.every(hasSchemaValue);
+}
+
 function getFactErrors(product: ProductRecord): string[] {
   const schemaFields = getRequiredSchemaFields(product);
   if (product.schemaGuidance) {
     const errors = schemaFields
-      .filter((field) => !hasSchemaValue(getSchemaFieldValue(product, field)))
+      .filter((field) =>
+        field.repeatable_group || field.repeatable_groups?.length
+          ? !hasRepeatableSchemaFieldValue(product, field)
+          : !hasSchemaValue(getSchemaFieldValue(product, field)),
+      )
       .map((field) => `${schemaFieldLabel(field)}缺失`);
     if (!product.facts.categoryId.trim()) {
       errors.unshift("最终叶子类目缺失");
@@ -7488,6 +8574,9 @@ function getFactErrors(product: ProductRecord): string[] {
     if (!product.title.trim()) {
       errors.push("商品标题缺失");
     }
+    errors.push(...getSkuErrors(product));
+    errors.push(...getPriceModeErrors(product));
+    errors.push(...getSemiManagedErrors(product));
     return Array.from(new Set(errors));
   }
   if (!product.isDemo) {
@@ -7509,6 +8598,122 @@ function getFactErrors(product: ProductRecord): string[] {
     errors.push("商品标题缺失");
   }
   return errors;
+}
+
+function getSkuErrors(product: ProductRecord): string[] {
+  const rows = product.facts.skuRows ?? [];
+  if (!rows.length) {
+    return selectedSchemaPriceMode(product) === "3"
+      ? ["SKU 计价模式必须先从真实销售属性生成并填写至少一个 SKU"]
+      : [];
+  }
+  const errors: string[] = [];
+  if (!findOfficialSkuGroupPath(product)) {
+    errors.push("当前 Alibaba 类目未返回 SKU 组件");
+    return errors;
+  }
+  if (rows.some((row) => !row.propertyValues?.length)) {
+    errors.push("SKU 规格尚未与 Alibaba 销售属性同步");
+  }
+  if (rows.some((row) => !row.price.trim() || Number(row.price) <= 0)) {
+    errors.push("SKU 价格必须为大于 0 的真实数值");
+  }
+  if (
+    rows.some(
+      (row) =>
+        !row.stock.trim() ||
+        !Number.isInteger(Number(row.stock)) ||
+        Number(row.stock) < 0,
+    )
+  ) {
+    errors.push("SKU 库存必须为不小于 0 的整数");
+  }
+  const combinations = rows
+    .filter((row) => row.propertyValues?.length)
+    .map((row) => officialSkuCombinationKey(row.propertyValues ?? []));
+  if (new Set(combinations).size !== combinations.length) {
+    errors.push("SKU 销售属性组合不能重复");
+  }
+  const codes = rows.map((row) => row.sku.trim()).filter(Boolean);
+  if (new Set(codes).size !== codes.length) {
+    errors.push("SKU 编码不能重复");
+  }
+  return errors;
+}
+
+function selectedSchemaPriceMode(product: ProductRecord): string {
+  const field = getAllSchemaFields(product).find(
+    (candidate) => candidate.field === "scPrice",
+  );
+  return field ? schemaScalarText(getSchemaFieldValue(product, field)) : "";
+}
+
+function getPriceModeErrors(product: ProductRecord): string[] {
+  const mode = selectedSchemaPriceMode(product);
+  const fields = getAllSchemaFields(product);
+  const requiredPaths =
+    mode === "1"
+      ? [
+          "ladderPrice.ladderPrice_0.quantity",
+          "ladderPrice.ladderPrice_0.price",
+        ]
+      : mode === "2"
+        ? ["fob.range_min", "fob.range_max", "fob.unit_type"]
+        : [];
+  return requiredPaths.flatMap((path) => {
+    const field = fields.find((candidate) => candidate.field === path);
+    if (!field || hasSchemaValue(getSchemaFieldValue(product, field))) {
+      return [];
+    }
+    return [`${schemaFieldLabel(field)}缺失`];
+  });
+}
+
+function isActivePriceModeField(
+  field: SchemaFieldGuidance,
+  product: ProductRecord,
+): boolean {
+  const mode = selectedSchemaPriceMode(product);
+  if (mode === "1") {
+    return field.field.startsWith("ladderPrice.ladderPrice_0.");
+  }
+  if (mode === "2") {
+    return field.field.startsWith("fob.");
+  }
+  return false;
+}
+
+function getSemiManagedErrors(product: ProductRecord): string[] {
+  const fields = getAllSchemaFields(product);
+  const semiManagedField = fields.find((field) =>
+    schemaFieldSearchText(field).includes("semimanaged"),
+  );
+  if (!semiManagedField) {
+    return [];
+  }
+  const semiManagedValue = schemaScalarText(getSchemaFieldValue(product, semiManagedField)).toLowerCase();
+  if (!["true", "1", "yes"].includes(semiManagedValue)) {
+    return [];
+  }
+  const boxField = fields.find(
+    (field) => isBoxPackagingField(field) && !field.field.toLowerCase().includes("sku."),
+  );
+  if (!boxField || !boxField.options.length) {
+    return ["半托管商品需要箱规；请先在 Alibaba 后台创建箱规并重新加载"];
+  }
+  const values = getSchemaFieldValue(product, boxField);
+  if (!Array.isArray(values) || !values.length) {
+    return ["半托管商品必须选择至少一个箱规"];
+  }
+  if (
+    values.some((item) => {
+      const attributed = schemaAttributedValue(item);
+      return !attributed.attributes.maxCount || !attributed.attributes.totalWeight;
+    })
+  ) {
+    return ["箱规必须填写每箱数量和装满后总重"];
+  }
+  return [];
 }
 
 function schemaFieldLabel(field: SchemaFieldGuidance): string {
@@ -7540,6 +8745,22 @@ function schemaFieldSearchText(field: SchemaFieldGuidance): string {
     .replaceAll(/[^a-z0-9\u4e00-\u9fff]/g, "");
 }
 
+function schemaFieldLeafId(field: SchemaFieldGuidance): string {
+  return (field.field.split(".").at(-1) ?? field.field).toLowerCase();
+}
+
+function isMainVideoSchemaField(field: SchemaFieldGuidance): boolean {
+  return schemaFieldLeafId(field) === "imagevideo";
+}
+
+function isDetailVideoSchemaField(field: SchemaFieldGuidance): boolean {
+  return schemaFieldLeafId(field) === "detailvideo";
+}
+
+function isVideoSchemaField(field: SchemaFieldGuidance): boolean {
+  return isMainVideoSchemaField(field) || isDetailVideoSchemaField(field);
+}
+
 function schemaFactKey(field: SchemaFieldGuidance): keyof ProductRecord["facts"] | null {
   const text = schemaFieldSearchText(field);
   if (
@@ -7553,6 +8774,7 @@ function schemaFactKey(field: SchemaFieldGuidance): keyof ProductRecord["facts"]
   }
   if (
     text.includes("ladderpricequantity") ||
+    text.includes("ladderperiodquantity") ||
     text.includes("minimumorder") ||
     text.includes("最小起订") ||
     text.includes("起订量")
@@ -7667,6 +8889,10 @@ function isTitleSchemaField(field: SchemaFieldGuidance): boolean {
   );
 }
 
+function isBoxPackagingField(field: SchemaFieldGuidance): boolean {
+  return schemaFieldSearchText(field).includes("boxpackaging");
+}
+
 function isImageSchemaField(field: SchemaFieldGuidance): boolean {
   const text = schemaFieldSearchText(field);
   return (
@@ -7718,6 +8944,7 @@ function schemaFieldControlLabel(field: SchemaFieldGuidance): string {
     return "多组字段";
   }
   const valueTypeLabels: Record<string, string> = {
+    double: "小数",
     decimal: "小数",
     integer: "整数",
     long: "长整数",
@@ -7818,16 +9045,32 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
     return product;
   }
   const schemaFields = { ...product.schemaFields };
+  for (const field of getAllSchemaFields(product)) {
+    if (
+      isSchemaFieldDisabled(product, field) &&
+      !field.repeatable_group &&
+      !field.repeatable_groups?.length
+    ) {
+      delete schemaFields[field.field];
+    }
+  }
   const fieldsToSync = new Map(
     [
       ...getRequiredSchemaFields(product),
       ...getAllSchemaFields(product).filter(
-        (field) => schemaDefaultForField(field, settings) !== null,
+        (field) =>
+          !isSchemaFieldDisabled(product, field) &&
+          (schemaDefaultForField(field, settings) !== null ||
+            isSafeFactSyncField(field, product)),
       ),
     ].map((field) => [field.field, field]),
   );
   for (const field of fieldsToSync.values()) {
     if (isImageSchemaField(field)) {
+      const text = schemaFieldSearchText(field);
+      if (!text.includes("scimages") && hasSchemaValue(schemaFields[field.field]?.value)) {
+        continue;
+      }
       const imageValue = schemaImageValue(field, product);
       if (imageValue) {
         schemaFields[field.field] = {
@@ -7849,7 +9092,11 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
       };
       continue;
     }
-    const value = getSchemaFieldValue(product, field);
+    const value = schemaSubmissionValue(
+      field,
+      getSchemaFieldValue(product, field),
+      settings,
+    );
     if (!hasSchemaValue(value)) {
       continue;
     }
@@ -7864,11 +9111,75 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
       requires_confirmation: field.responsibility === "ai_candidate" && !product.aiConfirmed,
     };
   }
+  const skuGroupPath = findOfficialSkuGroupPath(product);
+  const skuRows = product.facts.skuRows ?? [];
+  if (
+    skuGroupPath &&
+    skuRows.length &&
+    skuRows.every((row) => row.propertyValues?.length) &&
+    !hasSchemaValue(schemaFields[skuGroupPath]?.value)
+  ) {
+    schemaFields[skuGroupPath] = {
+      value: buildOfficialSkuSchemaRows(skuRows),
+      source: "user_provided",
+    };
+  }
   return { ...product, schemaFields };
 }
 
+function isSafeFactSyncField(
+  field: SchemaFieldGuidance,
+  product: ProductRecord,
+): boolean {
+  if (field.repeatable_group || field.repeatable_groups?.length) {
+    return false;
+  }
+  const factKey = schemaFactKey(field);
+  if (!factKey) {
+    return false;
+  }
+  if (field.field.startsWith("fob.") || field.field.startsWith("ladderPrice.")) {
+    return isActivePriceModeField(field, product);
+  }
+  if (field.field.startsWith("ladderPeriod.")) {
+    return field.field.startsWith("ladderPeriod.ladderPeriod_0.");
+  }
+  return true;
+}
+
+function schemaSubmissionValue(
+  field: SchemaFieldGuidance,
+  value: unknown,
+  settings: StoreSettings,
+): unknown {
+  const attributes = field.value_attributes ?? [];
+  if (
+    field.type === "multiInput" &&
+    schemaFieldSearchText(field).includes("inventory") &&
+    attributes.includes("warehouseCode") &&
+    attributes.includes("srcValue") &&
+    hasSchemaValue(value)
+  ) {
+    return [
+      {
+        value: schemaScalarText(value),
+        attributes: {
+          warehouseCode: settings.inventoryCode || "CN_LOCAL_01",
+          srcValue: "0",
+        },
+      },
+    ];
+  }
+  return value;
+}
+
 function schemaImageValue(field: SchemaFieldGuidance, product: ProductRecord): unknown {
-  const images = product.images
+  const mainImage = getMainProductImage(product);
+  const orderedImages = [
+    mainImage,
+    ...product.images.filter((image) => image.id !== mainImage.id),
+  ];
+  const images = orderedImages
     .map((image) =>
       image.photoBankUrl && image.photoBankFileId
         ? { url: image.photoBankUrl, fileId: image.photoBankFileId }
@@ -8186,7 +9497,26 @@ function getReadbackError(response?: Record<string, unknown>): string | undefine
   return typeof error === "string" && error.trim() ? error : undefined;
 }
 
-function ReadbackDiff({ product }: { product: ProductRecord }) {
+function ReadbackDiff({
+  product,
+  onAcceptChanges,
+}: {
+  product: ProductRecord;
+  onAcceptChanges: () => void;
+}) {
+  if (product.videoRelationErrors?.length) {
+    return (
+      <div className="readback-diff is-error">
+        <strong>草稿已创建，但商品视频未完整关联</strong>
+        <ul>
+          {product.videoRelationErrors.map((error) => (
+            <li key={error}>{error}</li>
+          ))}
+        </ul>
+        <p>请检查视频审核状态与应用权限；视频关联成功前不会允许正式发布。</p>
+      </div>
+    );
+  }
   if (product.draftReadbackError) {
     return (
       <div className="readback-diff is-error">
@@ -8203,15 +9533,25 @@ function ReadbackDiff({ product }: { product: ProductRecord }) {
         {changed.length ? `Alibaba 保存后有 ${changed.length} 项变化` : "已完成 Alibaba 草稿回读"}
       </strong>
       {changed.length ? (
-        <ul>
-          {changed.map((item) => (
-            <li key={item.field_path}>
-              <b>{item.field_path}</b>
-              <span>本地：{readbackValue(item.local_value)}</span>
-              <span>平台：{readbackValue(item.platform_value)}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p>平台保存结果与提交内容不同；确认这些调整前不会允许正式发布。</p>
+          <ul>
+            {changed.map((item) => (
+              <li key={item.field_path}>
+                <b>{item.field_path}</b>
+                <span>提交：{readbackValue(item.local_value)}</span>
+                <span>平台：{readbackValue(item.platform_value)}</span>
+              </li>
+            ))}
+          </ul>
+          {!product.draftReadbackVerified ? (
+            <button type="button" className="button button-secondary" onClick={onAcceptChanges}>
+              我已核对，接受平台保存结果
+            </button>
+          ) : (
+            <p>已人工确认平台调整，可以进入最终发布确认。</p>
+          )}
+        </>
       ) : (
         <p>当前可比对字段未发现平台转换；正式发布仍需人工确认。</p>
       )}
@@ -8229,6 +9569,7 @@ function readbackValue(value: unknown): string {
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
+const ALIBABA_PHOTO_BANK_MAX_BYTES = 5 * 1024 * 1024;
 const AI_SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 const preparePhotoBankFile = async (blob: Blob, fileName: string): Promise<File> => {

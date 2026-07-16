@@ -299,10 +299,26 @@ class AlibabaDraftRenderRequest(BaseModel):
     language: Literal["en_US", "zh", "zh_TW"] = "en_US"
 
 
+class AlibabaVideoUploadRequest(BaseModel):
+    video_path: str = Field(min_length=8, max_length=2048, pattern=r"^https://")
+    video_name: str = Field(min_length=1, max_length=200)
+    cover_url: str | None = Field(default=None, max_length=2048, pattern=r"^https://")
+
+
+class AlibabaVideoRelationRequest(BaseModel):
+    product_id: str = Field(min_length=1, max_length=100)
+
+
 class AlibabaSchemaUpdateRequest(BaseModel):
     category_id: str
     xml: str = Field(min_length=20)
     language: Literal["en_US", "zh", "zh_TW"] = "en_US"
+
+
+class AlibabaProductTypeCapabilities(BaseModel):
+    support_post_whole_sale: bool
+    support_post_sourcing: bool
+    trace_id: str | None = None
 
 
 class SchemaParseRequest(BaseModel):
@@ -397,6 +413,7 @@ class SchemaFieldGuidance(BaseModel):
     max_value: str | None = None
     min_input_num: int | None = None
     max_input_num: int | None = None
+    max_image_size_bytes: int | None = None
     pattern: str | None = None
     value_attributes: list[str] = Field(default_factory=list)
     conditional_disable: list[SchemaDependencyGroup] = Field(default_factory=list)
@@ -406,12 +423,14 @@ class SchemaFieldGuidance(BaseModel):
     options: list[SchemaOption] = Field(default_factory=list)
     parent_path: str | None = None
     repeatable_group: str | None = None
+    repeatable_groups: list[str] = Field(default_factory=list)
 
 
 class SchemaGuidanceResult(BaseModel):
     ai_fillable_fields: list[SchemaFieldGuidance]
     manual_fact_fields: list[SchemaFieldGuidance]
     required_field_ids: list[str]
+    main_image_max_size_bytes: int | None = None
 
 
 class FieldTask(BaseModel):
@@ -455,6 +474,7 @@ class FieldTask(BaseModel):
     supported: bool = True
     support_message: str | None = None
     repeatable_group: str | None = None
+    repeatable_groups: list[str] = Field(default_factory=list)
 
 
 class FieldTaskSummary(BaseModel):
@@ -590,8 +610,9 @@ class OfficialListingPreparationResult(OfficialListingValidationResult):
 
 class AlibabaInventoryUpdateRequest(BaseModel):
     sku_id: str
-    inventory: int = Field(ge=0)
+    inventory: int = Field(ge=1)
     inventory_code: str = "CN_LOCAL_01"
+    operate: Literal["plus", "sub"]
 
 
 class AlibabaDisplayUpdateRequest(BaseModel):

@@ -108,9 +108,36 @@ def test_multi_complex_tasks_are_grouped_and_resolved_from_parent_value() -> Non
     )
     tasks = {task.field_path: task for task in result.tasks}
     assert tasks["sku.skuCode"].repeatable_group == "sku"
+    assert tasks["sku.skuCode"].repeatable_groups == ["sku"]
     assert tasks["sku.skuCode"].status == "completed"
     assert tasks["sku.price"].value == ["9.90", "10.90"]
     assert tasks["sku.price"].status == "completed"
+
+
+def test_nested_multi_complex_tasks_keep_the_full_repeatable_path() -> None:
+    schema = """
+    <schema>
+      <field id="detailImage" type="multiComplex">
+        <fields>
+          <field id="gallery" type="singleCheck">
+            <options><option value="350"/></options>
+          </field>
+          <field id="images" type="multiComplex">
+            <fields>
+              <field id="imageURL" type="input"/>
+            </fields>
+          </field>
+        </fields>
+      </field>
+    </schema>
+    """
+    result = build_field_tasks(schema, {}, category_id="123")
+    tasks = {task.field_path: task for task in result.tasks}
+    assert tasks["detailImage.gallery"].repeatable_groups == ["detailImage"]
+    assert tasks["detailImage.images.imageURL"].repeatable_groups == [
+        "detailImage",
+        "detailImage.images",
+    ]
 
 
 def test_tasks_expose_value_rules_and_block_unsafe_required_choice() -> None:

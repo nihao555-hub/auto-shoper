@@ -1,31 +1,73 @@
+import base64
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import MockTransport, Request, Response
 
 from backend.app.clients.ai import AIProviderError
 from backend.app.clients.alibaba import AlibabaClient, AlibabaConfigurationError
-from backend.app.config import Settings
-from backend.app.dependencies import get_ai_client, get_alibaba_client
+from backend.app.config import Settings, get_settings
+from backend.app.dependencies import get_ai_client, get_alibaba_client, get_alibaba_top_client
 from backend.app.main import app
 from backend.app.models import (
+    DraftField,
+    FieldSource,
     ProductContentTranslationRequest,
     ProductContentTranslationResponse,
     ProductImageAnalysis,
 )
+from backend.app.routes import _field_differences, _portable_generated_image_url
 
 SCHEMA_XML = '<itemSchema><field id="productTitle" type="input" /></itemSchema>'
 
 pytestmark = pytest.mark.usefixtures("authenticated_app")
 
 
+def test_draft_readback_compares_filled_schema_xml_and_flags_missing_fields() -> None:
+    fields = {
+        "productTitle": DraftField(value="Watercolor Paper", source=FieldSource.USER_CONFIRMED),
+        "textDesc": DraftField(value="Cold pressed", source=FieldSource.USER_CONFIRMED),
+    }
+    platform_response = {
+        "result": {
+            "data": """
+            <itemSchema>
+              <field id="productTitle" type="input"><value>Watercolor Paper</value></field>
+              <field id="textDesc" type="input" />
+            </itemSchema>
+            """
+        }
+    }
+
+    assert _field_differences(fields, platform_response) == [
+        {
+            "field_path": "productTitle",
+            "local_value": "Watercolor Paper",
+            "platform_value": "Watercolor Paper",
+            "status": "matched",
+        },
+        {
+            "field_path": "textDesc",
+            "local_value": "Cold pressed",
+            "platform_value": None,
+            "status": "changed",
+        },
+    ]
+
+
 class FakeAlibabaClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
     async def call(
         self,
         operation: str,
         parameters: dict[str, object] | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> dict[str, object]:
+        self.calls.append((operation, parameters or {}))
         if "category/schema/level/get" in operation:
             return {
                 "result": {
@@ -57,6 +99,48 @@ class FakeAlibabaClient:
 
 async def fake_alibaba_client() -> AsyncIterator[AlibabaClient]:
     yield FakeAlibabaClient()  # type: ignore[misc]
+
+
+class FakeAlibabaTopClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def call(
+        self,
+        method: str,
+        parameters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((method, parameters or {}))
+        if method == "alibaba.icbu.product.id.encrypt":
+            return {
+                "alibaba_icbu_product_id_encrypt_response": {
+                    "secret_id": "encrypted-product-1"
+                }
+            }
+        if method == "alibaba.icbu.product.type.available.get":
+            return {
+                "alibaba_icbu_product_type_available_get_response": {
+                    "trace_id": "trace-capability-1",
+                    "data": {
+                        "support_post_whole_sale": True,
+                        "support_post_sourcing": False,
+                    },
+                    "biz_success": True,
+                }
+            }
+        return {
+            "success": True,
+            "method": method,
+            "parameters": parameters or {},
+        }
+
+
+fake_alibaba_top = FakeAlibabaTopClient()
+
+
+async def fake_alibaba_top_client() -> AsyncIterator[FakeAlibabaTopClient]:
+    fake_alibaba_top.calls.clear()
+    yield fake_alibaba_top
 
 
 class FakeAIClient:
@@ -92,8 +176,9 @@ class FakeAIClient:
     ) -> dict[str, object]:
         self.edit_prompts.append(prompt)
         self.received_reference_count = len(references)
+        portable_png = base64.b64encode(b"\x89PNG\r\n\x1a\nportable-test-image").decode("ascii")
         return {
-            "data": [{"url": "https://example.test/generated.png"}],
+            "data": [{"url": f"data:image/png;base64,{portable_png}"}],
             "requires_confirmation": True,
             "source_image_preservation_required": True,
         }
@@ -136,6 +221,176 @@ def test_health_and_capabilities() -> None:
     assert client.get("/health").json() == {"status": "ok"}
     capabilities = client.get("/api/v1/capabilities").json()
     assert capabilities["modules"]["sales_expert"] is False
+
+
+def test_alibaba_video_routes_map_top_api_parameters() -> None:
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
+    try:
+        client = TestClient(app)
+
+        query_response = client.get(
+            "/api/v1/alibaba/videos",
+            params={
+                "current_page": 2,
+                "page_size": 10,
+                "title": "product demo",
+                "video_id": 12345,
+            },
+        )
+        assert query_response.status_code == 200
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.video.query",
+            {
+                "current_page": 2,
+                "page_size": 10,
+                "title": "product demo",
+                "id": 12345,
+            },
+        )
+
+        upload_response = client.post(
+            "/api/v1/alibaba/videos/upload-by-url",
+            json={
+                "video_path": "https://cdn.example.com/product.mp4",
+                "video_name": "product-demo",
+                "cover_url": "https://cdn.example.com/product.jpg",
+            },
+        )
+        assert upload_response.status_code == 200
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.video.upload",
+            {
+                "video_path": "https://cdn.example.com/product.mp4",
+                "video_name": "product-demo",
+                "cover_url": "https://cdn.example.com/product.jpg",
+            },
+        )
+
+        relation_response = client.post(
+            "/api/v1/alibaba/videos/9988/relations/main",
+            json={"product_id": "778899"},
+        )
+        assert relation_response.status_code == 200
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.video.relation.product.main",
+            {"video_id": "9988", "product_id": "778899"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_alibaba_video_routes_validate_page_url_and_placement() -> None:
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
+    try:
+        client = TestClient(app)
+        assert client.get("/api/v1/alibaba/videos?current_page=0").status_code == 422
+        assert client.get("/api/v1/alibaba/videos?page_size=101").status_code == 422
+        assert (
+            client.post(
+                "/api/v1/alibaba/videos/upload-by-url",
+                json={"video_path": "http://unsafe.example.com/a.mp4", "video_name": "a"},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/v1/alibaba/videos/9988/relations/unknown",
+                json={"product_id": "778899"},
+            ).status_code
+            == 422
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_local_video_file_is_staged_and_submitted_by_https_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "staged_video_directory", str(tmp_path))
+    monkeypatch.setattr(settings, "public_base_url", "https://seller.example.com")
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
+    try:
+        client = TestClient(app, base_url="https://seller.example.com")
+        response = client.post(
+            "/api/v1/alibaba/videos/upload-file",
+            data={"placement": "main", "video_name": "product-demo"},
+            files={"video": ("demo.mp4", b"video-data", "video/mp4")},
+        )
+        assert response.status_code == 200
+        staged = response.json()["_staged_video"]
+        assert staged["url"].startswith("https://seller.example.com/public/videos/")
+        assert staged["size"] == len(b"video-data")
+        assert len(list(tmp_path.iterdir())) == 1
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.video.upload",
+            {
+                "video_path": staged["url"],
+                "video_name": "product-demo",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_local_video_upload_enforces_https_format_and_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "staged_video_directory", str(tmp_path))
+    monkeypatch.setattr(settings, "public_base_url", "http://seller.example.com")
+    monkeypatch.setattr(settings, "main_video_max_upload_bytes", 4)
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
+    try:
+        client = TestClient(app)
+        insecure = client.post(
+            "/api/v1/alibaba/videos/upload-file",
+            data={"placement": "main"},
+            files={"video": ("demo.mp4", b"1234", "video/mp4")},
+        )
+        assert insecure.status_code == 503
+
+        monkeypatch.setattr(settings, "public_base_url", "https://seller.example.com")
+        oversized = client.post(
+            "/api/v1/alibaba/videos/upload-file",
+            data={"placement": "main"},
+            files={"video": ("demo.mp4", b"12345", "video/mp4")},
+        )
+        assert oversized.status_code == 413
+        assert list(tmp_path.iterdir()) == []
+
+        unsupported = client.post(
+            "/api/v1/alibaba/videos/upload-file",
+            data={"placement": "main"},
+            files={"video": ("demo.webm", b"1234", "video/webm")},
+        )
+        assert unsupported.status_code == 415
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_category_publish_capabilities_use_official_top_shape() -> None:
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
+    try:
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/alibaba/categories/2115/publish-capabilities",
+            params={"language": "zh_cn"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "support_post_whole_sale": True,
+            "support_post_sourcing": False,
+            "trace_id": "trace-capability-1",
+        }
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.product.type.available.get",
+            {"type_request": {"cat_id": "2115", "language": "zh_cn"}},
+        )
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_product_analysis_accepts_multiple_images_for_one_product() -> None:
@@ -417,6 +672,24 @@ def test_category_schema_uses_iop_gateway_parameters() -> None:
         app.dependency_overrides.clear()
 
 
+@pytest.mark.asyncio
+async def test_generated_remote_image_is_materialized_for_later_photo_bank_upload() -> None:
+    image_bytes = b"\x89PNG\r\n\x1a\nremote-generated-image"
+
+    async def handler(request: Request) -> Response:
+        assert str(request.url) == "https://image-provider.test/result.png"
+        return Response(200, content=image_bytes, headers={"Content-Type": "image/png"})
+
+    portable = await _portable_generated_image_url(
+        "https://image-provider.test/result.png",
+        MockTransport(handler),
+    )
+
+    assert portable == (
+        "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+    )
+
+
 def test_product_analysis_normalizes_photo_bank_octet_stream() -> None:
     app.dependency_overrides[get_ai_client] = fake_ai_client
     try:
@@ -539,49 +812,70 @@ def test_render_draft_uses_product_and_category_ids() -> None:
         )
         assert response.status_code == 200
         assert response.json()["parameters"] == {
-            "cat_id": "123",
-            "product_id": "456",
-            "language": "en_US",
+            "param_product_top_publish_request": {
+                "cat_id": "123",
+                "product_id": "456",
+                "language": "en_US",
+            }
         }
     finally:
         app.dependency_overrides.clear()
 
 
-def test_inventory_and_display_requests_use_gop_request_shapes() -> None:
-    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+def test_inventory_and_display_requests_use_official_top_shapes() -> None:
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
     try:
         client = TestClient(app)
+        current = client.get("/api/v1/alibaba/products/product-1/inventory")
+        assert current.status_code == 200
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.product.sku.inventory.get",
+            {"product_id": "product-1", "language": "ENGLISH"},
+        )
+
         inventory = client.put(
             "/api/v1/alibaba/products/product-1/inventory",
-            json={"sku_id": "sku-1", "inventory": 20},
+            json={"sku_id": "sku-1", "inventory": 20, "operate": "sub"},
         )
         assert inventory.status_code == 200
-        assert inventory.json()["parameters"] == {
-            "product_id": "product-1",
-            "inventory_list": [
-                {
-                    "sku_id": "sku-1",
-                    "inventory": 20,
-                    "inventory_code": "CN_LOCAL_01",
+        assert fake_alibaba_top.calls[-1] == (
+            "alibaba.icbu.product.inventory.update",
+            {
+                "request_param": {
+                    "product_id": "product-1",
+                    "inventory_list": [
+                        {
+                            "sku_id": "sku-1",
+                            "inventory": 20,
+                            "inventory_code": "CN_LOCAL_01",
+                            "operate": "sub",
+                        }
+                    ],
                 }
-            ],
-        }
+            },
+        )
 
         display = client.patch(
             "/api/v1/alibaba/products/product-1/display",
             json={"display": False},
         )
         assert display.status_code == 200
-        assert display.json()["parameters"] == {
-            "new_display": "N",
-            "product_id_list": ["product-1"],
-        }
+        assert fake_alibaba_top.calls[-2:] == [
+            (
+                "alibaba.icbu.product.id.encrypt",
+                {"language": "ENGLISH", "product_id": "product-1"},
+            ),
+            (
+                "alibaba.icbu.product.batch.update.display",
+                {"new_display": "off", "product_id_list": "encrypted-product-1"},
+            ),
+        ]
     finally:
         app.dependency_overrides.clear()
 
 
-def test_inventory_update_requires_non_negative_inventory() -> None:
-    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+def test_inventory_update_requires_positive_delta_and_operation() -> None:
+    app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
     try:
         client = TestClient(app)
         missing = client.put(
@@ -590,10 +884,20 @@ def test_inventory_update_requires_non_negative_inventory() -> None:
         )
         negative = client.put(
             "/api/v1/alibaba/products/product-1/inventory",
-            json={"sku_id": "sku-1", "inventory": -1},
+            json={"sku_id": "sku-1", "inventory": -1, "operate": "plus"},
+        )
+        zero = client.put(
+            "/api/v1/alibaba/products/product-1/inventory",
+            json={"sku_id": "sku-1", "inventory": 0, "operate": "plus"},
+        )
+        invalid_operation = client.put(
+            "/api/v1/alibaba/products/product-1/inventory",
+            json={"sku_id": "sku-1", "inventory": 1, "operate": "set"},
         )
         assert missing.status_code == 422
         assert negative.status_code == 422
+        assert zero.status_code == 422
+        assert invalid_operation.status_code == 422
     finally:
         app.dependency_overrides.clear()
 
@@ -609,10 +913,12 @@ def test_schema_update_and_photo_bank_queries() -> None:
         assert updated.status_code == 200
         assert updated.json()["operation"] == "/icbu/product/schema/update"
         assert updated.json()["parameters"] == {
-            "xml": SCHEMA_XML,
-            "product_id": "product-1",
-            "cat_id": "123",
-            "language": "en_US",
+            "param_product_top_publish_request": {
+                "xml": SCHEMA_XML,
+                "product_id": "product-1",
+                "cat_id": "123",
+                "language": "en_US",
+            }
         }
 
         groups = client.get("/api/v1/alibaba/photo-bank/groups?page_size=10")
@@ -643,6 +949,20 @@ def test_schema_update_and_photo_bank_queries() -> None:
             "group_id": "group-1",
         }
         assert uploaded.json()["file_fields"] == ["image_bytes"]
+
+        oversized = client.post(
+            "/api/v1/alibaba/photo-bank/images",
+            data={"group_id": "group-1"},
+            files={
+                "image": (
+                    "too-large.jpg",
+                    b"\xff\xd8\xff" + b"0" * (5 * 1024 * 1024),
+                    "image/jpeg",
+                )
+            },
+        )
+        assert oversized.status_code == 413
+        assert "Alibaba 图片银行 5 MB" in oversized.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 
@@ -780,7 +1100,12 @@ def test_official_listing_flow_documents_backend_sequence() -> None:
 
 
 def test_official_listing_async_options_use_controlled_schema_level_api() -> None:
-    app.dependency_overrides[get_alibaba_client] = fake_alibaba_client
+    capturing_client = FakeAlibabaClient()
+
+    async def capturing_alibaba_client() -> AsyncIterator[AlibabaClient]:
+        yield capturing_client  # type: ignore[misc]
+
+    app.dependency_overrides[get_alibaba_client] = capturing_alibaba_client
     try:
         client = TestClient(app)
         schema_xml = """
@@ -812,6 +1137,31 @@ def test_official_listing_async_options_use_controlled_schema_level_api() -> Non
         assert supply_type["options"] == [
             {"display_name": "OEM", "value": "oem", "valid": True, "attributes": {}}
         ]
+
+        official_method_schema = schema_xml.replace(
+            "top.tmall.post.item.query.subProp.schema.get",
+            "alibaba.icbu.category.schema.level.get",
+        )
+        official_method_response = client.post(
+            "/api/v1/products/official-listing/options",
+            json={
+                "category_id": "333",
+                "field_path": "icbuCatProp.supplyType",
+                "schema_data": official_method_schema,
+                "fields": {
+                    "category_id": {"value": "333", "source": "user_confirmed"},
+                    "icbuCatProp.supplyType": {
+                        "value": "oem",
+                        "source": "user_confirmed",
+                    },
+                },
+            },
+        )
+        assert official_method_response.status_code == 200
+        submitted_xml = str(capturing_client.calls[-1][1]["xml"])
+        assert '<field id="icbuCatProp"' in submitted_xml
+        assert '<field id="supplyType"' in submitted_xml
+        assert "icbuCatProp.supplyType" not in submitted_xml
     finally:
         app.dependency_overrides.pop(get_alibaba_client, None)
 
@@ -1047,7 +1397,15 @@ def test_official_listing_batch_isolates_source_validation_failures() -> None:
         ]
         assert response.json()[0]["success"] is True
         assert response.json()[0]["response"]["_readback"]["success"] is True
-        assert response.json()[0]["response"]["_differences"] == []
+        assert "未返回商品 ID" in response.json()[0]["response"]["_readback_error"]
+        assert response.json()[0]["response"]["_differences"] == [
+            {
+                "field_path": "productTitle",
+                "local_value": "trusted",
+                "platform_value": "trusted",
+                "status": "matched",
+            }
+        ]
         assert response.json()[1]["success"] is False
         assert '"confirmation_fields":["productTitle"]' in response.json()[1]["error"]
 

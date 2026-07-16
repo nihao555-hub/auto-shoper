@@ -4,11 +4,16 @@ from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
 
 from backend.app.models import SchemaBuildResult, SchemaValidationIssue
-from backend.app.services.schema_rules import SchemaParseError, extract_schema_xml
+from backend.app.services.schema_rules import (
+    PRICE_MODE_COMPONENT_ROOTS,
+    SchemaParseError,
+    extract_schema_xml,
+)
 
 _VALUE_TAGS = {"value", "values", "complex-value", "complex-values"}
 _MULTI_TYPES = {"multiInput", "multiCheck"}
 _COMPLEX_TYPES = {"complex", "multiComplex"}
+_OPTIONAL_VALUE_ATTRIBUTES = {"img", "remark"}
 
 
 def build_schema_xml(
@@ -29,6 +34,8 @@ def build_schema_xml(
         field.attrib["id"]: field for field in fields if field.attrib.get("id")
     }
     context_values = dict(values)
+
+    _validate_price_mode_components(field_by_id, context_values, errors)
 
     for field_id in values:
         if field_id not in field_by_id:
@@ -63,6 +70,15 @@ def build_schema_xml(
 def validate_filled_schema_xml(
     schema_data: dict[str, object] | str,
 ) -> SchemaBuildResult:
+    values = extract_schema_values(schema_data)
+    return build_schema_xml(schema_data, values)
+
+
+def extract_schema_values(
+    schema_data: dict[str, object] | str,
+) -> dict[str, object]:
+    """Return the values Alibaba actually exposes in a filled Schema XML."""
+
     schema_xml = extract_schema_xml(schema_data)
     try:
         root = ElementTree.fromstring(schema_xml)
@@ -74,7 +90,7 @@ def validate_filled_schema_xml(
         value = _extract_value(field)
         if field_id and value is not None:
             values[field_id] = value
-    return build_schema_xml(schema_data, values)
+    return values
 
 
 def _validate_and_fill(
@@ -93,6 +109,20 @@ def _validate_and_fill(
     field_type = field.attrib.get("type", "input")
     rules = _rules(field)
     value = _with_option_attributes(field, value, rules)
+
+    if _implicit_price_component_disabled(
+        field_id=field.attrib.get("id", ""),
+        values=context_values or {},
+    ):
+        if supplied:
+            errors.append(
+                _issue(
+                    field_key,
+                    "priceModeRule",
+                    "Field does not belong to the selected price mode",
+                )
+            )
+        return
 
     if _rule_disables_field(
         field,
@@ -185,9 +215,17 @@ def _validate_and_fill_complex(
         return
 
     child_values = value if isinstance(value, dict) else {}
-    must_validate_children = supplied or top_level
+    field_id = field.attrib.get("id", "")
+    must_validate_children = supplied or (
+        top_level and field_id not in PRICE_MODE_COMPONENT_ROOTS
+    )
     if not must_validate_children:
         return
+    if supplied:
+        present_children = [
+            item for item in child_values.values() if not _is_empty(item)
+        ]
+        _validate_item_count(field, present_children, field_key, errors)
     instance = _build_complex_instance(
         children,
         child_values,
@@ -265,11 +303,12 @@ def _validate_scalar_or_multi(
 
     _validate_item_count(field, values, field_key, errors)
     option_values = _option_values(field)
-    required_attributes = {
+    declared_attributes = {
         rule.get("value", "")
         for rule in rules.get("valueAttributeRule", [])
         if rule.get("value")
     }
+    required_attributes = declared_attributes - _OPTIONAL_VALUE_ATTRIBUTES
 
     for item in values:
         text, attributes = _value_parts(item)
@@ -285,6 +324,13 @@ def _validate_scalar_or_multi(
         if option_values and text not in option_values and not custom_input:
             errors.append(_issue(field_key, "optionRule", f"Unsupported option: {text}"))
         missing_attributes = sorted(required_attributes - set(attributes))
+        if "boxpackaging" in field_key.lower():
+            missing_attributes.extend(
+                attribute
+                for attribute in ("maxCount", "totalWeight")
+                if not attributes.get(attribute, "").strip()
+                and attribute not in missing_attributes
+            )
         if missing_attributes:
             errors.append(
                 _issue(
@@ -513,6 +559,44 @@ def _rule_disables_field(
     )
 
 
+def _implicit_price_component_disabled(
+    field_id: str,
+    values: dict[str, object],
+) -> bool:
+    mode, _ = _value_parts(values.get("scPrice"))
+    if not mode:
+        return False
+    if field_id == "ladderPrice":
+        return mode != "1"
+    if field_id == "fob":
+        return mode != "2"
+    return False
+
+
+def _validate_price_mode_components(
+    field_by_id: dict[str, ElementTree.Element],
+    values: dict[str, object],
+    errors: list[SchemaValidationIssue],
+) -> None:
+    if "scPrice" not in field_by_id:
+        return
+    mode, _ = _value_parts(values.get("scPrice"))
+    component_by_mode = {
+        "1": "ladderPrice",
+        "2": "fob",
+        "3": "sku",
+    }
+    component = component_by_mode.get(mode or "")
+    if component and component in field_by_id and _is_empty(values.get(component)):
+        errors.append(
+            _issue(
+                component,
+                "priceModeRule",
+                "Selected price mode requires this component",
+            )
+        )
+
+
 def _dependency_group_matches(
     group: ElementTree.Element,
     values: dict[str, object],
@@ -606,39 +690,46 @@ def _with_option_attributes(
         rule.get("value", "")
         for rule in rules.get("valueAttributeRule", [])
         if rule.get("value")
-    }
-    option_labels = _option_labels(field)
-    if not required_attributes or not option_labels:
+    } - _OPTIONAL_VALUE_ATTRIBUTES
+    option_metadata = _option_metadata(field)
+    if not required_attributes or not option_metadata:
         return value
     if field.attrib.get("type") in _MULTI_TYPES and isinstance(value, list):
         return [
-            _with_required_attributes(item, option_labels, required_attributes)
+            _with_required_attributes(item, option_metadata, required_attributes)
             for item in value
         ]
-    return _with_required_attributes(value, option_labels, required_attributes)
+    return _with_required_attributes(value, option_metadata, required_attributes)
 
 
 def _with_required_attributes(
     value: object,
-    option_labels: dict[str, str],
+    option_metadata: dict[str, dict[str, str]],
     required_attributes: set[str],
 ) -> object:
     text, attributes = _value_parts(value)
-    if text is None or text not in option_labels:
+    if text is None or text not in option_metadata:
         return value
     completed = dict(attributes)
+    metadata = option_metadata[text]
     for attribute in required_attributes:
-        completed.setdefault(attribute, option_labels[text] if attribute == "text" else "")
+        if attribute in {"text", "inputValue"}:
+            completed.setdefault(attribute, metadata["displayName"])
+        elif attribute in metadata:
+            completed.setdefault(attribute, metadata[attribute])
     return {"value": text, "attributes": completed}
 
 
-def _option_labels(field: ElementTree.Element) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _option_metadata(field: ElementTree.Element) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
     for options in _children_named(field, "options"):
         for option in _children_named(options, "option"):
             value = option.attrib.get("value")
             if value is not None:
-                result[value] = option.attrib.get("displayName", value)
+                result[value] = {
+                    **dict(option.attrib),
+                    "displayName": option.attrib.get("displayName", value),
+                }
     return result
 
 

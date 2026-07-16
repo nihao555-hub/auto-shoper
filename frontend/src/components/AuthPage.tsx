@@ -64,7 +64,7 @@ export function AuthPage({ onAuthenticated }: AuthPageProps) {
   return (
     <main className="auth-page">
       <section className="auth-visual" aria-label="平台业务介绍">
-        <img src="/auth-business.webp" alt="" />
+        <img src={`${import.meta.env.BASE_URL}auth-business.webp`} alt="" />
       </section>
 
       <section className={`auth-panel ${mode === "register" ? "is-register" : ""}`}>

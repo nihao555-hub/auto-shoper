@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     )
     alibaba_append_operation_to_url: bool = False
     alibaba_timeout_seconds: float = 30
+    alibaba_top_api_base_url: str = "https://eco.taobao.com/router/rest"
     alibaba_oauth_authorize_url: str = Field(
         default="https://openapi-auth.alibaba.com/oauth/authorize",
         validation_alias=AliasChoices(
@@ -55,7 +56,14 @@ class Settings(BaseSettings):
     alibaba_oauth_success_url: str = "http://localhost:5173/#/overview?alibaba=connected"
     alibaba_oauth_error_url: str = "http://localhost:5173/#/overview?alibaba=error"
 
+    public_base_url: str | None = None
+    staged_video_directory: str = "data/staged-videos"
+    staged_video_retention_hours: int = 168
+    main_video_max_upload_bytes: int = 100 * 1024 * 1024
+    detail_video_max_upload_bytes: int = 500 * 1024 * 1024
+
     max_upload_bytes: int = 10 * 1024 * 1024
+    alibaba_photo_bank_max_upload_bytes: int = 5 * 1024 * 1024
     max_product_images: int = 10
 
     @property

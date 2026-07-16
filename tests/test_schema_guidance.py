@@ -49,6 +49,19 @@ def test_build_schema_guidance_separates_ai_and_manual_fields() -> None:
     assert material.responsibility == "business_system"
 
 
+def test_guidance_exposes_category_image_size_limit() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="scImages" name="Main images" type="complex">'
+        '<rules><rule name="maxImageSizeRule" value="4194304"/></rules>'
+        '<fields><field id="scImages_0" type="input"/></fields>'
+        "</field>"
+        "</itemSchema>"
+    )
+
+    assert build_schema_guidance(schema).main_image_max_size_bytes == 4194304
+
+
 def test_unknown_schema_fields_default_to_merchant_not_ai() -> None:
     schema = (
         "<itemSchema>"
@@ -109,6 +122,35 @@ def test_guidance_marks_async_choice_fields() -> None:
     assert field.async_query_method == "top.category.options.get"
 
 
+def test_guidance_reuses_account_box_options_for_sku_packaging() -> None:
+    schema = """
+    <itemSchema>
+      <field id="boxPackaging" name="Box gauge" type="multiCheck">
+        <options><option displayName="Carton A" value="33070036" /></options>
+      </field>
+      <field id="logisticsSku" type="multiComplex">
+        <fields>
+          <field id="boxPackagingSku" name="Box gauge sku" type="multiCheck">
+            <rules><rule name="valueTypeRule" value="long" /></rules>
+          </field>
+        </fields>
+      </field>
+    </itemSchema>
+    """
+
+    guidance = build_schema_guidance(schema)
+    field = next(
+        item
+        for item in guidance.manual_fact_fields
+        if item.field == "logisticsSku.boxPackagingSku"
+    )
+
+    assert field.supported is True
+    assert [(option.display_name, option.value) for option in field.options] == [
+        ("Carton A", "33070036")
+    ]
+
+
 def test_guidance_supports_alibaba_double_inputs() -> None:
     schema = (
         "<itemSchema>"
@@ -127,7 +169,7 @@ def test_guidance_supports_alibaba_double_inputs() -> None:
     assert field.supported is True
 
 
-def test_optionless_ai_looking_choice_defaults_to_merchant() -> None:
+def test_platform_managed_product_feature_is_not_rendered_as_a_merchant_task() -> None:
     schema = (
         "<itemSchema>"
         '<field id="productFeature" type="multiCheck">'
@@ -138,9 +180,25 @@ def test_optionless_ai_looking_choice_defaults_to_merchant() -> None:
     guidance = build_schema_guidance(schema)
 
     assert guidance.ai_fillable_fields == []
-    field = guidance.manual_fact_fields[0]
-    assert field.responsibility == "merchant"
-    assert "未返回可安全提交的选项" in field.responsibility_reason
+    assert guidance.manual_fact_fields == []
+
+
+def test_platform_status_and_empty_schema_containers_are_not_seller_inputs() -> None:
+    schema = (
+        "<itemSchema>"
+        '<field id="productQuality" type="complex"><fields>'
+        '<field id="productQuality_score" type="input"/>'
+        "</fields></field>"
+        '<field id="supportLogisticsSku" type="singleCheck"/>'
+        '<field id="ApiPostLevelAttrAdapter" type="multiInput"/>'
+        '<field id="multilangInfo" type="multiComplex"><fields/></field>'
+        "</itemSchema>"
+    )
+
+    guidance = build_schema_guidance(schema)
+
+    assert guidance.ai_fillable_fields == []
+    assert guidance.manual_fact_fields == []
 
 
 def test_guidance_prompt_lists_options_and_manual_fields() -> None:

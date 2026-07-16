@@ -55,15 +55,16 @@ npm run dev
 
 Vite 在 `http://127.0.0.1:5173` 启动，并把 `/api` 和 `/health` 代理到后端 `8000` 端口。
 
-### 生产部署（前端 Vercel + 后端 Render）
+### 生产部署（前端 Vercel + 自建后端）
 
 前端默认调用同源 `/api/v1`。部署到 Vercel 时，`frontend/vercel.json` 会把 `/api/*`
-和 `/health` 反向代理到 Render 后端，因此前端无需 CORS、也无需单独配置后端地址即可直连。
+和 `/health` 反向代理到当前自建后端 `https://shuoma.site/auto-shoper-api`，因此前端无需
+CORS、也无需单独配置后端地址即可直连。
 如果后端域名变化，改 `frontend/vercel.json` 里的 `destination`。
 （也可改为在 Vercel 设置 `VITE_API_ROOT=https://<backend-domain>/api/v1` 走跨域直连，
 后端 CORS 已放行 `*.vercel.app`。）Vercel 项目的 Root Directory 需指向 `frontend`。
 
-生产后端使用 OceanBase MySQL 模式，Render 需设置：
+生产后端使用 OceanBase MySQL 模式，服务进程需设置：
 
 ```text
 DATABASE_BACKEND=oceanbase
@@ -73,6 +74,38 @@ OCEANBASE_USER=<应用专用用户>
 OCEANBASE_PASSWORD=<密码>
 OCEANBASE_DATABASE=<数据库名>
 ```
+
+本地视频上传还需要下列生产配置。`PUBLIC_BASE_URL` 必须是 Alibaba 服务器可以直接访问的
+HTTPS 根地址；不能填 `localhost`、内网 IP 或 Vercel 前端地址：
+
+```text
+PUBLIC_BASE_URL=https://shuoma.site/auto-shoper-api
+STAGED_VIDEO_DIRECTORY=<持久磁盘上的 staged-videos 绝对路径>
+STAGED_VIDEO_RETENTION_HOURS=168
+MAIN_VIDEO_MAX_UPLOAD_BYTES=104857600
+DETAIL_VIDEO_MAX_UPLOAD_BYTES=524288000
+```
+
+后端把本地视频以随机文件名暂存到 `STAGED_VIDEO_DIRECTORY`，通过
+`/public/videos/<随机文件名>` 供 Alibaba 拉取，再调用官方 `alibaba.icbu.video.upload`。
+该目录必须由后端进程可写、跨服务重启保留，且不能被登录鉴权拦截；过期文件会在后续上传时清理。
+当前域名前缀由 Nginx 去除后再转发给 FastAPI，示例关键配置如下：
+
+```nginx
+location /auto-shoper-api/ {
+    client_max_body_size 520m;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_pass http://127.0.0.1:8000/;
+}
+```
+
+`client_max_body_size` 必须高于详情视频的 500 MB 上限。部署后应先从公网访问一个测试
+`/auto-shoper-api/public/videos/<文件名>`，确认返回视频内容，再用真实店铺验证 Alibaba 的处理状态。
 
 本地开发仍可使用 `DATABASE_BACKEND=sqlite` 和 `DATABASE_PATH=data/auto-shoper.db`。
 客户、工作区、会话、OAuth state、加密 token、店铺摘要和批次均存入同一数据库并按工作区/

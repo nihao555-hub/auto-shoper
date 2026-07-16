@@ -87,19 +87,19 @@ OPERATIONS = {
     ),
     "inventory_get": AlibabaOperation(
         key="inventory_get",
-        operation="/icbu/product/inventory/get",
+        operation="alibaba.icbu.product.sku.inventory.get",
         purpose="查询 SKU 库存",
         safety="可自动执行",
     ),
     "inventory_update": AlibabaOperation(
         key="inventory_update",
-        operation="/icbu/product/inventory/update",
+        operation="alibaba.icbu.product.inventory.update",
         purpose="更新 SKU 库存",
         safety="必须使用 ERP 或人工确认的库存事实",
     ),
     "display_update": AlibabaOperation(
         key="display_update",
-        operation="/icbu/product/update/display",
+        operation="alibaba.icbu.product.batch.update.display",
         purpose="商品上下架",
         safety="需要操作审计和明确业务规则",
     ),

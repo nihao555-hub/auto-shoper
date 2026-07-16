@@ -15,6 +15,12 @@ class SchemaParseError(ValueError):
     pass
 
 
+# Alibaba exposes all inquiry-price components in the same Schema. Their child
+# fields are required only after the merchant selects the corresponding
+# ``scPrice`` mode; they are not global requirements.
+PRICE_MODE_COMPONENT_ROOTS = {"fob", "ladderPrice"}
+
+
 def parse_schema_data(schema_data: dict[str, object] | str) -> SchemaParseResult:
     schema_xml = extract_schema_xml(schema_data)
     try:
@@ -234,10 +240,20 @@ def _required_field_ids(
     for field in fields:
         if field.disabled or field.read_only:
             continue
+        if (
+            len(field.path) > 1
+            and field.path[0] in PRICE_MODE_COMPONENT_ROOTS
+        ):
+            continue
         if field.required:
             result.add(_field_key(field))
         if inspect_children and field.type == "complex":
             for child in field.children:
+                if (
+                    len(child.path) > 1
+                    and child.path[0] in PRICE_MODE_COMPONENT_ROOTS
+                ):
+                    continue
                 if child.disabled or child.read_only or not child.required:
                     continue
                 result.add(_field_key(child))

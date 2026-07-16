@@ -452,12 +452,13 @@ function SelectField({
   options: string[];
   onChange: (value: string) => void;
 }) {
+  const visibleOptions = value && !options.includes(value) ? [value, ...options] : options;
   return (
     <label className="field">
       <span>{label}</span>
       <select value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">创建批次时选择</option>
-        {options.map((option) => (
+        {visibleOptions.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>

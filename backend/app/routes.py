@@ -1,14 +1,18 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 import zipfile
 from collections.abc import Mapping
-from time import perf_counter
-from typing import Annotated, Any
+from pathlib import Path
+from time import perf_counter, time
+from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from httpx import HTTPError
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from httpx import AsyncBaseTransport, AsyncClient, HTTPError
 
 from backend.app.alibaba_catalog import OPERATIONS
 from backend.app.clients.ai import AIClient, AIProviderError
@@ -17,9 +21,10 @@ from backend.app.clients.alibaba import (
     AlibabaClient,
     AlibabaConfigurationError,
 )
+from backend.app.clients.alibaba_top import AlibabaTopClient
 from backend.app.config import get_settings
 from backend.app.database import AuthenticatedUser, Database, get_database
-from backend.app.dependencies import get_ai_client, get_alibaba_client
+from backend.app.dependencies import get_ai_client, get_alibaba_client, get_alibaba_top_client
 from backend.app.models import (
     AlibabaBatchPublishRequest,
     AlibabaBatchRequest,
@@ -27,9 +32,12 @@ from backend.app.models import (
     AlibabaDisplayUpdateRequest,
     AlibabaDraftRenderRequest,
     AlibabaInventoryUpdateRequest,
+    AlibabaProductTypeCapabilities,
     AlibabaPublishRequest,
     AlibabaSchemaRequest,
     AlibabaSchemaUpdateRequest,
+    AlibabaVideoRelationRequest,
+    AlibabaVideoUploadRequest,
     AsyncSchemaOptionsRequest,
     CategoryRecommendationRequest,
     CategoryRecommendationResult,
@@ -118,7 +126,11 @@ from backend.app.services.schema_rules import (
     merge_schema_required_fields,
     parse_schema_data,
 )
-from backend.app.services.schema_values import build_schema_xml, validate_filled_schema_xml
+from backend.app.services.schema_values import (
+    build_schema_xml,
+    extract_schema_values,
+    validate_filled_schema_xml,
+)
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -552,6 +564,27 @@ async def get_schema(
     )
 
 
+@router.get(
+    "/alibaba/categories/{category_id}/publish-capabilities",
+    response_model=AlibabaProductTypeCapabilities,
+)
+async def get_category_publish_capabilities(
+    category_id: str,
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+    language: str = "zh_cn",
+) -> AlibabaProductTypeCapabilities:
+    response = await _alibaba_top_call(
+        client,
+        "alibaba.icbu.product.type.available.get",
+        {"type_request": {"cat_id": category_id, "language": language}},
+    )
+    return AlibabaProductTypeCapabilities(
+        support_post_whole_sale=_find_response_bool(response, "support_post_whole_sale"),
+        support_post_sourcing=_find_response_bool(response, "support_post_sourcing"),
+        trace_id=_find_response_value(response, "trace_id"),
+    )
+
+
 @router.post("/alibaba/categories/schema-level")
 async def get_category_schema_level(
     request: AlibabaSchemaRequest,
@@ -577,9 +610,11 @@ async def render_draft(
         client,
         "draft_render",
         {
-            "language": request.language,
-            "cat_id": request.category_id,
-            "product_id": request.product_id,
+            "param_product_top_publish_request": {
+                "language": request.language,
+                "cat_id": request.category_id,
+                "product_id": request.product_id,
+            }
         },
     )
 
@@ -607,11 +642,11 @@ async def get_product_score(
 @router.get("/alibaba/products/{product_id}/inventory")
 async def get_product_inventory(
     product_id: str,
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(
+    return await _alibaba_top_call(
         client,
-        "inventory_get",
+        "alibaba.icbu.product.sku.inventory.get",
         {"product_id": product_id, "language": "ENGLISH"},
     )
 
@@ -620,20 +655,23 @@ async def get_product_inventory(
 async def update_product_inventory(
     product_id: str,
     request: AlibabaInventoryUpdateRequest,
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(
+    return await _alibaba_top_call(
         client,
-        "inventory_update",
+        "alibaba.icbu.product.inventory.update",
         {
-            "product_id": product_id,
-            "inventory_list": [
-                {
-                    "sku_id": request.sku_id,
-                    "inventory": request.inventory,
-                    "inventory_code": request.inventory_code,
-                }
-            ],
+            "request_param": {
+                "product_id": product_id,
+                "inventory_list": [
+                    {
+                        "sku_id": request.sku_id,
+                        "inventory": request.inventory,
+                        "inventory_code": request.inventory_code,
+                        "operate": request.operate,
+                    }
+                ],
+            },
         },
     )
 
@@ -642,14 +680,25 @@ async def update_product_inventory(
 async def update_product_display(
     product_id: str,
     request: AlibabaDisplayUpdateRequest,
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(
+    encrypted = await _alibaba_top_call(
         client,
-        "display_update",
+        "alibaba.icbu.product.id.encrypt",
+        {"language": "ENGLISH", "product_id": product_id},
+    )
+    secret_id = _find_response_value(encrypted, "secret_id")
+    if not secret_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Alibaba did not return an encrypted product ID for display update",
+        )
+    return await _alibaba_top_call(
+        client,
+        "alibaba.icbu.product.batch.update.display",
         {
-            "new_display": "Y" if request.display else "N",
-            "product_id_list": [product_id],
+            "new_display": "on" if request.display else "off",
+            "product_id_list": secret_id,
         },
     )
 
@@ -664,10 +713,12 @@ async def update_product_schema(
         client,
         "schema_update",
         {
-            "xml": request.xml,
-            "product_id": product_id,
-            "cat_id": request.category_id,
-            "language": request.language,
+            "param_product_top_publish_request": {
+                "xml": request.xml,
+                "product_id": product_id,
+                "cat_id": request.category_id,
+                "language": request.language,
+            }
         },
     )
 
@@ -772,6 +823,11 @@ async def upload_photo(
 ) -> dict[str, Any]:
     content = await image.read()
     _validate_upload(image, content)
+    if len(content) > get_settings().alibaba_photo_bank_max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail="图片超过 Alibaba 图片银行 5 MB 限制",
+        )
     return await _alibaba_call(
         client,
         "photo_upload",
@@ -783,6 +839,127 @@ async def upload_photo(
                 image.content_type or "image/jpeg",
             )
         },
+    )
+
+
+@router.get("/alibaba/videos")
+async def list_alibaba_videos(
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+    current_page: int = 1,
+    page_size: int = 20,
+    title: str | None = None,
+    video_id: int | None = None,
+) -> dict[str, Any]:
+    if current_page < 1 or not 1 <= page_size <= 100:
+        raise HTTPException(status_code=422, detail="Invalid video page parameters")
+    return await _alibaba_top_call(
+        client,
+        "alibaba.icbu.video.query",
+        {
+            "current_page": current_page,
+            "page_size": page_size,
+            "title": title,
+            "id": video_id,
+        },
+    )
+
+
+@router.post("/alibaba/videos/upload-by-url")
+async def upload_alibaba_video_by_url(
+    request: AlibabaVideoUploadRequest,
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+) -> dict[str, Any]:
+    return await _alibaba_top_call(
+        client,
+        "alibaba.icbu.video.upload",
+        request.model_dump(exclude_none=True),
+    )
+
+
+@router.post("/alibaba/videos/upload-file")
+async def upload_alibaba_video_file(
+    request: Request,
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+    video: Annotated[UploadFile, File(...)],
+    placement: Annotated[Literal["main", "detail"], Form(...)],
+    video_name: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    settings = get_settings()
+    content_type = (video.content_type or "").split(";", 1)[0].lower()
+    extensions = {
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+        "video/x-m4v": ".m4v",
+    }
+    extension = extensions.get(content_type)
+    if extension is None:
+        raise HTTPException(
+            status_code=415,
+            detail="仅支持 MP4、MOV 或 M4V 视频文件",
+        )
+    max_bytes = (
+        settings.main_video_max_upload_bytes
+        if placement == "main"
+        else settings.detail_video_max_upload_bytes
+    )
+    public_base_url = (settings.public_base_url or str(request.base_url)).rstrip("/")
+    if urlparse(public_base_url).scheme != "https":
+        raise HTTPException(
+            status_code=503,
+            detail="本地视频上传需要配置可供 Alibaba 访问的 HTTPS PUBLIC_BASE_URL",
+        )
+    directory = Path(settings.staged_video_directory).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    _purge_staged_videos(directory, settings.staged_video_retention_hours)
+    file_name = f"{uuid4().hex}{extension}"
+    target = directory / file_name
+    size = 0
+    try:
+        with target.open("xb") as output:
+            while chunk := await video.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    limit_mb = max_bytes // (1024 * 1024)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"{placement} 视频超过 Alibaba {limit_mb} MB 限制",
+                    )
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=422, detail="视频文件为空")
+        public_url = f"{public_base_url}/public/videos/{file_name}"
+        response = await _alibaba_top_call(
+            client,
+            "alibaba.icbu.video.upload",
+            {
+                "video_path": public_url,
+                "video_name": (video_name or Path(video.filename or "video").stem)[:200],
+            },
+        )
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return {
+        **response,
+        "_staged_video": {
+            "url": public_url,
+            "size": size,
+            "retention_hours": settings.staged_video_retention_hours,
+        },
+    }
+
+
+@router.post("/alibaba/videos/{video_id}/relations/{placement}")
+async def relate_alibaba_video(
+    video_id: str,
+    placement: Literal["main", "detail"],
+    request: AlibabaVideoRelationRequest,
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+) -> dict[str, Any]:
+    return await _alibaba_top_call(
+        client,
+        f"alibaba.icbu.video.relation.product.{placement}",
+        {"video_id": video_id, "product_id": request.product_id},
     )
 
 
@@ -959,15 +1136,23 @@ async def load_official_listing_options(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The requested field does not declare asyncQueryRule",
             )
-        if "subprop.schema.get" not in target.async_query_method.lower():
+        async_method = target.async_query_method.lower()
+        if not any(
+            method in async_method
+            for method in (
+                "subprop.schema.get",
+                "category.schema.level.get",
+            )
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Unsupported Alibaba async option query method",
             )
         effective = effective_listing_fields(request.fields, request.account_defaults)
+        parsed = parse_schema_data(request.schema_data)
         built = build_schema_xml(
             request.schema_data,
-            {field_path: field.value for field_path, field in effective.items()},
+            _schema_values(parsed.fields, effective),
         )
         response = await _alibaba_call(
             client,
@@ -1264,6 +1449,42 @@ def _image_url(payload: object) -> str | None:
     return None
 
 
+async def _portable_generated_image_url(
+    image_url: str,
+    transport: AsyncBaseTransport | None = None,
+) -> str:
+    """Materialize a provider-owned temporary URL before it reaches the browser."""
+
+    if image_url.startswith("data:"):
+        return image_url
+    limit = get_settings().max_upload_bytes
+    chunks: list[bytes] = []
+    size = 0
+    async with (
+        AsyncClient(
+            timeout=30,
+            follow_redirects=True,
+            transport=transport,
+        ) as client,
+        client.stream("GET", image_url) as response,
+    ):
+        response.raise_for_status()
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("Generated image exceeds the upload size limit")
+            chunks.append(chunk)
+        content = b"".join(chunks)
+        content_type = _image_content_type(
+            content,
+            response.headers.get("content-type", ""),
+        )
+    if content_type is None:
+        raise ValueError("Generated image provider returned an unsupported image")
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
 @router.get("/images/prompt-templates", response_model=list[ImagePromptTemplate])
 async def get_image_prompt_templates() -> list[ImagePromptTemplate]:
     return list_prompt_templates()
@@ -1359,6 +1580,7 @@ async def generate_product_images(
                     label=template.label,
                     error="图片服务未返回可用图片地址",
                 )
+            image_url = await _portable_generated_image_url(image_url)
             return ProductImageCandidate(
                 slot=slot,
                 label=template.label,
@@ -1402,6 +1624,19 @@ async def _alibaba_call(
 ) -> dict[str, Any]:
     try:
         return await client.call(OPERATIONS[operation_key].operation, parameters, files)
+    except AlibabaConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AlibabaAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+async def _alibaba_top_call(
+    client: AlibabaTopClient,
+    method: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return await client.call(method, parameters)
     except AlibabaConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AlibabaAPIError as exc:
@@ -1634,14 +1869,26 @@ async def _capture_draft_snapshots(
                 platform_response = await client.call(
                     OPERATIONS["draft_render"].operation,
                     {
-                        "language": item.language,
-                        "cat_id": item.category_id,
-                        "product_id": product_id,
+                        "param_product_top_publish_request": {
+                            "language": item.language,
+                            "cat_id": item.category_id,
+                            "product_id": product_id,
+                        }
                     },
                 )
             except AlibabaAPIError as exc:
                 readback_error = str(exc)
-        differences = _field_differences(item.fields, platform_response)
+        else:
+            readback_error = "Alibaba 草稿创建结果未返回商品 ID，无法执行平台回读"
+        prepared = _prepare_official_listing(item)
+        submitted_values = extract_schema_values(prepared.xml) if prepared.xml else {}
+        differences = _field_differences(
+            {
+                field_path: DraftField(value=value, source=FieldSource.USER_PROVIDED)
+                for field_path, value in submitted_values.items()
+            },
+            platform_response,
+        )
         enriched_response = {
             **result.response,
             "_readback": platform_response,
@@ -1664,25 +1911,51 @@ async def _capture_draft_snapshots(
         )
 
 
-def _find_product_id(payload: object) -> str | None:
+def _find_response_value(payload: object, target_key: str) -> str | None:
+    compact_target = "".join(char.lower() for char in target_key if char.isalnum())
     if isinstance(payload, Mapping):
         for key, value in payload.items():
             compact = "".join(char.lower() for char in str(key) if char.isalnum())
-            if compact in {"productid", "productidlist"}:
+            if compact == compact_target:
                 if isinstance(value, list) and value:
                     return str(value[0])
                 if value not in (None, ""):
                     return str(value)
         for value in payload.values():
-            found = _find_product_id(value)
+            found = _find_response_value(value, target_key)
             if found:
                 return found
     elif isinstance(payload, list):
         for value in payload:
-            found = _find_product_id(value)
+            found = _find_response_value(value, target_key)
             if found:
                 return found
     return None
+
+
+def _find_product_id(payload: object) -> str | None:
+    return _find_response_value(payload, "product_id") or _find_response_value(
+        payload,
+        "product_id_list",
+    )
+
+
+def _find_response_bool(payload: object, target_key: str) -> bool:
+    compact_target = "".join(char.lower() for char in target_key if char.isalnum())
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            compact = "".join(char.lower() for char in str(key) if char.isalnum())
+            if compact == compact_target:
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in {"true", "1", "yes"}
+                if isinstance(value, int | float):
+                    return value != 0
+        return any(_find_response_bool(value, target_key) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_find_response_bool(value, target_key) for value in payload)
+    return False
 
 
 def _field_differences(
@@ -1700,11 +1973,10 @@ def _field_differences(
             (value for key, value in platform_values.items() if key in candidates),
             None,
         )
-        if platform_value is None:
-            continue
         status_value = (
             "matched"
-            if _comparable_value(field.value) == _comparable_value(platform_value)
+            if platform_value is not None
+            and _comparable_value(field.value) == _comparable_value(platform_value)
             else "changed"
         )
         differences.append(
@@ -1721,17 +1993,24 @@ def _field_differences(
 def _flatten_response(payload: object) -> dict[str, object]:
     flattened: dict[str, object] = {}
 
-    def visit(value: object) -> None:
+    try:
+        schema_values = extract_schema_values(payload)  # type: ignore[arg-type]
+    except (SchemaParseError, TypeError, ValueError):
+        schema_values = {}
+
+    def visit(value: object, path: tuple[str, ...] = ()) -> None:
+        if path:
+            flattened.setdefault(_compact_comparison_key(".".join(path)), value)
+            flattened.setdefault(_compact_comparison_key(path[-1]), value)
         if isinstance(value, Mapping):
             for key, child in value.items():
-                if isinstance(child, Mapping | list):
-                    visit(child)
-                else:
-                    flattened[_compact_comparison_key(str(key))] = child
+                visit(child, (*path, str(key)))
         elif isinstance(value, list):
             for child in value:
-                visit(child)
+                visit(child, path)
 
+    if schema_values:
+        visit(schema_values)
     visit(payload)
     return flattened
 
@@ -1771,7 +2050,21 @@ def _validate_upload(image: UploadFile, content: bytes) -> str:
     return content_type
 
 
+def _purge_staged_videos(directory: Path, retention_hours: int) -> None:
+    cutoff = time() - max(retention_hours, 1) * 60 * 60
+    for candidate in directory.iterdir():
+        try:
+            if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                candidate.unlink()
+        except OSError:
+            logger.warning("Unable to purge staged video %s", candidate, exc_info=True)
+
+
 def _normalized_image_content_type(image: UploadFile, content: bytes) -> str | None:
+    return _image_content_type(content, image.content_type or "")
+
+
+def _image_content_type(content: bytes, declared_content_type: str) -> str | None:
     supported = {"image/jpeg", "image/png", "image/webp", "image/gif"}
     signatures = (
         (b"\xff\xd8\xff", "image/jpeg"),
@@ -1787,5 +2080,5 @@ def _normalized_image_content_type(image: UploadFile, content: bytes) -> str | N
     if content[4:12] in {b"ftypavif", b"ftypavis"}:
         return None
 
-    declared = (image.content_type or "").partition(";")[0].strip().lower()
+    declared = declared_content_type.partition(";")[0].strip().lower()
     return declared if declared in supported else None

@@ -225,20 +225,26 @@ export default function App() {
       return;
     }
     const savedSettings = loadSettings(user.workspace_id, activeStoreId);
-    const storeAssets = stores.find((store) => store.id === activeStoreId)?.merchant_assets;
-    setSettings({
-      ...savedSettings,
-      companyProfile: savedSettings.companyProfile || storeAssets?.company_profile || "",
-      afterSalesPolicy: savedSettings.afterSalesPolicy || storeAssets?.after_sales_policy || "",
-      customizationPolicy:
-        savedSettings.customizationPolicy || storeAssets?.customization_policy || "",
-      detailTemplate: savedSettings.detailTemplate || storeAssets?.detail_template || "",
-      origin: savedSettings.origin || storeAssets?.origin || "",
-      brand: savedSettings.brand || storeAssets?.brand || "",
-    });
+    setSettings(savedSettings);
     setLiveProducts([]);
     setBatchId(createBatchId());
-  }, [activeStoreId, stores, user]);
+  }, [activeStoreId, user]);
+
+  useEffect(() => {
+    const storeAssets = stores.find((store) => store.id === activeStoreId)?.merchant_assets;
+    if (!storeAssets) {
+      return;
+    }
+    setSettings((current) => ({
+      ...current,
+      companyProfile: current.companyProfile || storeAssets.company_profile || "",
+      afterSalesPolicy: current.afterSalesPolicy || storeAssets.after_sales_policy || "",
+      customizationPolicy: current.customizationPolicy || storeAssets.customization_policy || "",
+      detailTemplate: current.detailTemplate || storeAssets.detail_template || "",
+      origin: current.origin || storeAssets.origin || "",
+      brand: current.brand || storeAssets.brand || "",
+    }));
+  }, [activeStoreId, stores]);
 
   const navigate = (view: AppView) => {
     window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;

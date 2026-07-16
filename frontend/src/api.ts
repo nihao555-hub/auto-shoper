@@ -3,7 +3,9 @@ import type {
   AlibabaCategoryRecommendationResult,
   AlibabaConnectedStore,
   AlibabaOAuthStatus,
+  AlibabaProductTypeCapabilities,
   AlibabaStoreDirectory,
+  AlibabaVideo,
   AuthUser,
   BatchApiResult,
   CapabilityResponse,
@@ -318,6 +320,7 @@ export type PhotoBankImage = {
   id: string;
   name: string;
   url: string;
+  fileSize?: number;
 };
 
 export const listPhotoBankGroups = async (): Promise<Record<string, unknown>> =>
@@ -338,6 +341,72 @@ export const listPhotoBankImages = async (
     ),
   );
 
+export const listAlibabaVideos = async (
+  page = 1,
+  pageSize = 20,
+  title = "",
+): Promise<Record<string, unknown>> => {
+  const params = new URLSearchParams({
+    current_page: String(page),
+    page_size: String(pageSize),
+  });
+  if (title.trim()) {
+    params.set("title", title.trim());
+  }
+  return parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/videos?${params.toString()}`),
+  );
+};
+
+export const uploadAlibabaVideoByUrl = async (payload: {
+  videoPath: string;
+  videoName: string;
+  coverUrl?: string;
+}): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/videos/upload-by-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_path: payload.videoPath,
+        video_name: payload.videoName,
+        cover_url: payload.coverUrl || undefined,
+      }),
+    }),
+  );
+
+export const uploadAlibabaVideoFile = async (
+  file: File,
+  placement: "main" | "detail",
+): Promise<Record<string, unknown>> => {
+  const body = new FormData();
+  body.append("video", file);
+  body.append("placement", placement);
+  body.append("video_name", file.name.replace(/\.[^.]+$/, ""));
+  return parseResponse<Record<string, unknown>>(
+    await apiFetch(`${API_ROOT}/alibaba/videos/upload-file`, {
+      method: "POST",
+      body,
+    }),
+  );
+};
+
+export const relateAlibabaVideo = async (
+  videoId: string,
+  productId: string,
+  placement: "main" | "detail",
+): Promise<Record<string, unknown>> =>
+  parseResponse<Record<string, unknown>>(
+    await apiFetch(
+      `${API_ROOT}/alibaba/videos/${encodeURIComponent(videoId)}/relations/${placement}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_id: productId }),
+      },
+    ),
+  );
+
 const readString = (record: Record<string, unknown>, keys: string[]): string => {
   for (const key of keys) {
     const value = record[key];
@@ -349,6 +418,13 @@ const readString = (record: Record<string, unknown>, keys: string[]): string => 
     }
   }
   return "";
+};
+
+const readNumber = (record: Record<string, unknown>, keys: string[]): number | undefined => {
+  const value = readString(record, keys);
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
 const collectRecords = (
@@ -410,18 +486,64 @@ export const findPhotoBankImages = (payload: Record<string, unknown>): PhotoBank
     id: readString(record, ["id", "image_id", "imageId"]) || `photo-${index}`,
     name: readString(record, ["name", "file_name", "fileName", "image_name", "imageName"]),
     url: readString(record, ["url", "image_url", "imageUrl", "image_uri", "imageUri"]),
+    fileSize: readNumber(record, ["file_size", "fileSize", "size"]),
   }));
 
+export const findAlibabaVideos = (payload: Record<string, unknown>): AlibabaVideo[] => {
+  const videos = collectRecords(payload, (record) =>
+    Boolean(readString(record, ["video_id", "videoId"])),
+  ).map((record) => {
+    const durationValue = readString(record, ["duration"]);
+    const duration = durationValue ? Number(durationValue) : undefined;
+    return {
+      id: readString(record, ["video_id", "videoId"]),
+      title: readString(record, ["title", "video_name", "videoName"]) || "未命名视频",
+      coverUrl: readString(record, ["cover_url", "coverUrl"]),
+      videoUrl: readString(record, ["video_url", "videoUrl"]),
+      status: readString(record, ["status", "video_status", "videoStatus"]),
+      duration: duration !== undefined && Number.isFinite(duration) ? duration : undefined,
+    };
+  });
+  return [...new Map(videos.map((video) => [video.id, video])).values()];
+};
+
+const normalizePhotoBankUrl = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  if (value.startsWith("//")) {
+    return `https:${value}`;
+  }
+  return value.startsWith("http://") || value.startsWith("https://") ? value : null;
+};
+
 export const findPhotoBankUrl = (payload: Record<string, unknown>): string | null => {
-  const preferredKeys = ["url", "image_url", "imageUrl", "image_uri", "imageUri"];
+  const preferredKeys = [
+    "photobank_url",
+    "photoBankUrl",
+    "url",
+    "image_url",
+    "imageUrl",
+    "image_uri",
+    "imageUri",
+  ];
   for (const key of preferredKeys) {
-    const value = payload[key];
-    if (typeof value === "string" && value.startsWith("http")) {
-      return value;
+    const url = normalizePhotoBankUrl(payload[key]);
+    if (url) {
+      return url;
     }
   }
   for (const value of Object.values(payload)) {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === "object") {
+          const nested = findPhotoBankUrl(item as Record<string, unknown>);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+    } else if (value && typeof value === "object") {
       const nested = findPhotoBankUrl(value as Record<string, unknown>);
       if (nested) {
         return nested;
@@ -437,7 +559,16 @@ export const findPhotoBankFileId = (payload: Record<string, unknown>): string | 
     return direct;
   }
   for (const value of Object.values(payload)) {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === "object") {
+          const nested = findPhotoBankFileId(item as Record<string, unknown>);
+          if (nested) {
+            return nested;
+          }
+        }
+      }
+    } else if (value && typeof value === "object") {
       const nested = findPhotoBankFileId(value as Record<string, unknown>);
       if (nested) {
         return nested;
@@ -450,6 +581,15 @@ export const findPhotoBankFileId = (payload: Record<string, unknown>): string | 
 export const getCategorySchema = async (categoryId: string): Promise<Record<string, unknown>> =>
   parseResponse<Record<string, unknown>>(
     await apiFetch(`${API_ROOT}/alibaba/categories/${categoryId}/schema?language=en_US`),
+  );
+
+export const getCategoryPublishCapabilities = async (
+  categoryId: string,
+): Promise<AlibabaProductTypeCapabilities> =>
+  parseResponse<AlibabaProductTypeCapabilities>(
+    await apiFetch(
+      `${API_ROOT}/alibaba/categories/${encodeURIComponent(categoryId)}/publish-capabilities?language=zh_cn`,
+    ),
   );
 
 export const listCategoryChildren = async (categoryId: string): Promise<AlibabaCategoryLevel> =>

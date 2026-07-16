@@ -33,6 +33,130 @@
     sans-serif;
 }
 
+.wb-video-library-heading,
+.wb-video-picker-toolbar,
+.wb-video-selections article,
+.wb-video-results button {
+  display: flex;
+  align-items: center;
+}
+
+.wb-video-library-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.wb-video-library-heading h3,
+.wb-video-library-heading p {
+  margin: 0;
+}
+
+.wb-video-library-heading p {
+  margin-top: 4px;
+  color: var(--ds-text-3);
+  font-size: 12px;
+}
+
+.wb-video-selections,
+.wb-video-results {
+  display: grid;
+  gap: 10px;
+}
+
+.wb-video-selections article {
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  background: var(--ds-surface);
+}
+
+.wb-video-selections article.is-selected {
+  border-color: #9bcdb7;
+  background: #f4fbf7;
+}
+
+.wb-video-selections article > div:nth-child(2) {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.wb-video-selections article strong,
+.wb-video-results strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-video-selections img,
+.wb-video-results img,
+.wb-video-placeholder {
+  width: 64px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #f1f2f3;
+}
+
+.wb-video-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ds-text-3);
+  font-size: 11px;
+}
+
+.wb-video-picker {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+}
+
+.wb-video-picker-toolbar {
+  gap: 8px;
+}
+
+.wb-video-picker-toolbar label {
+  flex: 1;
+}
+
+.wb-video-picker-toolbar input {
+  width: 100%;
+}
+
+.wb-video-results {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.wb-video-results button {
+  width: 100%;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wb-video-results button:hover {
+  border-color: var(--ds-brand);
+}
+
+.wb-video-results button > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
 /* ---------- shell ---------- */
 
 .ds-shell {
@@ -3048,6 +3172,48 @@ tr.is-failed .bt-store small {
   border-color: #efc5b8;
 }
 
+.wb-photobank-url-control {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.wb-photobank-url-control > img {
+  width: 56px;
+  height: 56px;
+  grid-row: span 2;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.wb-photobank-url-control > input {
+  min-width: 0;
+}
+
+.wb-photobank-url-control > label.button {
+  width: fit-content;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.wb-photobank-url-control > label.button.is-disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.wb-photobank-url-control > label.button input[type="file"] {
+  display: none;
+}
+
+.wb-photobank-url-control > small {
+  grid-column: 1 / -1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
 .wb-schema-options input {
   width: 14px;
   height: 14px;
@@ -5195,6 +5361,13 @@ tr.is-failed .bt-store small {
   font-size: 10px;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.upload-gallery-rule {
+  display: block;
+  color: var(--ds-text-3);
+  font-size: 9px;
+  line-height: 1.4;
 }
 
 .upload-source-tag {

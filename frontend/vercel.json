@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://auto-shoper-api.onrender.com/api/:path*"
+      "destination": "https://shuoma.site/auto-shoper-api/api/:path*"
     },
     {
       "source": "/health",
-      "destination": "https://auto-shoper-api.onrender.com/health"
+      "destination": "https://shuoma.site/auto-shoper-api/health"
     }
   ]
 }
