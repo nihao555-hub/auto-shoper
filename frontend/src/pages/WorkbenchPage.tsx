@@ -5264,6 +5264,23 @@ function WbInspector({
       ? !hasRepeatableSchemaFieldValue(product, field)
       : !hasSchemaValue(getSchemaFieldValue(product, field)),
   ).length;
+  const missingPriceModeFields = getPriceModeRequiredFields(product).filter(
+    (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
+  );
+  const missingDirectSchemaFields = Array.from(
+    new Map(
+      [
+        ...primarySchemaFields.filter(
+          (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
+        ),
+        ...missingPriceModeFields,
+      ].map((field) => [field.field, field]),
+    ).values(),
+  );
+  const missingRepeatableGroups = primaryRepeatableGroups.filter(([, fields]) =>
+    fields.some((field) => !hasRepeatableSchemaFieldValue(product, field)),
+  );
+  const directMissingCount = missingDirectSchemaFields.length + missingRepeatableGroups.length;
 
   const renderRepeatableGroups = (entries: Array<[string, SchemaFieldGuidance[]]>) =>
     entries.map(([groupPath, fields]) => (
@@ -5284,11 +5301,14 @@ function WbInspector({
           const task = taskByField.get(field.field);
           const value = getSchemaFieldValue(product, field);
           const inputId = `schema-${product.id}-${scope}-${index}`;
-          const requirementLabel = requiredSchemaFieldIds.has(field.field)
-            ? "API 必填"
-            : field.required
-              ? "条件必填"
-              : "API 选填";
+          const isFocusedMissingField = scope === "missing";
+          const requirementLabel = isFocusedMissingField
+            ? "创建草稿前填写"
+            : requiredSchemaFieldIds.has(field.field)
+              ? "API 必填"
+              : field.required
+                ? "条件必填"
+                : "API 选填";
           return (
             <div
               key={field.field}
@@ -5299,7 +5319,9 @@ function WbInspector({
                   {task?.question || schemaFieldLabel(field)}
                   <i>{requirementLabel}</i>
                   <i className="is-control">{schemaFieldControlLabel(field)}</i>
-                  <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                  {!isFocusedMissingField ? (
+                    <i className={`is-${field.responsibility}`}>{field.responsibility_label}</i>
+                  ) : null}
                 </span>
                 <small>
                   {task?.validation_errors?.[0] ||
@@ -5375,6 +5397,20 @@ function WbInspector({
             {missingFacts.length ? `还需填写 ${missingFacts.length} 项` : "必要信息已完成"}
           </span>
         </div>
+
+        {directMissingCount ? (
+          <section className="wb-missing-actions" aria-labelledby={`missing-${product.id}`}>
+            <div className="wb-missing-actions-heading">
+              <div>
+                <h3 id={`missing-${product.id}`}>完成下面信息即可创建草稿</h3>
+                <p>只显示当前商品真正缺少的内容；填写后会自动重新校验。</p>
+              </div>
+              <span>{directMissingCount} 项</span>
+            </div>
+            {renderRepeatableGroups(missingRepeatableGroups)}
+            {renderSchemaFields(missingDirectSchemaFields, "missing")}
+          </section>
+        ) : null}
 
         <details
           className="wb-inspector-optional wb-sku-optional"
@@ -6054,9 +6090,6 @@ function WbInspector({
                 <span>当前类目要求的必填项已全部完成</span>
               </div>
             ) : null}
-            {renderRepeatableGroups(primaryRepeatableGroups)}
-            {renderSchemaFields(primarySchemaFields, "required")}
-
             {advancedSchemaFields.length || advancedRepeatableGroups.length ? (
               <details className="wb-inspector-optional wb-schema-advanced">
                 <summary>
@@ -8647,7 +8680,7 @@ function selectedSchemaPriceMode(product: ProductRecord): string {
   return field ? schemaScalarText(getSchemaFieldValue(product, field)) : "";
 }
 
-function getPriceModeErrors(product: ProductRecord): string[] {
+function getPriceModeRequiredFields(product: ProductRecord): SchemaFieldGuidance[] {
   const mode = selectedSchemaPriceMode(product);
   const fields = getAllSchemaFields(product);
   const requiredPaths =
@@ -8661,11 +8694,16 @@ function getPriceModeErrors(product: ProductRecord): string[] {
         : [];
   return requiredPaths.flatMap((path) => {
     const field = fields.find((candidate) => candidate.field === path);
-    if (!field || hasSchemaValue(getSchemaFieldValue(product, field))) {
-      return [];
-    }
-    return [`${schemaFieldLabel(field)}缺失`];
+    return field ? [field] : [];
   });
+}
+
+function getPriceModeErrors(product: ProductRecord): string[] {
+  return getPriceModeRequiredFields(product).flatMap((field) =>
+    hasSchemaValue(getSchemaFieldValue(product, field))
+      ? []
+      : [`${schemaFieldLabel(field)}缺失`],
+  );
 }
 
 function isActivePriceModeField(
