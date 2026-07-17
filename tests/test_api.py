@@ -9,6 +9,7 @@ from httpx import MockTransport, Request, Response
 from backend.app.clients.ai import AIProviderError
 from backend.app.clients.alibaba import AlibabaAPIError, AlibabaClient, AlibabaConfigurationError
 from backend.app.config import Settings, get_settings
+from backend.app.database import get_database
 from backend.app.dependencies import get_ai_client, get_alibaba_client, get_alibaba_top_client
 from backend.app.main import app
 from backend.app.models import (
@@ -1490,3 +1491,67 @@ def test_official_listing_import_endpoint_normalizes_csv() -> None:
         "confirmed_at": None,
         "confirmed_by": None,
     }
+
+
+def test_official_listing_publish_is_idempotent_and_exposes_review_status() -> None:
+    fake = FakeAlibabaClient()
+    database_override = app.dependency_overrides[get_database]
+    database_override.publish_jobs.clear()
+    app.dependency_overrides[get_alibaba_client] = lambda: fake
+    try:
+        client = TestClient(app)
+        payload = {
+            "batch_id": "publish-idempotency-batch",
+            "items": [
+                {
+                    "reference": "IDEMPOTENT-1",
+                    "draft_product_id": "draft-1001",
+                    "category_id": "123",
+                    "schema_data": SCHEMA_XML,
+                    "fields": {
+                        "category_id": {"value": "123", "source": "user_confirmed"},
+                        "productTitle": {"value": "Watercolor paper", "source": "user_confirmed"},
+                    },
+                }
+            ],
+            "concurrency": 1,
+            "confirmed_by_user": True,
+        }
+        first = client.post("/api/v1/products/official-listing/batch/publish", json=payload)
+        calls_after_first_publish = len(fake.calls)
+        second = client.post("/api/v1/products/official-listing/batch/publish", json=payload)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()[0]["response"]["_publish_job"]["status"] == "submitted"
+        assert second.json()[0]["response"]["_idempotent_replay"] is True
+        assert len(fake.calls) == calls_after_first_publish
+
+        status = client.get(
+            "/api/v1/products/official-listing/batches/publish-idempotency-batch/publish-status"
+        )
+        assert status.status_code == 200
+        assert status.json()[0]["status"] == "pending_review"
+        assert status.json()[0]["draft_product_id"] == "draft-1001"
+    finally:
+        app.dependency_overrides.pop(get_alibaba_client, None)
+
+
+def test_workbench_snapshot_round_trip_uses_active_store_scope() -> None:
+    database_override = app.dependency_overrides[get_database]
+    database_override.workbench_snapshot = None
+    client = TestClient(app)
+    payload = {
+        "version": 1,
+        "batch_id": "restorable-batch",
+        "products": [{"reference": "RESTORE-1", "stage": "drafted"}],
+        "updated_at": "2026-07-17T12:00:00+08:00",
+    }
+
+    saved = client.put("/api/v1/products/official-listing/workbench-snapshot", json=payload)
+    restored = client.get("/api/v1/products/official-listing/workbench-snapshot")
+
+    assert saved.status_code == 200
+    assert restored.status_code == 200
+    assert restored.json()["batch_id"] == "restorable-batch"
+    assert restored.json()["products"] == payload["products"]

@@ -35,7 +35,12 @@ export type ProductStage =
   | "drafting"
   | "drafted"
   | "publishing"
+  | "submitted"
+  | "reviewing"
   | "published"
+  | "rejected"
+  | "delisted"
+  | "unknown"
   | "error";
 
 export type DraftField = {
@@ -98,6 +103,13 @@ export type ProductImage = {
   photoBankUrl?: string;
   photoBankFileId?: string;
   source?: "upload" | "photobank" | "generated";
+  width?: number;
+  height?: number;
+  qualityIssues?: Array<{
+    level: "blocking" | "advisory";
+    code: string;
+    message: string;
+  }>;
 };
 
 export type SchemaOption = {
@@ -261,6 +273,13 @@ export type ProductRecord = {
   draftDifferences?: DraftFieldDifference[];
   draftReadbackError?: string;
   draftReadbackVerified?: boolean;
+  transactionType?: "sourcing" | "wholesale";
+  complianceEvidence?: {
+    source: string;
+    validUntil?: string;
+    notes?: string;
+  };
+  publishStatus?: PublishJobStatus;
   mainVideo?: AlibabaVideo;
   detailVideo?: AlibabaVideo;
   videoRelationErrors?: string[];
@@ -272,6 +291,31 @@ export type ProductRecord = {
   fieldTaskSummary?: FieldTaskSummary;
   translation?: ProductTranslation;
   isDemo?: boolean;
+};
+
+export type PublishJobStatus = {
+  id: string;
+  batch_id: string;
+  reference: string;
+  draft_product_id?: string | null;
+  published_product_id?: string | null;
+  status:
+    | "submitting"
+    | "submitted"
+    | "pending_review"
+    | "approved"
+    | "rejected"
+    | "delisted"
+    | "unknown"
+    | "explicit_failed";
+  platform_status?: string | null;
+  quality: Record<string, unknown>;
+  error?: string | null;
+  trace_id?: string | null;
+  attempt_count: number;
+  last_checked_at?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type StoreSettings = {

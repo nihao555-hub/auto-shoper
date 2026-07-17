@@ -316,6 +316,52 @@ CREATE TABLE IF NOT EXISTS listing_metric_events (
 );
 CREATE INDEX IF NOT EXISTS idx_listing_metric_events_lookup
     ON listing_metric_events(workspace_id, event_type, created_at);
+CREATE TABLE IF NOT EXISTS listing_publish_jobs (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    draft_product_id TEXT,
+    published_product_id TEXT,
+    status TEXT NOT NULL,
+    platform_status TEXT,
+    request_json TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    quality_json TEXT NOT NULL,
+    error TEXT,
+    trace_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_checked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(workspace_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_listing_publish_jobs_lookup
+    ON listing_publish_jobs(workspace_id, batch_id, reference, updated_at);
+CREATE TABLE IF NOT EXISTS workbench_snapshots (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    store_connection_id TEXT NOT NULL REFERENCES store_connections(id) ON DELETE CASCADE,
+    snapshot_json TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_by_user_id TEXT NOT NULL REFERENCES users(id),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(workspace_id, store_connection_id)
+);
+CREATE TABLE IF NOT EXISTS listing_operation_audits (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    product_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listing_operation_audits_lookup
+    ON listing_operation_audits(workspace_id, product_id, created_at);
 """
 
 
@@ -525,6 +571,68 @@ OCEANBASE_SCHEMA = (
         KEY idx_listing_metric_events_lookup (workspace_id, event_type, created_at),
         CONSTRAINT fk_listing_metrics_workspace FOREIGN KEY (workspace_id)
             REFERENCES workspaces(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_publish_jobs (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        batch_id VARCHAR(100) NOT NULL,
+        reference VARCHAR(200) NOT NULL,
+        idempotency_key VARCHAR(64) NOT NULL,
+        draft_product_id VARCHAR(255),
+        published_product_id VARCHAR(255),
+        status VARCHAR(32) NOT NULL,
+        platform_status VARCHAR(255),
+        request_json LONGTEXT NOT NULL,
+        response_json LONGTEXT NOT NULL,
+        quality_json LONGTEXT NOT NULL,
+        error TEXT,
+        trace_id VARCHAR(255),
+        attempt_count INT NOT NULL DEFAULT 0,
+        last_checked_at VARCHAR(40),
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_listing_publish_jobs_key (workspace_id, idempotency_key),
+        KEY idx_listing_publish_jobs_lookup (workspace_id, batch_id, reference, updated_at),
+        CONSTRAINT fk_listing_publish_jobs_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workbench_snapshots (
+        workspace_id VARCHAR(36) NOT NULL,
+        store_connection_id VARCHAR(36) NOT NULL,
+        snapshot_json LONGTEXT NOT NULL,
+        version INT NOT NULL,
+        updated_by_user_id VARCHAR(36) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (workspace_id, store_connection_id),
+        CONSTRAINT fk_workbench_snapshots_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE,
+        CONSTRAINT fk_workbench_snapshots_store FOREIGN KEY (store_connection_id)
+            REFERENCES store_connections(id) ON DELETE CASCADE,
+        CONSTRAINT fk_workbench_snapshots_user FOREIGN KEY (updated_by_user_id)
+            REFERENCES users(id)
+    ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS listing_operation_audits (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        product_id VARCHAR(255) NOT NULL,
+        operation VARCHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        request_json LONGTEXT NOT NULL,
+        response_json LONGTEXT NOT NULL,
+        error TEXT,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_listing_operation_audits_lookup (workspace_id, product_id, created_at),
+        CONSTRAINT fk_listing_operation_audits_workspace FOREIGN KEY (workspace_id)
+            REFERENCES workspaces(id) ON DELETE CASCADE,
+        CONSTRAINT fk_listing_operation_audits_user FOREIGN KEY (user_id)
+            REFERENCES users(id)
     ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
     """,
 )
@@ -1458,6 +1566,191 @@ class Database:
             ).fetchall()
         return [self._draft_snapshot_from_row(row) for row in rows]
 
+    def get_publish_job(
+        self,
+        workspace_id: str,
+        idempotency_key: str,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM listing_publish_jobs
+                WHERE workspace_id = ? AND idempotency_key = ?
+                """,
+                (workspace_id, idempotency_key),
+            ).fetchone()
+        return self._publish_job_from_row(row) if row is not None else None
+
+    def list_publish_jobs(self, workspace_id: str, batch_id: str) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM listing_publish_jobs
+                WHERE workspace_id = ? AND batch_id = ?
+                ORDER BY created_at ASC
+                """,
+                (workspace_id, batch_id),
+            ).fetchall()
+        return [self._publish_job_from_row(row) for row in rows]
+
+    def upsert_publish_job(
+        self,
+        *,
+        workspace_id: str,
+        batch_id: str,
+        reference: str,
+        idempotency_key: str,
+        status: str,
+        request: dict[str, object],
+        draft_product_id: str | None = None,
+        published_product_id: str | None = None,
+        platform_status: str | None = None,
+        response: dict[str, object] | None = None,
+        quality: dict[str, object] | None = None,
+        error: str | None = None,
+        trace_id: str | None = None,
+        increment_attempt: bool = False,
+        checked: bool = False,
+    ) -> dict[str, object]:
+        now = _iso()
+        existing = self.get_publish_job(workspace_id, idempotency_key)
+        with self._lock, self._connection:
+            if existing is None:
+                self._connection.execute(
+                    """
+                    INSERT INTO listing_publish_jobs(
+                        id, workspace_id, batch_id, reference, idempotency_key,
+                        draft_product_id, published_product_id, status, platform_status,
+                        request_json, response_json, quality_json, error, trace_id,
+                        attempt_count, last_checked_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()), workspace_id, batch_id, reference, idempotency_key,
+                        draft_product_id, published_product_id, status, platform_status,
+                        json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(response or {}, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(quality or {}, ensure_ascii=False, separators=(",", ":")),
+                        error, trace_id, 1 if increment_attempt else 0,
+                        now if checked else None, now, now,
+                    ),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    UPDATE listing_publish_jobs SET
+                        draft_product_id = ?, published_product_id = ?, status = ?,
+                        platform_status = ?, request_json = ?, response_json = ?,
+                        quality_json = ?, error = ?, trace_id = ?,
+                        attempt_count = attempt_count + ?, last_checked_at = ?, updated_at = ?
+                    WHERE workspace_id = ? AND idempotency_key = ?
+                    """,
+                    (
+                        draft_product_id or existing.get("draft_product_id"),
+                        published_product_id or existing.get("published_product_id"),
+                        status, platform_status,
+                        json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(response if response is not None else existing.get("response", {}), ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(quality if quality is not None else existing.get("quality", {}), ensure_ascii=False, separators=(",", ":")),
+                        error, trace_id or existing.get("trace_id"),
+                        1 if increment_attempt else 0,
+                        now if checked else existing.get("last_checked_at"), now,
+                        workspace_id, idempotency_key,
+                    ),
+                )
+        saved = self.get_publish_job(workspace_id, idempotency_key)
+        if saved is None:
+            raise RuntimeError("发布任务保存失败")
+        return saved
+
+    def save_workbench_snapshot(
+        self,
+        *,
+        workspace_id: str,
+        store_connection_id: str,
+        snapshot: dict[str, object],
+        version: int,
+        user_id: str,
+    ) -> dict[str, object]:
+        now = _iso()
+        query = (
+            """
+            INSERT INTO workbench_snapshots(
+                workspace_id, store_connection_id, snapshot_json, version,
+                updated_by_user_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json),
+                version = VALUES(version), updated_by_user_id = VALUES(updated_by_user_id),
+                updated_at = VALUES(updated_at)
+            """
+            if self._connection.dialect == "oceanbase"
+            else """
+            INSERT INTO workbench_snapshots(
+                workspace_id, store_connection_id, snapshot_json, version,
+                updated_by_user_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, store_connection_id) DO UPDATE SET
+                snapshot_json = excluded.snapshot_json, version = excluded.version,
+                updated_by_user_id = excluded.updated_by_user_id, updated_at = excluded.updated_at
+            """
+        )
+        with self._lock, self._connection:
+            self._connection.execute(
+                query,
+                (workspace_id, store_connection_id, json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")), version, user_id, now),
+            )
+        return {"snapshot": snapshot, "version": version, "updated_at": now}
+
+    def get_workbench_snapshot(
+        self,
+        workspace_id: str,
+        store_connection_id: str,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT snapshot_json, version, updated_at FROM workbench_snapshots
+                WHERE workspace_id = ? AND store_connection_id = ?
+                """,
+                (workspace_id, store_connection_id),
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(str(row["snapshot_json"]))
+        return {
+            "snapshot": value if isinstance(value, dict) else {},
+            "version": _int_value(row["version"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def record_operation_audit(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        product_id: str,
+        operation: str,
+        status: str,
+        request: dict[str, object],
+        response: dict[str, object] | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO listing_operation_audits(
+                    id, workspace_id, user_id, product_id, operation, status,
+                    request_json, response_json, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), workspace_id, user_id, product_id, operation, status,
+                    json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(response or {}, ensure_ascii=False, separators=(",", ":")),
+                    error, _iso(),
+                ),
+            )
+
     def create_listing_template(
         self,
         *,
@@ -1793,6 +2086,28 @@ class Database:
             differences=json.loads(str(row["differences_json"])),
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
+
+    @staticmethod
+    def _publish_job_from_row(row: DatabaseRow) -> dict[str, object]:
+        return {
+            "id": str(row["id"]),
+            "batch_id": str(row["batch_id"]),
+            "reference": str(row["reference"]),
+            "idempotency_key": str(row["idempotency_key"]),
+            "draft_product_id": str(row["draft_product_id"]) if row["draft_product_id"] else None,
+            "published_product_id": str(row["published_product_id"]) if row["published_product_id"] else None,
+            "status": str(row["status"]),
+            "platform_status": str(row["platform_status"]) if row["platform_status"] else None,
+            "request": json.loads(str(row["request_json"])),
+            "response": json.loads(str(row["response_json"])),
+            "quality": json.loads(str(row["quality_json"])),
+            "error": str(row["error"]) if row["error"] else None,
+            "trace_id": str(row["trace_id"]) if row["trace_id"] else None,
+            "attempt_count": _int_value(row["attempt_count"]),
+            "last_checked_at": str(row["last_checked_at"]) if row["last_checked_at"] else None,
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
 
     def list_batches(self, workspace_id: str) -> list[dict[str, str]]:
         with self._lock:

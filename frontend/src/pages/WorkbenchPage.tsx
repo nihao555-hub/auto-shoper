@@ -57,7 +57,9 @@ import {
   findPhotoBankUrl,
   findSchemaData,
   generateProductImages,
+  getBatchPublishStatus,
   getAsyncFieldOptions,
+  getCategoryPublishCapabilities,
   getCategorySchema,
   getListingFeatureFlags,
   getListingMetrics,
@@ -100,6 +102,7 @@ import type {
   ProductImage,
   ProductImageCandidate,
   ProductRecord,
+  PublishJobStatus,
   ProductTranslation,
   SchemaFieldGuidance,
   StoreSettings,
@@ -728,6 +731,11 @@ export function WorkbenchPage({
     (product) =>
       product.stage === "drafted" ||
       product.stage === "publishing" ||
+      product.stage === "submitted" ||
+      product.stage === "reviewing" ||
+      product.stage === "rejected" ||
+      product.stage === "delisted" ||
+      product.stage === "unknown" ||
       product.stage === "published",
   );
   const targetMarket = getTargetMarket(targetMarketCode, targetLanguageCode);
@@ -784,6 +792,45 @@ export function WorkbenchPage({
     step >= 1 && step <= 2 ? step : aiReviewComplete ? 2 : 1,
     step >= 3 ? step : maxAccessibleStep,
   ];
+  const publishPollingKey = products
+    .filter(
+      (product) =>
+        !product.isDemo &&
+        ["publishing", "submitted", "reviewing", "unknown"].includes(product.stage),
+    )
+    .map((product) => product.reference)
+    .sort()
+    .join("|");
+
+  useEffect(() => {
+    if (!publishPollingKey) {
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const jobs = await getBatchPublishStatus(batchId, true);
+        if (cancelled || !jobs.length) {
+          return;
+        }
+        const jobsByReference = new Map(jobs.map((job) => [job.reference, job]));
+        onProductsChange((current) =>
+          current.map((product) => {
+            const job = jobsByReference.get(product.reference);
+            return job ? applyPublishJobToProduct(product, job) : product;
+          }),
+        );
+      } catch {
+        // 状态回查失败不触发重复发布；保留当前状态，下一轮继续回查。
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [batchId, onProductsChange, publishPollingKey]);
 
   useEffect(() => {
     if (step > maxAccessibleStep) {
@@ -897,7 +944,7 @@ export function WorkbenchPage({
     );
   }, [featureFlags.workflow_v2, onProductsChange, products]);
 
-  const handleFiles = (files: FileList | File[], targetProductId: string | null = null) => {
+  const handleFiles = async (files: FileList | File[], targetProductId: string | null = null) => {
     const supportedImages = Array.from(files).filter((file) => file.type.startsWith("image/"));
     const oversizedImages = supportedImages.filter(
       (file) => file.size > ALIBABA_PHOTO_BANK_MAX_BYTES,
@@ -919,16 +966,19 @@ export function WorkbenchPage({
 
     const now = Date.now();
     const createImages = (filesForProduct: File[], productIndex: number) =>
-      filesForProduct.map((file, imageIndex) => ({
-        id: `uploaded-${now}-${productIndex}-image-${imageIndex}`,
-        url: URL.createObjectURL(file),
-        name: file.name,
-        sourceFile: file,
-        fileSize: file.size,
-        source: "upload" as const,
-      }));
+      Promise.all(
+        filesForProduct.map(async (file, imageIndex) => ({
+          id: `uploaded-${now}-${productIndex}-image-${imageIndex}`,
+          url: URL.createObjectURL(file),
+          name: file.name,
+          sourceFile: file,
+          fileSize: file.size,
+          source: "upload" as const,
+          ...(await inspectProductImage(file)),
+        })),
+      );
     if (targetProductId) {
-      const images = createImages(imageFiles, 0);
+      const images = await createImages(imageFiles, 0);
       replaceProduct(targetProductId, (product) => ({
         ...product,
         images: [...product.images, ...images],
@@ -946,8 +996,8 @@ export function WorkbenchPage({
     }
     const groups =
       uploadGroupingMode === "separate_products" ? imageFiles.map((file) => [file]) : [imageFiles];
-    const newProducts = groups.map((filesForProduct, productIndex): ProductRecord => {
-      const images = createImages(filesForProduct, productIndex);
+    const newProducts = await Promise.all(groups.map(async (filesForProduct, productIndex): Promise<ProductRecord> => {
+      const images = await createImages(filesForProduct, productIndex);
       return {
         id: `uploaded-${now}-${productIndex}`,
         reference: `AUTO-${String(now).slice(-6)}-${String(productIndex + 1).padStart(2, "0")}`,
@@ -963,7 +1013,7 @@ export function WorkbenchPage({
         facts: createEmptyFacts(settings),
         errors: ["等待 AI 分析"],
       };
-    });
+    }));
     if (dataMode === "live" && backendConnected && featureFlags.metrics) {
       for (const product of newProducts) {
         void recordListingMetricEvent({
@@ -1002,7 +1052,7 @@ export function WorkbenchPage({
 
   const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
-      handleFiles(event.target.files, uploadTargetProductId.current);
+      void handleFiles(event.target.files, uploadTargetProductId.current);
       uploadTargetProductId.current = null;
       event.target.value = "";
     }
@@ -1012,7 +1062,7 @@ export function WorkbenchPage({
     event.preventDefault();
     setDragActive(false);
     uploadTargetProductId.current = null;
-    handleFiles(event.dataTransfer.files);
+    void handleFiles(event.dataTransfer.files);
   };
 
   const pickProductImages = (productId: string | null = null) => {
@@ -2132,7 +2182,7 @@ export function WorkbenchPage({
   };
 
   const confirmPublish = async () => {
-    const targets = getActionProducts(products, selected).filter(
+    let targets = getActionProducts(products, selected).filter(
       (product) =>
         product.stage === "drafted" ||
         (product.stage === "error" && Boolean(product.draftProductId)),
@@ -2143,6 +2193,51 @@ export function WorkbenchPage({
     if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
       setPublishDialogOpen(false);
       return;
+    }
+    if (targets.some((product) => !product.isDemo)) {
+      try {
+        const refreshedTargets = await Promise.all(
+          targets.map(async (product) => {
+            if (product.isDemo) {
+              return product;
+            }
+            const payload = await getCategorySchema(product.facts.categoryId);
+            const schemaData = findSchemaData(payload);
+            if (!schemaData) {
+              throw new Error(`${product.reference}：Alibaba 未返回实时类目 Schema`);
+            }
+            const schemaGuidance = await getSchemaGuidance(schemaData);
+            return syncProductSchemaFields({ ...product, schemaData, schemaGuidance }, settings);
+          }),
+        );
+        const changedReferences = refreshedTargets.flatMap((product, index) => {
+          const previousIds = [...(targets[index].schemaGuidance?.required_field_ids ?? [])].sort();
+          const nextIds = [...(product.schemaGuidance?.required_field_ids ?? [])].sort();
+          return previousIds.join("|") === nextIds.join("|") ? [] : [product.reference];
+        });
+        if (changedReferences.length) {
+          const refreshedById = new Map(refreshedTargets.map((product) => [product.id, product]));
+          onProductsChange((current) =>
+            current.map((product) => refreshedById.get(product.id) ?? product),
+          );
+          setPublishDialogOpen(false);
+          setStep(2);
+          notify(
+            "warning",
+            "Alibaba 类目要求已更新",
+            `${changedReferences.join("、")} 的实时必填项发生变化，请检查新出现的补填入口后再创建草稿。`,
+          );
+          return;
+        }
+        targets = refreshedTargets;
+      } catch (error) {
+        notify(
+          "error",
+          "发布前类目校验失败",
+          error instanceof Error ? error.message : "请稍后重试，系统不会在校验不明时提交发布。",
+        );
+        return;
+      }
     }
     setBusy(true);
     setPublishDialogOpen(false);
@@ -2161,31 +2256,63 @@ export function WorkbenchPage({
       }
       const results = await publishBatch(batchId, targets, settings);
       const resultByReference = new Map(results.map((result) => [result.reference, result]));
-      onProductsChange(
-        products.map((product) => {
+      onProductsChange((current) =>
+        current.map((product) => {
           const result = resultByReference.get(product.reference);
           if (!result) {
             return product;
           }
-          return {
-            ...product,
-            stage: result.success ? "published" : "error",
-            errors: result.success ? [] : [result.error ?? "正式发布失败"],
-            draftProductId:
-              (result.success ? getProductId(result.response) : undefined) ??
-              product.draftProductId,
-          };
+          const job = getPublishJob(result.response);
+          if (job) {
+            return applyPublishJobToProduct(product, job);
+          }
+          return result.success
+            ? {
+                ...product,
+                stage: "submitted",
+                errors: [],
+                draftProductId: getProductId(result.response) ?? product.draftProductId,
+              }
+            : {
+                ...product,
+                stage: "error",
+                errors: [result.error ?? "正式发布失败"],
+              };
         }),
       );
       const succeeded = results.filter((result) => result.success).length;
       notify(
         succeeded === results.length ? "success" : "warning",
-        `发布请求完成: ${succeeded}/${results.length}`,
-        "请继续关注 Alibaba 审核状态。",
+        `发布提交完成: ${succeeded}/${results.length}`,
+        "提交成功不等于审核通过；系统会自动回查 Alibaba 审核状态。",
       );
     } catch (error) {
-      markProducts(targets, "error", error instanceof Error ? error.message : "发布失败");
-      notify("error", "正式发布失败", error instanceof Error ? error.message : undefined);
+      try {
+        const jobs = await getBatchPublishStatus(batchId, true);
+        const jobsByReference = new Map(jobs.map((job) => [job.reference, job]));
+        onProductsChange((current) =>
+          current.map((product) => {
+            const job = jobsByReference.get(product.reference);
+            if (job) {
+              return applyPublishJobToProduct(product, job);
+            }
+            return targets.some((target) => target.id === product.id)
+              ? {
+                  ...product,
+                  stage: "unknown",
+                  errors: ["提交结果未知，系统将继续回查；请勿重复点击发布"],
+                }
+              : product;
+          }),
+        );
+      } catch {
+        markProducts(targets, "unknown", "提交结果未知，系统将继续回查；请勿重复点击发布");
+      }
+      notify(
+        "warning",
+        "发布结果暂时未知",
+        error instanceof Error ? error.message : "系统会继续回查，避免重复创建商品。",
+      );
     } finally {
       setBusy(false);
       setPublishConfirmed(false);
@@ -5097,7 +5224,10 @@ function WbInspector({
     setCategoryBusy(true);
     setCategoryError("");
     try {
-      const payload = await getCategorySchema(option.id);
+      const [payload, publishCapabilities] = await Promise.all([
+        getCategorySchema(option.id),
+        getCategoryPublishCapabilities(option.id),
+      ]);
       const schemaData = findSchemaData(payload);
       if (!schemaData) {
         throw new Error("Alibaba 未返回类目 Schema");
@@ -5108,6 +5238,15 @@ function WbInspector({
           ...selectedProduct,
           schemaData,
           schemaGuidance,
+          publishCapabilities,
+          transactionType:
+            publishCapabilities.support_post_whole_sale &&
+            !publishCapabilities.support_post_sourcing
+              ? "wholesale"
+              : publishCapabilities.support_post_sourcing &&
+                  !publishCapabilities.support_post_whole_sale
+                ? "sourcing"
+                : product.transactionType,
         },
         settings,
       );
@@ -5155,24 +5294,28 @@ function WbInspector({
     setCategoryPath(nextPath);
     void loadCategoryOptions(nextPath.at(-1)?.id ?? "0");
   };
-  const addProductImages = (event: ChangeEvent<HTMLInputElement>) => {
+  const addProductImages = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) {
       return;
     }
     const now = Date.now();
+    const inspectedImages = await Promise.all(
+      files.map(async (file, index) => ({
+        id: `added-${now}-${index}`,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        sourceFile: file,
+        fileSize: file.size,
+        source: "upload" as const,
+        ...(await inspectProductImage(file)),
+      })),
+    );
     onChange({
       ...product,
       images: [
         ...product.images,
-        ...files.map((file, index) => ({
-          id: `added-${now}-${index}`,
-          url: URL.createObjectURL(file),
-          name: file.name,
-          sourceFile: file,
-          fileSize: file.size,
-          source: "upload" as const,
-        })),
+        ...inspectedImages,
       ],
     });
     event.target.value = "";
@@ -5295,6 +5438,9 @@ function WbInspector({
     }
   };
   const complianceNote = product.facts.certifications[0] ?? "";
+  const imageQualityIssues = product.images.flatMap((image) =>
+    (image.qualityIssues ?? []).map((issue) => ({ ...issue, imageName: image.name })),
+  );
   const missingFacts = getFactErrors(product);
   const allSchemaFields = getAllSchemaFields(product);
   const supportsMainVideo = allSchemaFields.some(isMainVideoSchemaField);
@@ -5563,6 +5709,44 @@ function WbInspector({
               </span>
             </div>
           )}
+          {product.facts.categoryId && product.publishCapabilities ? (
+            <div className="wb-transaction-type">
+              <div>
+                <strong>商品交易类型</strong>
+                <small>按买家实际成交方式选择；这会影响价格、库存和发布规则。</small>
+              </div>
+              <div className="wb-transaction-type-options" role="radiogroup">
+                {product.publishCapabilities.support_post_sourcing ? (
+                  <label className={product.transactionType === "sourcing" ? "is-selected" : ""}>
+                    <input
+                      type="radio"
+                      name={`transaction-${product.id}`}
+                      checked={product.transactionType === "sourcing"}
+                      onChange={() => onChange({ ...product, transactionType: "sourcing" })}
+                    />
+                    <span>
+                      <strong>询盘品</strong>
+                      <small>适合定制、先沟通再报价，通常使用 FOB 区间报价。</small>
+                    </span>
+                  </label>
+                ) : null}
+                {product.publishCapabilities.support_post_whole_sale ? (
+                  <label className={product.transactionType === "wholesale" ? "is-selected" : ""}>
+                    <input
+                      type="radio"
+                      name={`transaction-${product.id}`}
+                      checked={product.transactionType === "wholesale"}
+                      onChange={() => onChange({ ...product, transactionType: "wholesale" })}
+                    />
+                    <span>
+                      <strong>在线批发下单品</strong>
+                      <small>适合固定 SKU、明确价格和库存，买家可直接下单。</small>
+                    </span>
+                  </label>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {categoryPickerOpen ? (
             <div className="wb-category-picker">
               <div className="wb-category-picker-bar">
@@ -5862,6 +6046,18 @@ function WbInspector({
           </section>
         ) : null}
 
+        {imageQualityIssues.length ? (
+          <section className="wb-image-quality-summary" aria-label="图片质量预检">
+            <strong>图片质量预检</strong>
+            <ul>
+              {imageQualityIssues.map((issue, index) => (
+                <li key={`${issue.imageName}-${issue.code}-${index}`} className={`is-${issue.level}`}>
+                  {issue.imageName}：{issue.message}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <section className="wb-inspector-section wb-image-generation wb-image-generation-prominent">
           <div className="wb-image-generation-heading">
             <div>
@@ -6435,6 +6631,47 @@ function WbInspector({
                     </div>
                   </div>
                 </div>
+                {complianceNote.trim() ? (
+                  <div className="wb-field wb-field-split">
+                    <div>
+                      <span className="wb-field-label">证据来源（必填）</span>
+                      <div className="wb-input">
+                        <input
+                          value={product.complianceEvidence?.source ?? ""}
+                          placeholder="如：SGS 报告编号、证书编号或内部检测记录"
+                          onChange={(event) =>
+                            onChange({
+                              ...product,
+                              complianceEvidence: {
+                                ...product.complianceEvidence,
+                                source: event.target.value,
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <span className="wb-field-label">有效期（如适用）</span>
+                      <div className="wb-input">
+                        <input
+                          type="date"
+                          value={product.complianceEvidence?.validUntil ?? ""}
+                          onChange={(event) =>
+                            onChange({
+                              ...product,
+                              complianceEvidence: {
+                                source: product.complianceEvidence?.source ?? "",
+                                ...product.complianceEvidence,
+                                validUntil: event.target.value,
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </section>
             </details>
           </>
@@ -8205,11 +8442,18 @@ function PreviewStep({
       Boolean(product.draftProductId) ||
       product.stage === "drafted" ||
       product.stage === "publishing" ||
+      product.stage === "submitted" ||
+      product.stage === "reviewing" ||
       product.stage === "published" ||
+      product.stage === "rejected" ||
+      product.stage === "delisted" ||
+      product.stage === "unknown" ||
       product.stage === "error",
   );
-  const succeeded = rows.filter((product) => product.stage !== "error").length;
-  const failed = rows.length - succeeded;
+  const succeeded = rows.filter((product) => product.stage === "published").length;
+  const failed = rows.filter((product) =>
+    ["error", "rejected", "delisted"].includes(product.stage),
+  ).length;
   const toggleExpanded = (id: string) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -8223,7 +8467,7 @@ function PreviewStep({
   };
   const statusBadge = (product: ProductRecord) => {
     if (product.stage === "published") {
-      return <SourceBadge source="trusted" label="已发布" />;
+      return <SourceBadge source="trusted" label="审核通过 / 已发布" />;
     }
     if (product.stage === "publishing") {
       return (
@@ -8235,6 +8479,21 @@ function PreviewStep({
     }
     if (product.stage === "error") {
       return <SourceBadge source="missing" label="失败" />;
+    }
+    if (product.stage === "submitted") {
+      return <SourceBadge source="confirmed" label="已提交，待平台受理" />;
+    }
+    if (product.stage === "reviewing") {
+      return <SourceBadge source="confirmed" label="Alibaba 审核中" />;
+    }
+    if (product.stage === "rejected") {
+      return <SourceBadge source="missing" label="审核驳回" />;
+    }
+    if (product.stage === "delisted") {
+      return <SourceBadge source="missing" label="已下架" />;
+    }
+    if (product.stage === "unknown") {
+      return <SourceBadge source="default" label="状态回查中" />;
     }
     return <SourceBadge source="default" label="草稿待发布" />;
   };
@@ -8248,13 +8507,7 @@ function PreviewStep({
         product.reference,
         product.translation?.confirmed ? product.translation.title : product.title,
         storeName,
-        product.stage === "published"
-          ? "已发布"
-          : product.stage === "publishing"
-            ? "发布中"
-            : product.stage === "error"
-              ? "失败"
-              : "草稿待发布",
+        publishStageLabel(product.stage),
         product.errors.join("；"),
       ]
         .map(escapeCsvValue)
@@ -8308,7 +8561,7 @@ function PreviewStep({
           <CheckCircle size={22} weight="fill" />
         )}
         <p>
-          本批 {succeeded}/{rows.length} 个草稿创建成功
+          本批已审核发布 {succeeded}/{rows.length} 个商品
           {failed ? (
             <>
               {" "}
@@ -8337,7 +8590,7 @@ function PreviewStep({
               <tbody>
                 {rows.map((product) => {
                   const canPublish = product.stage === "drafted" && product.draftReadbackVerified;
-                  const isFailed = product.stage === "error";
+                  const isFailed = ["error", "rejected", "delisted"].includes(product.stage);
                   const isExpanded = expanded.has(product.id);
                   const productUrl =
                     product.stage === "published" && product.draftProductId
@@ -8473,6 +8726,23 @@ function PreviewStep({
                                   product={product}
                                   onAcceptChanges={() => onAcceptReadback(product.id)}
                                 />
+                                {product.publishStatus ? (
+                                  <div className="wb-publish-status-detail">
+                                    <strong>Alibaba 状态回查</strong>
+                                    <span>平台状态：{product.publishStatus.platform_status || "待返回"}</span>
+                                    <span>
+                                      最近检查：
+                                      {product.publishStatus.last_checked_at
+                                        ? new Date(product.publishStatus.last_checked_at).toLocaleString()
+                                        : "尚未检查"}
+                                    </span>
+                                    {Object.keys(product.publishStatus.quality ?? {}).length ? (
+                                      <pre>{JSON.stringify(product.publishStatus.quality, null, 2)}</pre>
+                                    ) : (
+                                      <small>平台暂未返回质量分或诊断信息。</small>
+                                    )}
+                                  </div>
+                                ) : null}
                               </div>
                             )}
                           </td>
@@ -8631,6 +8901,56 @@ function getSchemaMainImageLimit(product: ProductRecord): number | undefined {
   return product.schemaGuidance?.main_image_max_size_bytes;
 }
 
+async function inspectProductImage(
+  file: File,
+): Promise<Pick<ProductImage, "width" | "height" | "qualityIssues">> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const { width, height } = bitmap;
+    bitmap.close();
+    const qualityIssues: NonNullable<ProductImage["qualityIssues"]> = [];
+    if (width < 300 || height < 300) {
+      qualityIssues.push({
+        level: "blocking",
+        code: "resolution_too_low",
+        message: `分辨率仅 ${width}×${height}，过低，无法保证商品图可用`,
+      });
+    } else if (width < 1000 || height < 1000) {
+      qualityIssues.push({
+        level: "advisory",
+        code: "resolution_low",
+        message: `分辨率为 ${width}×${height}，建议使用至少 1000×1000 的清晰原图`,
+      });
+    }
+    const aspectRatio = Math.max(width / height, height / width);
+    if (aspectRatio > 3) {
+      qualityIssues.push({
+        level: "advisory",
+        code: "extreme_aspect_ratio",
+        message: "长宽比过于极端，作为主图可能被裁切或影响展示",
+      });
+    }
+    if (file.size < 40 * 1024) {
+      qualityIssues.push({
+        level: "advisory",
+        code: "very_small_file",
+        message: "文件体积过小，可能经过度压缩，请人工检查清晰度",
+      });
+    }
+    return { width, height, qualityIssues };
+  } catch {
+    return {
+      qualityIssues: [
+        {
+          level: "blocking",
+          code: "unreadable_image",
+          message: "浏览器无法读取图片尺寸，请重新导出为 JPG、PNG 或 WebP",
+        },
+      ],
+    };
+  }
+}
+
 function formatFileSize(bytes: number): string {
   return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
 }
@@ -8778,8 +9098,17 @@ function getFactErrors(product: ProductRecord): string[] {
       errors.push("商品标题缺失");
     }
     errors.push(...getSkuErrors(product));
+    errors.push(...getTransactionTypeErrors(product));
     errors.push(...getPriceModeErrors(product));
     errors.push(...getSemiManagedErrors(product));
+    errors.push(...getComplianceErrors(product));
+    errors.push(
+      ...product.images.flatMap((image) =>
+        (image.qualityIssues ?? [])
+          .filter((issue) => issue.level === "blocking")
+          .map((issue) => `${image.name}：${issue.message}`),
+      ),
+    );
     return Array.from(new Set(errors));
   }
   if (!product.isDemo) {
@@ -8842,6 +9171,44 @@ function getSkuErrors(product: ProductRecord): string[] {
     errors.push("SKU 编码不能重复");
   }
   return errors;
+}
+
+function getTransactionTypeErrors(product: ProductRecord): string[] {
+  const capabilities = product.publishCapabilities;
+  if (!capabilities) {
+    return product.isDemo ? [] : ["当前类目的交易类型能力未加载"];
+  }
+  const available = [
+    capabilities.support_post_sourcing ? "sourcing" : "",
+    capabilities.support_post_whole_sale ? "wholesale" : "",
+  ].filter(Boolean);
+  if (!product.transactionType) {
+    return available.length > 1 ? ["请选择询盘品或在线批发下单品"] : [];
+  }
+  if (
+    (product.transactionType === "sourcing" && !capabilities.support_post_sourcing) ||
+    (product.transactionType === "wholesale" && !capabilities.support_post_whole_sale)
+  ) {
+    return ["当前类目不支持所选商品交易类型"];
+  }
+  const priceMode = selectedSchemaPriceMode(product);
+  if (product.transactionType === "sourcing" && priceMode && priceMode !== "2") {
+    return ["询盘品请使用 FOB 区间报价；如需固定价格请改选在线批发下单品"];
+  }
+  if (product.transactionType === "wholesale" && priceMode === "2") {
+    return ["在线批发下单品不能使用 FOB 区间报价，请选择阶梯定价或 SKU 分别定价"];
+  }
+  return [];
+}
+
+function getComplianceErrors(product: ProductRecord): string[] {
+  const hasClaim = product.facts.certifications.some((item) => item.trim());
+  if (!hasClaim) {
+    return [];
+  }
+  return product.complianceEvidence?.source.trim()
+    ? []
+    : ["合规或认证声明已填写，请同时提供证据来源"];
 }
 
 function selectedSchemaPriceMode(product: ProductRecord): string {
@@ -9666,6 +10033,63 @@ function getActionProducts(products: ProductRecord[], selected: Set<string>): Pr
     return products;
   }
   return products.filter((product) => selected.has(product.id));
+}
+
+function getPublishJob(response?: Record<string, unknown>): PublishJobStatus | undefined {
+  const value = response?._publish_job;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Partial<PublishJobStatus>;
+  return typeof candidate.reference === "string" && typeof candidate.status === "string"
+    ? (candidate as PublishJobStatus)
+    : undefined;
+}
+
+function publishStage(status: PublishJobStatus["status"]): ProductRecord["stage"] {
+  if (status === "submitting") return "publishing";
+  if (status === "submitted") return "submitted";
+  if (status === "pending_review") return "reviewing";
+  if (status === "approved") return "published";
+  if (status === "rejected") return "rejected";
+  if (status === "delisted") return "delisted";
+  if (status === "unknown") return "unknown";
+  return "error";
+}
+
+function publishStageLabel(stage: ProductRecord["stage"]): string {
+  if (stage === "publishing") return "提交中";
+  if (stage === "submitted") return "已提交，待平台受理";
+  if (stage === "reviewing") return "Alibaba 审核中";
+  if (stage === "published") return "审核通过 / 已发布";
+  if (stage === "rejected") return "审核驳回";
+  if (stage === "delisted") return "已下架";
+  if (stage === "unknown") return "状态回查中";
+  if (stage === "error") return "失败";
+  return "草稿待发布";
+}
+
+function applyPublishJobToProduct(
+  product: ProductRecord,
+  job: PublishJobStatus,
+): ProductRecord {
+  const stage = publishStage(job.status);
+  const statusError =
+    job.error ||
+    (job.status === "unknown"
+      ? "发布结果未知，系统将继续回查；请勿重复提交"
+      : job.status === "rejected"
+        ? "Alibaba 审核未通过，请查看平台原因并修复后再提交"
+        : job.status === "delisted"
+          ? "商品已被下架，请到 Alibaba 后台查看原因"
+          : "");
+  return {
+    ...product,
+    stage,
+    publishStatus: job,
+    draftProductId: job.published_product_id || job.draft_product_id || product.draftProductId,
+    errors: statusError ? [statusError] : [],
+  };
 }
 
 function getProductId(response?: Record<string, unknown>): string | undefined {

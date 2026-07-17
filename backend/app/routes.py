@@ -64,6 +64,7 @@ from backend.app.models import (
     ListingTemplateResult,
     ListingTemplateUpdateRequest,
     OfficialListingBatchPublishRequest,
+    OfficialListingBatchItem,
     OfficialListingBatchRequest,
     OfficialListingFlowResponse,
     OfficialListingPreparationResult,
@@ -80,11 +81,14 @@ from backend.app.models import (
     ProductImagePlanResponse,
     ProductValidationRequest,
     ProductValidationResult,
+    PublishJobResult,
     SchemaBuildRequest,
     SchemaBuildResult,
     SchemaGuidanceResult,
     SchemaParseRequest,
     SchemaParseResult,
+    WorkbenchSnapshotRequest,
+    WorkbenchSnapshotResult,
 )
 from backend.app.services.auth import get_current_user
 from backend.app.services.categories import (
@@ -651,24 +655,31 @@ async def update_product_inventory(
     product_id: str,
     request: AlibabaInventoryUpdateRequest,
     client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> dict[str, Any]:
-    return await _alibaba_top_call(
-        client,
-        "alibaba.icbu.product.inventory.update",
-        {
-            "request_param": {
-                "product_id": product_id,
-                "inventory_list": [
-                    {
-                        "sku_id": request.sku_id,
-                        "inventory": request.inventory,
-                        "inventory_code": request.inventory_code,
-                        "operate": request.operate,
-                    }
-                ],
-            },
-        },
-    )
+    payload = {
+        "request_param": {
+            "product_id": product_id,
+            "inventory_list": [request.model_dump(mode="json")],
+        }
+    }
+    try:
+        response = await _alibaba_top_call(
+            client, "alibaba.icbu.product.inventory.update", payload
+        )
+        database.record_operation_audit(
+            workspace_id=user.workspace_id, user_id=user.id, product_id=product_id,
+            operation="inventory_update", status="succeeded", request=payload,
+            response=response,
+        )
+        return response
+    except Exception as exc:
+        database.record_operation_audit(
+            workspace_id=user.workspace_id, user_id=user.id, product_id=product_id,
+            operation="inventory_update", status="failed", request=payload, error=str(exc),
+        )
+        raise
 
 
 @router.patch("/alibaba/products/{product_id}/display")
@@ -676,6 +687,8 @@ async def update_product_display(
     product_id: str,
     request: AlibabaDisplayUpdateRequest,
     client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> dict[str, Any]:
     encrypted = await _alibaba_top_call(
         client,
@@ -688,14 +701,20 @@ async def update_product_display(
             status_code=502,
             detail="Alibaba did not return an encrypted product ID for display update",
         )
-    return await _alibaba_top_call(
+    payload = {
+        "new_display": "on" if request.display else "off",
+        "product_id_list": secret_id,
+    }
+    response = await _alibaba_top_call(
         client,
         "alibaba.icbu.product.batch.update.display",
-        {
-            "new_display": "on" if request.display else "off",
-            "product_id_list": secret_id,
-        },
+        payload,
     )
+    database.record_operation_audit(
+        workspace_id=user.workspace_id, user_id=user.id, product_id=product_id,
+        operation="display_update", status="succeeded", request=payload, response=response,
+    )
+    return response
 
 
 @router.patch("/alibaba/products/{product_id}/schema")
@@ -703,19 +722,27 @@ async def update_product_schema(
     product_id: str,
     request: AlibabaSchemaUpdateRequest,
     client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(
+    payload = {
+        "param_product_top_publish_request": {
+            "xml": request.xml,
+            "product_id": product_id,
+            "cat_id": request.category_id,
+            "language": request.language,
+        }
+    }
+    response = await _alibaba_call(
         client,
         "schema_update",
-        {
-            "param_product_top_publish_request": {
-                "xml": request.xml,
-                "product_id": product_id,
-                "cat_id": request.category_id,
-                "language": request.language,
-            }
-        },
+        payload,
     )
+    database.record_operation_audit(
+        workspace_id=user.workspace_id, user_id=user.id, product_id=product_id,
+        operation="schema_update", status="succeeded", request=payload, response=response,
+    )
+    return response
 
 
 @router.post("/alibaba/schemas/parse", response_model=SchemaParseResult)
@@ -1360,6 +1387,58 @@ async def list_official_listing_snapshots(
     ]
 
 
+@router.get(
+    "/products/official-listing/workbench-snapshot",
+    response_model=WorkbenchSnapshotResult | None,
+)
+async def get_official_listing_workbench_snapshot(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> WorkbenchSnapshotResult | None:
+    store = database.get_active_store(user.workspace_id)
+    if store is None:
+        return None
+    saved = database.get_workbench_snapshot(user.workspace_id, store.id)
+    if saved is None:
+        return None
+    snapshot = saved["snapshot"]
+    if not isinstance(snapshot, dict):
+        return None
+    return WorkbenchSnapshotResult(
+        version=int(saved["version"]),
+        batch_id=str(snapshot.get("batch_id", "")),
+        products=snapshot.get("products", []),
+        updated_at=str(saved["updated_at"]),
+    )
+
+
+@router.put(
+    "/products/official-listing/workbench-snapshot",
+    response_model=WorkbenchSnapshotResult,
+)
+async def save_official_listing_workbench_snapshot(
+    request: WorkbenchSnapshotRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+) -> WorkbenchSnapshotResult:
+    store = database.get_active_store(user.workspace_id)
+    if store is None:
+        raise HTTPException(status_code=409, detail="当前工作区没有可用的 Alibaba 店铺")
+    saved = database.save_workbench_snapshot(
+        workspace_id=user.workspace_id,
+        store_connection_id=store.id,
+        snapshot={"batch_id": request.batch_id, "products": request.products},
+        version=request.version,
+        user_id=user.id,
+    )
+    return WorkbenchSnapshotResult(
+        version=int(saved["version"]),
+        batch_id=request.batch_id,
+        products=request.products,
+        updated_at=str(saved["updated_at"]),
+    )
+
+
 @router.post("/products/official-listing/publish")
 async def publish_official_listing(
     request: OfficialListingPublishRequest,
@@ -1400,7 +1479,12 @@ async def publish_official_listing_batch(
             detail="Batch publishing requires confirmed_by_user=true",
         )
     _bind_batch_to_active_store(request.batch_id, user, database)
-    results = await _batch_official_listing_call(client, "publish", request)
+    results = await _publish_official_listing_batch_idempotent(
+        client,
+        request,
+        user,
+        database,
+    )
     if database.get_listing_feature_flags(user.workspace_id)["metrics"]:
         for result in results:
             database.record_listing_metric_event(
@@ -1411,6 +1495,27 @@ async def publish_official_listing_batch(
                 reason=result.error,
             )
     return results
+
+
+@router.get(
+    "/products/official-listing/batches/{batch_id}/publish-status",
+    response_model=list[PublishJobResult],
+)
+async def get_official_listing_publish_status(
+    batch_id: str,
+    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    database: Annotated[Database, Depends(get_database)],
+    refresh: bool = True,
+) -> list[PublishJobResult]:
+    _bind_batch_to_active_store(batch_id, user, database)
+    jobs = database.list_publish_jobs(user.workspace_id, batch_id)
+    if refresh:
+        refreshed: list[dict[str, object]] = []
+        for job in jobs:
+            refreshed.append(await _refresh_publish_job(client, user, database, job))
+        jobs = refreshed
+    return [PublishJobResult.model_validate(job) for job in jobs]
 
 
 @router.post("/images/generate")
@@ -1842,6 +1947,218 @@ async def _batch_official_listing_call(
         *(process_item(index) for index in range(len(request.items)))
     )
     return [result for _, result in sorted(indexed_results)]
+
+
+def _publish_idempotency_key(
+    workspace_id: str,
+    batch_id: str,
+    item: OfficialListingBatchItem,
+) -> str:
+    stable = "\x1f".join(
+        (workspace_id, batch_id, item.reference, item.draft_product_id or "no-draft-id")
+    )
+    return hashlib.sha256(stable.encode()).hexdigest()
+
+
+async def _publish_official_listing_batch_idempotent(
+    client: AlibabaClient,
+    request: OfficialListingBatchPublishRequest,
+    user: AuthenticatedUser,
+    database: Database,
+) -> list[AlibabaBatchResult]:
+    semaphore = asyncio.Semaphore(request.concurrency)
+
+    async def process(item: OfficialListingBatchItem) -> AlibabaBatchResult:
+        key = _publish_idempotency_key(user.workspace_id, request.batch_id, item)
+        item_payload = item.model_dump(mode="json")
+        existing = database.get_publish_job(user.workspace_id, key)
+        if existing and existing["status"] != "explicit_failed":
+            if existing["status"] == "submitting":
+                existing = database.upsert_publish_job(
+                    workspace_id=user.workspace_id,
+                    batch_id=request.batch_id,
+                    reference=item.reference,
+                    idempotency_key=key,
+                    status="unknown",
+                    request=item_payload,
+                    draft_product_id=item.draft_product_id,
+                    error="上次发布请求未留下明确结果，已转入平台回查，禁止直接重复提交",
+                )
+            return AlibabaBatchResult(
+                reference=item.reference,
+                success=True,
+                response={"_publish_job": existing, "_idempotent_replay": True},
+            )
+        database.upsert_publish_job(
+            workspace_id=user.workspace_id,
+            batch_id=request.batch_id,
+            reference=item.reference,
+            idempotency_key=key,
+            status="submitting",
+            request=item_payload,
+            draft_product_id=item.draft_product_id,
+            increment_attempt=True,
+        )
+        async with semaphore:
+            try:
+                prepared = _prepare_official_listing(item)
+                if not prepared.ready_to_draft or prepared.xml is None:
+                    error = _preparation_error(prepared)
+                    job = database.upsert_publish_job(
+                        workspace_id=user.workspace_id,
+                        batch_id=request.batch_id,
+                        reference=item.reference,
+                        idempotency_key=key,
+                        status="explicit_failed",
+                        request=item_payload,
+                        draft_product_id=item.draft_product_id,
+                        error=error,
+                    )
+                    return AlibabaBatchResult(reference=item.reference, success=False, error=error, response={"_publish_job": job})
+                response = await client.call(
+                    OPERATIONS["publish"].operation,
+                    {
+                        "publish_request": {
+                            "language": item.language,
+                            "cat_id": item.category_id,
+                            "xml": prepared.xml,
+                        }
+                    },
+                )
+                product_id = _find_product_id(response) or item.draft_product_id
+                job = database.upsert_publish_job(
+                    workspace_id=user.workspace_id,
+                    batch_id=request.batch_id,
+                    reference=item.reference,
+                    idempotency_key=key,
+                    status="submitted",
+                    request=item_payload,
+                    draft_product_id=item.draft_product_id,
+                    published_product_id=product_id,
+                    response=response,
+                    trace_id=_find_response_value(response, "trace_id"),
+                )
+                return AlibabaBatchResult(
+                    reference=item.reference,
+                    success=True,
+                    response={**response, "_publish_job": job},
+                )
+            except (AlibabaAPIError, AlibabaConfigurationError, SchemaParseError) as exc:
+                error = str(exc)
+                job = database.upsert_publish_job(
+                    workspace_id=user.workspace_id,
+                    batch_id=request.batch_id,
+                    reference=item.reference,
+                    idempotency_key=key,
+                    status="explicit_failed",
+                    request=item_payload,
+                    draft_product_id=item.draft_product_id,
+                    error=error,
+                    trace_id=getattr(exc, "trace_id", None),
+                )
+                return AlibabaBatchResult(reference=item.reference, success=False, error=error, response={"_publish_job": job})
+            except (HTTPError, TimeoutError, OSError) as exc:
+                error = str(exc) or "发布请求结果未知"
+                job = database.upsert_publish_job(
+                    workspace_id=user.workspace_id,
+                    batch_id=request.batch_id,
+                    reference=item.reference,
+                    idempotency_key=key,
+                    status="unknown",
+                    request=item_payload,
+                    draft_product_id=item.draft_product_id,
+                    error=error,
+                )
+                return AlibabaBatchResult(
+                    reference=item.reference,
+                    success=True,
+                    response={"_publish_job": job, "_result_unknown": True},
+                )
+
+    return await asyncio.gather(*(process(item) for item in request.items))
+
+
+def _normalized_platform_publish_status(payload: Mapping[str, Any]) -> tuple[str, str | None]:
+    values = [
+        _find_response_value(payload, key)
+        for key in ("audit_status", "review_status", "product_status", "status", "display")
+    ]
+    platform_status = next((value for value in values if value), None)
+    normalized = " ".join(value.lower() for value in values if value)
+    if any(token in normalized for token in ("reject", "denied", "audit_failed", "审核不通过", "退回")):
+        return "rejected", platform_status
+    if any(token in normalized for token in ("off_shelf", "offline", "down", "下架")):
+        return "delisted", platform_status
+    if any(token in normalized for token in ("approved", "online", "on_shelf", "displaying", "审核通过")):
+        return "approved", platform_status
+    if any(token in normalized for token in ("pending", "review", "auditing", "审核中")):
+        return "pending_review", platform_status
+    return "pending_review", platform_status
+
+
+async def _refresh_publish_job(
+    client: AlibabaClient,
+    user: AuthenticatedUser,
+    database: Database,
+    job: dict[str, object],
+) -> dict[str, object]:
+    if job["status"] in {"explicit_failed", "rejected", "delisted"}:
+        return job
+    product_id = str(job.get("published_product_id") or job.get("draft_product_id") or "")
+    if not product_id:
+        return database.upsert_publish_job(
+            workspace_id=user.workspace_id,
+            batch_id=str(job["batch_id"]),
+            reference=str(job["reference"]),
+            idempotency_key=str(job["idempotency_key"]),
+            status="unknown",
+            request=job.get("request", {}),
+            error="平台未返回商品 ID，暂时无法确认发布结果",
+            checked=True,
+        )
+    try:
+        detail = await client.call(
+            OPERATIONS["product_get"].operation,
+            {"product_get_request": {"productId": product_id}},
+        )
+        status_value, platform_status = _normalized_platform_publish_status(detail)
+        quality = job.get("quality", {})
+        try:
+            quality = await client.call(
+                OPERATIONS["product_score"].operation,
+                {"product_id": product_id},
+            )
+        except AlibabaAPIError:
+            pass
+        return database.upsert_publish_job(
+            workspace_id=user.workspace_id,
+            batch_id=str(job["batch_id"]),
+            reference=str(job["reference"]),
+            idempotency_key=str(job["idempotency_key"]),
+            status=status_value,
+            request=job.get("request", {}),
+            draft_product_id=str(job.get("draft_product_id") or "") or None,
+            published_product_id=product_id,
+            platform_status=platform_status,
+            response={**job.get("response", {}), "_status_readback": detail},
+            quality=quality if isinstance(quality, dict) else {},
+            error=_find_response_value(detail, "reject_reason") if status_value == "rejected" else None,
+            trace_id=_find_response_value(detail, "trace_id") or str(job.get("trace_id") or "") or None,
+            checked=True,
+        )
+    except (AlibabaAPIError, HTTPError, TimeoutError, OSError) as exc:
+        return database.upsert_publish_job(
+            workspace_id=user.workspace_id,
+            batch_id=str(job["batch_id"]),
+            reference=str(job["reference"]),
+            idempotency_key=str(job["idempotency_key"]),
+            status="unknown",
+            request=job.get("request", {}),
+            draft_product_id=str(job.get("draft_product_id") or "") or None,
+            published_product_id=product_id,
+            error=str(exc),
+            checked=True,
+        )
 
 
 async def _capture_draft_snapshots(

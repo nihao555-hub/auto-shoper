@@ -6,7 +6,9 @@ import {
   getAlibabaStores,
   getCapabilities,
   getCurrentUser,
+  getServerWorkbenchSnapshot,
   logout,
+  saveServerWorkbenchSnapshot,
   startAlibabaOAuth,
   syncAlibabaStore,
 } from "./api";
@@ -117,14 +119,27 @@ const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord
     return null;
   }
   const drafted = products.filter(
-    (product) => product.stage === "drafted" || product.stage === "published",
+    (product) =>
+      product.stage === "drafted" ||
+      product.stage === "submitted" ||
+      product.stage === "reviewing" ||
+      product.stage === "published" ||
+      product.stage === "rejected" ||
+      product.stage === "delisted" ||
+      product.stage === "unknown",
   ).length;
   const published = products.filter((product) => product.stage === "published").length;
-  const failed = products.some((product) => product.stage === "error");
+  const rejected = products.filter((product) => product.stage === "rejected").length;
+  const awaitingReview = products.filter((product) =>
+    ["submitted", "reviewing", "unknown"].includes(product.stage),
+  ).length;
+  const failed = products.some((product) => product.stage === "error" || product.stage === "rejected");
   const status: BatchRecord["status"] = failed
     ? "failed"
     : published === products.length
       ? "complete"
+      : awaitingReview
+        ? "processing"
       : drafted === products.length
         ? "ready"
         : "processing";
@@ -137,6 +152,8 @@ const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord
     completion: Math.round(
       products.reduce((total, product) => {
         if (product.stage === "published") return total + 100;
+        if (["submitted", "reviewing", "unknown"].includes(product.stage)) return total + 90;
+        if (product.stage === "rejected") return total + 84;
         if (product.stage === "drafted") return total + 82;
         if (product.stage === "ready") return total + 64;
         if (product.aiConfirmed) return total + 46;
@@ -145,12 +162,27 @@ const buildLiveBatch = (products: ProductRecord[], batchId: string): BatchRecord
     ),
     draftCount: drafted,
     publishedCount: published,
-    reviewStatus: failed ? "failed" : published ? "passed" : "pending",
-    reviewLabel: failed ? "需要处理" : published ? "已通过" : "等待发布",
+    reviewStatus: rejected || failed ? "failed" : published === products.length ? "passed" : "pending",
+    reviewLabel: rejected
+      ? `审核退回 ${rejected}`
+      : published === products.length
+        ? "审核通过"
+        : awaitingReview
+          ? `待审核 ${awaitingReview}`
+          : "等待发布",
     status,
     images: products.slice(0, 3).map((product) => getMainProductImage(product).url),
   };
 };
+
+const serverSafeProducts = (products: ProductRecord[]): ProductRecord[] =>
+  products.map((product) => ({
+    ...product,
+    images: product.images.map(({ sourceFile: _sourceFile, ...image }) => ({
+      ...image,
+      url: image.photoBankUrl || (image.url.startsWith("http") ? image.url : ""),
+    })),
+  }));
 
 export default function App() {
   const [authState, setAuthState] = useState<"checking" | "signed-out" | "signed-in">("checking");
@@ -246,11 +278,22 @@ export default function App() {
     setSettings(savedSettings);
     setLiveProducts([]);
     setRestoredWorkbenchKey(null);
-    void loadWorkbenchSnapshot(sessionKey)
-      .then((snapshot) => {
+    void Promise.allSettled([loadWorkbenchSnapshot(sessionKey), getServerWorkbenchSnapshot()])
+      .then(([localResult, serverResult]) => {
         if (restoreRequest.current !== requestId) {
           return;
         }
+        const local = localResult.status === "fulfilled" ? localResult.value : null;
+        const server = serverResult.status === "fulfilled" ? serverResult.value : null;
+        const snapshot =
+          server && (!local || Date.parse(server.updated_at) > Date.parse(local.updatedAt))
+            ? {
+                version: 1 as const,
+                batchId: server.batch_id,
+                products: server.products,
+                updatedAt: server.updated_at,
+              }
+            : local;
         if (snapshot) {
           setBatchId(snapshot.batchId);
           setLiveProducts(restoreProductImageUrls(snapshot.products));
@@ -280,15 +323,24 @@ export default function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      void saveWorkbenchSnapshot(sessionKey, {
+      const snapshot = {
         version: 1,
         batchId,
         products: liveProducts,
         updatedAt: new Date().toISOString(),
-      }).catch(() => {
-        notify("warning", "工作台自动保存失败", "请暂时不要刷新或关闭当前页面。");
+      } as const;
+      void Promise.allSettled([
+        saveWorkbenchSnapshot(sessionKey, snapshot),
+        saveServerWorkbenchSnapshot({
+          ...snapshot,
+          products: serverSafeProducts(liveProducts),
+        }),
+      ]).then((results) => {
+        if (results.every((result) => result.status === "rejected")) {
+          notify("warning", "工作台自动保存失败", "请暂时不要刷新或关闭当前页面。");
+        }
       });
-    }, 250);
+    }, 800);
     return () => window.clearTimeout(timer);
   }, [
     activeStoreId,

@@ -23,6 +23,7 @@ import type {
   ProductImageGenerationResponse,
   ProductImagePlanResponse,
   ProductRecord,
+  PublishJobStatus,
   RegisterPayload,
   SchemaGuidanceResult,
   StoreSettings,
@@ -767,6 +768,8 @@ const productFields = (product: ProductRecord): Record<string, DraftField> => {
     origin: trustedField(product.facts.origin),
     hs_code: trustedField(product.facts.hsCode),
     certifications: trustedField(product.facts.certifications),
+    transaction_type: trustedField(product.transactionType ?? ""),
+    compliance_evidence: trustedField(product.complianceEvidence ?? {}),
     sku_rows: trustedField(product.facts.skuRows ?? []),
     images: candidateOrConfirmedField(
       product,
@@ -982,6 +985,7 @@ export const publishBatch = async (
         batch_id: batchId,
         items: products.map((product) => ({
           reference: product.reference,
+          draft_product_id: product.draftProductId,
           category_id: product.facts.categoryId,
           language: "en_US",
           schema_data: product.schemaData,
@@ -993,6 +997,46 @@ export const publishBatch = async (
       }),
     }),
   );
+
+export const getBatchPublishStatus = async (
+  batchId: string,
+  refresh = true,
+): Promise<PublishJobStatus[]> =>
+  parseResponse<PublishJobStatus[]>(
+    await apiFetch(
+      `${API_ROOT}/products/official-listing/batches/${encodeURIComponent(batchId)}/publish-status?refresh=${refresh}`,
+    ),
+  );
+
+export const getServerWorkbenchSnapshot = async (): Promise<{
+  version: 1;
+  batch_id: string;
+  products: ProductRecord[];
+  updated_at: string;
+} | null> =>
+  parseResponse(
+    await apiFetch(`${API_ROOT}/products/official-listing/workbench-snapshot`),
+  );
+
+export const saveServerWorkbenchSnapshot = async (snapshot: {
+  version: 1;
+  batchId: string;
+  products: ProductRecord[];
+  updatedAt: string;
+}): Promise<void> => {
+  await parseResponse(
+    await apiFetch(`${API_ROOT}/products/official-listing/workbench-snapshot`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: snapshot.version,
+        batch_id: snapshot.batchId,
+        products: snapshot.products,
+        updated_at: snapshot.updatedAt,
+      }),
+    }),
+  );
+};
 
 export const findSchemaData = (
   payload: Record<string, unknown>,

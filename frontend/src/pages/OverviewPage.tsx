@@ -28,7 +28,12 @@ const stageWeight: Record<ProductRecord["stage"], number> = {
   drafting: 72,
   drafted: 84,
   publishing: 92,
+  submitted: 94,
+  reviewing: 96,
   published: 100,
+  rejected: 82,
+  delisted: 82,
+  unknown: 90,
   error: 28,
 };
 
@@ -59,10 +64,22 @@ export function OverviewPage({
       product.stage !== "facts_needed",
   ).length;
   const drafted = products.filter(
-    (product) => product.stage === "drafted" || product.stage === "published",
+    (product) =>
+      [
+        "drafted",
+        "publishing",
+        "submitted",
+        "reviewing",
+        "published",
+        "rejected",
+        "delisted",
+        "unknown",
+      ].includes(product.stage),
   ).length;
   const needsAttention = products.filter(
-    (product) => product.stage === "error" || product.errors.length > 0,
+    (product) =>
+      ["error", "rejected", "delisted", "unknown"].includes(product.stage) ||
+      product.errors.length > 0,
   ).length;
   const progress = total
     ? Math.round(products.reduce((sum, product) => sum + stageWeight[product.stage], 0) / total)

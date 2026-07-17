@@ -6429,3 +6429,99 @@ a:focus-visible {
     justify-content: flex-start;
   }
 }
+.wb-transaction-type {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line, #e7e2da);
+  border-radius: 12px;
+  background: #fffdf9;
+}
+
+.wb-transaction-type > div:first-child,
+.wb-transaction-type-options label span {
+  display: grid;
+  gap: 4px;
+}
+
+.wb-transaction-type small {
+  color: #746f68;
+  line-height: 1.45;
+}
+
+.wb-transaction-type-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wb-transaction-type-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #ded8cf;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.wb-transaction-type-options label.is-selected {
+  border-color: #f05a28;
+  background: #fff5ef;
+}
+
+.wb-transaction-type-options input {
+  margin-top: 3px;
+}
+
+.wb-image-quality-summary {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #ecdcae;
+  border-radius: 12px;
+  background: #fffbef;
+}
+
+.wb-image-quality-summary ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.wb-image-quality-summary li {
+  color: #806b32;
+  line-height: 1.45;
+}
+
+.wb-image-quality-summary li.is-blocking {
+  color: #c13c2f;
+}
+
+.wb-publish-status-detail {
+  display: grid;
+  gap: 6px;
+  min-width: 260px;
+  padding: 12px;
+  border: 1px solid #ddd7ce;
+  border-radius: 10px;
+  background: #faf9f7;
+}
+
+.wb-publish-status-detail pre {
+  max-height: 160px;
+  margin: 4px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #f1efeb;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .wb-transaction-type-options {
+    grid-template-columns: 1fr;
+  }
+}

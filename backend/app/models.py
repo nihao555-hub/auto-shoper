@@ -578,6 +578,8 @@ class OfficialListingPublishRequest(OfficialListingPrepareRequest):
 
 class OfficialListingBatchItem(OfficialListingPrepareRequest):
     reference: str = Field(min_length=1, max_length=200)
+    draft_product_id: str | None = Field(default=None, max_length=255)
+    schema_fingerprint: str | None = Field(default=None, max_length=64)
 
 
 class OfficialListingBatchRequest(BaseModel):
@@ -599,6 +601,46 @@ class OfficialListingBatchRequest(BaseModel):
 
 class OfficialListingBatchPublishRequest(OfficialListingBatchRequest):
     confirmed_by_user: bool = False
+
+
+class PublishJobResult(BaseModel):
+    id: str
+    batch_id: str
+    reference: str
+    draft_product_id: str | None = None
+    published_product_id: str | None = None
+    status: Literal[
+        "submitting",
+        "submitted",
+        "pending_review",
+        "approved",
+        "rejected",
+        "delisted",
+        "unknown",
+        "explicit_failed",
+    ]
+    platform_status: str | None = None
+    quality: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    trace_id: str | None = None
+    attempt_count: int = 0
+    last_checked_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class WorkbenchSnapshotRequest(BaseModel):
+    version: Literal[1] = 1
+    batch_id: str = Field(min_length=8, max_length=100)
+    products: list[dict[str, Any]] = Field(max_length=100)
+    updated_at: str
+
+
+class WorkbenchSnapshotResult(BaseModel):
+    version: int
+    batch_id: str
+    products: list[dict[str, Any]]
+    updated_at: str
 
 
 class OfficialListingPreparationResult(OfficialListingValidationResult):
