@@ -5213,21 +5213,32 @@ function WbInspector({
   const setSchemaField = (field: SchemaFieldGuidance, value: unknown) => {
     const factKey = schemaFactKey(field);
     const factValue = schemaFactTextValue(value);
+    const isPriceMode = field.field === "scPrice";
+    const previousPriceMode = isPriceMode ? selectedSchemaPriceMode(product) : "";
+    const nextPriceMode = isPriceMode ? schemaScalarText(value) : "";
+    const schemaFields: Record<string, DraftField> = {
+      ...product.schemaFields,
+      [field.field]: {
+        value,
+        source: "user_provided",
+      },
+    };
+    if (isPriceMode) {
+      removeInactivePriceModeFields(schemaFields, nextPriceMode);
+    }
+    const facts =
+      isPriceMode && previousPriceMode && previousPriceMode !== nextPriceMode
+        ? { ...product.facts, price: "" }
+        : product.facts;
     onChange(
       updateTaskValueLocally(
         {
           ...product,
           facts:
             factKey && factValue !== null
-              ? { ...product.facts, [factKey]: factValue }
-              : product.facts,
-          schemaFields: {
-            ...product.schemaFields,
-            [field.field]: {
-              value,
-              source: "user_provided",
-            },
-          },
+              ? { ...facts, [factKey]: factValue }
+              : facts,
+          schemaFields,
         },
         field.field,
         value,
@@ -5344,23 +5355,20 @@ function WbInspector({
       ? !hasRepeatableSchemaFieldValue(product, field)
       : !hasSchemaValue(getSchemaFieldValue(product, field)),
   ).length;
-  const missingPriceModeFields = getPriceModeRequiredFields(product).filter(
-    (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
-  );
-  const missingDirectSchemaFields = Array.from(
+  const activePriceModeFields = getPriceModeRequiredFields(product);
+  const essentialSchemaFields = Array.from(
     new Map(
-      [
-        ...primarySchemaFields.filter(
-          (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
-        ),
-        ...missingPriceModeFields,
-      ].map((field) => [field.field, field]),
+      [...primarySchemaFields, ...activePriceModeFields].map((field) => [field.field, field]),
     ).values(),
   );
-  const missingRepeatableGroups = primaryRepeatableGroups.filter(([, fields]) =>
+  const missingEssentialSchemaFields = essentialSchemaFields.filter(
+    (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
+  );
+  const missingEssentialRepeatableGroups = primaryRepeatableGroups.filter(([, fields]) =>
     fields.some((field) => !hasRepeatableSchemaFieldValue(product, field)),
   );
-  const directMissingCount = missingDirectSchemaFields.length + missingRepeatableGroups.length;
+  const directMissingCount =
+    missingEssentialSchemaFields.length + missingEssentialRepeatableGroups.length;
 
   const renderRepeatableGroups = (entries: Array<[string, SchemaFieldGuidance[]]>) =>
     entries.map(([groupPath, fields]) => (
@@ -5381,7 +5389,7 @@ function WbInspector({
           const task = taskByField.get(field.field);
           const value = getSchemaFieldValue(product, field);
           const inputId = `schema-${product.id}-${scope}-${index}`;
-          const isFocusedMissingField = scope === "missing";
+          const isFocusedMissingField = scope === "essential";
           const requirementLabel = isFocusedMissingField
             ? "创建草稿前填写"
             : requiredSchemaFieldIds.has(field.field)
@@ -5478,17 +5486,22 @@ function WbInspector({
           </span>
         </div>
 
-        {directMissingCount ? (
-          <section className="wb-missing-actions" aria-labelledby={`missing-${product.id}`}>
+        {essentialSchemaFields.length || primaryRepeatableGroups.length ? (
+          <section
+            className={`wb-missing-actions ${directMissingCount ? "" : "is-complete"}`}
+            aria-labelledby={`essential-${product.id}`}
+          >
             <div className="wb-missing-actions-heading">
               <div>
-                <h3 id={`missing-${product.id}`}>完成下面信息即可创建草稿</h3>
-                <p>只显示当前商品真正缺少的内容；填写后会自动重新校验。</p>
+                <h3 id={`essential-${product.id}`}>创建草稿所需信息</h3>
+                <p>已填内容会保留在这里，可随时复查和修改；系统只用待填数决定能否继续。</p>
               </div>
-              <span>{directMissingCount} 项</span>
+              <span className={directMissingCount ? "" : "is-complete"}>
+                {directMissingCount ? `待填 ${directMissingCount} 项` : "已完成"}
+              </span>
             </div>
-            {renderRepeatableGroups(missingRepeatableGroups)}
-            {renderSchemaFields(missingDirectSchemaFields, "missing")}
+            {renderRepeatableGroups(primaryRepeatableGroups)}
+            {renderSchemaFields(essentialSchemaFields, "essential")}
           </section>
         ) : null}
 
@@ -6860,6 +6873,16 @@ function SchemaValueControl({
   photoBankGroupId?: string;
   onChange: (value: unknown) => void;
 }) {
+  if (field.field === "scPrice" && field.options.length) {
+    return (
+      <SchemaPriceModeControl
+        field={field}
+        value={schemaScalarText(value)}
+        inputId={inputId}
+        onChange={onChange}
+      />
+    );
+  }
   if (schemaFieldLeafId(field) === "imageurl") {
     return (
       <PhotoBankUrlControl
@@ -6986,6 +7009,74 @@ function SchemaValueControl({
       placeholder={placeholder}
       onChange={onChange}
     />
+  );
+}
+
+const priceModeDescriptions: Record<
+  string,
+  { title: string; description: string; example: string }
+> = {
+  "1": {
+    title: "按数量阶梯定价",
+    description: "同一商品按采购数量分档，买得越多单价越低。",
+    example: "例如：50–99 件 $10，100 件以上 $9",
+  },
+  "2": {
+    title: "FOB 区间报价",
+    description: "适合定制或询盘商品，先给买家一个出口报价范围。",
+    example: "例如：$8–12 / Piece",
+  },
+  "3": {
+    title: "SKU 分别定价",
+    description: "不同尺寸、颜色或型号有不同售价时使用。",
+    example: "例如：A4 $8，A3 $12",
+  },
+};
+
+function SchemaPriceModeControl({
+  field,
+  value,
+  inputId,
+  onChange,
+}: {
+  field: SchemaFieldGuidance;
+  value: string;
+  inputId: string;
+  onChange: (value: unknown) => void;
+}) {
+  return (
+    <div className="wb-price-mode-control" id={inputId} role="radiogroup">
+      <div className="wb-price-mode-intro">
+        <strong>按实际销售方式选择</strong>
+        <span>切换后会自动清理上一模式的报价字段，避免价格规则冲突。</span>
+      </div>
+      <div className="wb-price-mode-options">
+        {field.options.map((option) => {
+          const meta = priceModeDescriptions[option.value];
+          const checked = value === option.value;
+          return (
+            <label
+              key={option.value}
+              className={`${checked ? "is-selected" : ""} ${option.valid === false ? "is-disabled" : ""}`}
+            >
+              <input
+                type="radio"
+                name={inputId}
+                value={option.value}
+                checked={checked}
+                disabled={option.valid === false}
+                onChange={() => onChange(option.value)}
+              />
+              <span>
+                <strong>{meta?.title || option.display_name || option.value}</strong>
+                {meta ? <small>{meta.description}</small> : null}
+                {meta ? <em>{meta.example}</em> : null}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -8760,6 +8851,20 @@ function selectedSchemaPriceMode(product: ProductRecord): string {
   return field ? schemaScalarText(getSchemaFieldValue(product, field)) : "";
 }
 
+function removeInactivePriceModeFields(
+  schemaFields: Record<string, DraftField>,
+  mode: string,
+): void {
+  for (const fieldPath of Object.keys(schemaFields)) {
+    if (mode !== "1" && (fieldPath === "ladderPrice" || fieldPath.startsWith("ladderPrice."))) {
+      delete schemaFields[fieldPath];
+    }
+    if (mode !== "2" && (fieldPath === "fob" || fieldPath.startsWith("fob."))) {
+      delete schemaFields[fieldPath];
+    }
+  }
+}
+
 function getPriceModeRequiredFields(product: ProductRecord): SchemaFieldGuidance[] {
   const mode = selectedSchemaPriceMode(product);
   const fields = getAllSchemaFields(product);
@@ -9162,6 +9267,7 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
     return product;
   }
   const schemaFields = { ...product.schemaFields };
+  removeInactivePriceModeFields(schemaFields, selectedSchemaPriceMode(product));
   for (const field of getAllSchemaFields(product)) {
     if (
       isSchemaFieldDisabled(product, field) &&

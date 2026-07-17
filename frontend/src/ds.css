@@ -2707,6 +2707,11 @@ tr.is-failed .bt-store small {
   background: #fffaf6;
 }
 
+.wb-missing-actions.is-complete {
+  border-color: #b8ddc8;
+  background: #f8fcf9;
+}
+
 .wb-missing-actions-heading {
   display: flex;
   align-items: flex-start;
@@ -2739,6 +2744,11 @@ tr.is-failed .bt-store small {
   font-weight: 750;
 }
 
+.wb-missing-actions-heading > span.is-complete {
+  background: var(--ds-success-soft);
+  color: #23734a;
+}
+
 .wb-missing-actions .wb-schema-field-list {
   gap: 12px;
 }
@@ -2757,6 +2767,92 @@ tr.is-failed .bt-store small {
 
 .wb-missing-actions .wb-schema-field-heading i {
   background: #fff0e8;
+  color: var(--ds-brand);
+}
+
+.wb-price-mode-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-price-mode-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-price-mode-intro strong {
+  color: var(--ds-text);
+  font-size: 11px;
+}
+
+.wb-price-mode-intro span {
+  color: var(--ds-text-3);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.wb-price-mode-options {
+  display: grid;
+  gap: 7px;
+}
+
+.wb-price-mode-options > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--ds-border);
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.wb-price-mode-options > label:hover {
+  border-color: #e1a17e;
+}
+
+.wb-price-mode-options > label.is-selected {
+  border-color: var(--ds-brand);
+  background: #fff7f2;
+}
+
+.wb-price-mode-options > label.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.wb-price-mode-options input {
+  width: auto;
+  margin: 2px 0 0;
+  accent-color: var(--ds-brand);
+}
+
+.wb-price-mode-options span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-price-mode-options strong {
+  color: var(--ds-text);
+  font-size: 11px;
+}
+
+.wb-price-mode-options small,
+.wb-price-mode-options em {
+  color: var(--ds-text-3);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.wb-price-mode-options em {
   color: var(--ds-brand);
 }
 
