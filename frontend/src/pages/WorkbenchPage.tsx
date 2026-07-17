@@ -2,6 +2,7 @@ import {
   ArrowCounterClockwise,
   ArrowRight,
   Bell,
+  CaretDown,
   CaretLeft,
   CaretRight,
   ChartBar,
@@ -2839,23 +2840,31 @@ function ListingOperationsPanel({
   onToggleWorkflow: () => void;
 }) {
   return (
-    <section className="listing-operations" aria-label="批量效率工具">
-      <header className="listing-operations-head">
-        <div>
-          <span>批量效率工具</span>
-          <strong>{flags.workflow_v2 ? "新版字段任务流程" : "兼容流程"}</strong>
+    <details className="listing-operations">
+      <summary className="listing-operations-head">
+        <div className="listing-operations-title">
+          <strong>批量高级工具</strong>
+          <span>导入资料、复用类目模板与查看运行质量</span>
         </div>
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={onToggleWorkflow}
-          disabled={busy}
-        >
-          <ArrowCounterClockwise size={16} />
-          {flags.workflow_v2 ? "切换兼容流程" : "恢复新版流程"}
-        </button>
-      </header>
-      <div className="listing-operations-grid">
+        <div className="listing-operations-state">
+          <span>{flags.workflow_v2 ? "新版流程" : "兼容流程"}</span>
+          <CaretDown className="listing-operations-caret" size={18} aria-hidden="true" />
+        </div>
+      </summary>
+      <div className="listing-operations-body">
+        <div className="listing-operations-toolbar">
+          <p>这些工具适合批量导入和重复上品，单个商品可直接跳过。</p>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={onToggleWorkflow}
+            disabled={busy}
+          >
+            <ArrowCounterClockwise size={16} />
+            {flags.workflow_v2 ? "切换兼容流程" : "恢复新版流程"}
+          </button>
+        </div>
+        <div className="listing-operations-grid">
         <article>
           <UploadSimple size={21} />
           <div>
@@ -3000,8 +3009,9 @@ function ListingOperationsPanel({
             <p className="listing-empty-metric">尚无运行数据</p>
           )}
         </article>
+        </div>
       </div>
-    </section>
+    </details>
   );
 }
 
