@@ -121,6 +121,62 @@ type WorkbenchPageProps = {
   notify: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
 };
 
+type WorkbenchUiState = {
+  version: 1;
+  step: number;
+  maxUnlockedStep: number;
+  activeProductId: string;
+  selectedProductIds: string[];
+  inspectorOpen: boolean;
+  uploadGroupingMode: "single_product" | "separate_products";
+};
+
+const workbenchUiStorageKey = (batchId: string) => `auto-shoper-workbench-ui:${batchId}`;
+
+const loadWorkbenchUiState = (
+  batchId: string,
+  products: ProductRecord[],
+): WorkbenchUiState => {
+  const fallback: WorkbenchUiState = {
+    version: 1,
+    step: 0,
+    maxUnlockedStep: 0,
+    activeProductId: products[0]?.id ?? "",
+    selectedProductIds: products.map((product) => product.id),
+    inspectorOpen: false,
+    uploadGroupingMode: "single_product",
+  };
+  try {
+    const saved = window.localStorage.getItem(workbenchUiStorageKey(batchId));
+    if (!saved) {
+      return fallback;
+    }
+    const parsed = JSON.parse(saved) as Partial<WorkbenchUiState>;
+    const productIds = new Set(products.map((product) => product.id));
+    const maxUnlockedStep = Math.min(5, Math.max(0, Number(parsed.maxUnlockedStep) || 0));
+    const step = Math.min(maxUnlockedStep, Math.max(0, Number(parsed.step) || 0));
+    return {
+      version: 1,
+      step,
+      maxUnlockedStep,
+      activeProductId:
+        parsed.activeProductId && productIds.has(parsed.activeProductId)
+          ? parsed.activeProductId
+          : fallback.activeProductId,
+      selectedProductIds: Array.isArray(parsed.selectedProductIds)
+        ? parsed.selectedProductIds.filter((id) => productIds.has(id))
+        : fallback.selectedProductIds,
+      inspectorOpen: Boolean(parsed.inspectorOpen),
+      uploadGroupingMode:
+        parsed.uploadGroupingMode === "separate_products"
+          ? "separate_products"
+          : "single_product",
+    };
+  } catch {
+    return fallback;
+  }
+};
+
 const defaultListingFeatureFlags: ListingFeatureFlags = {
   workflow_v2: true,
   templates: true,
@@ -428,19 +484,20 @@ export function WorkbenchPage({
   onOpenSettings,
   notify,
 }: WorkbenchPageProps) {
-  const [step, setStep] = useState(0);
-  const [maxUnlockedStep, setMaxUnlockedStep] = useState(0);
-  const [activeProductId, setActiveProductId] = useState(() => products[0]?.id ?? "");
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const initialUiState = useRef(loadWorkbenchUiState(batchId, products)).current;
+  const [step, setStep] = useState(initialUiState.step);
+  const [maxUnlockedStep, setMaxUnlockedStep] = useState(initialUiState.maxUnlockedStep);
+  const [activeProductId, setActiveProductId] = useState(initialUiState.activeProductId);
+  const [inspectorOpen, setInspectorOpen] = useState(initialUiState.inspectorOpen);
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(products.map((product) => product.id)),
+    () => new Set(initialUiState.selectedProductIds),
   );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploadGroupingMode, setUploadGroupingMode] = useState<
     "single_product" | "separate_products"
-  >("single_product");
+  >(initialUiState.uploadGroupingMode);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [targetMarketCode, setTargetMarketCode] = useState("");
@@ -473,6 +530,29 @@ export function WorkbenchPage({
   const importInputRef = useRef<HTMLInputElement>(null);
   const previousActiveProductId = useRef(activeProductId);
   const plannedImageProductsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      workbenchUiStorageKey(batchId),
+      JSON.stringify({
+        version: 1,
+        step,
+        maxUnlockedStep,
+        activeProductId,
+        selectedProductIds: [...selected],
+        inspectorOpen,
+        uploadGroupingMode,
+      } satisfies WorkbenchUiState),
+    );
+  }, [
+    activeProductId,
+    batchId,
+    inspectorOpen,
+    maxUnlockedStep,
+    selected,
+    step,
+    uploadGroupingMode,
+  ]);
 
   const missingTemplateFields = useMemo(
     () => (dataMode === "live" ? getMissingStoreTemplateFields(settings) : []),

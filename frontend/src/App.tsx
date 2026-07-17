@@ -26,6 +26,12 @@ import { BatchesPage } from "./pages/BatchesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { StoresPage } from "./pages/StoresPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
+import {
+  loadWorkbenchSnapshot,
+  restoreProductImageUrls,
+  saveWorkbenchSnapshot,
+  workbenchSessionKey,
+} from "./workbenchPersistence";
 import type {
   AlibabaConnectedStore,
   AppView,
@@ -163,8 +169,10 @@ export default function App() {
   const [stores, setStores] = useState<AlibabaConnectedStore[]>([]);
   const [activeStoreId, setActiveStoreId] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState(false);
+  const [restoredWorkbenchKey, setRestoredWorkbenchKey] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const oauthPopup = useRef<Window | null>(null);
+  const restoreRequest = useRef(0);
   const [demoStoreId, setDemoStoreId] = useState<string>(demoActiveStoreId);
 
   const products = dataMode === "demo" ? demoProducts : liveProducts;
@@ -172,6 +180,13 @@ export default function App() {
   const visibleActiveStoreId = dataMode === "demo" ? demoStoreId : activeStoreId;
   const liveBatch = useMemo(() => buildLiveBatch(liveProducts, batchId), [liveProducts, batchId]);
   const batches = dataMode === "demo" ? sampleBatches : liveBatch ? [liveBatch] : [];
+  const notify = useCallback((tone: ToastMessage["tone"], title: string, detail?: string) => {
+    const id = Date.now() + Math.round(Math.random() * 1000);
+    setToasts((current) => [...current, { id, tone, title, detail }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((message) => message.id !== id));
+    }, 5000);
+  }, []);
 
   useEffect(() => {
     getCurrentUser()
@@ -221,14 +236,69 @@ export default function App() {
   }, [refreshWorkspace]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !backendConnected) {
       return;
     }
+    const sessionKey = workbenchSessionKey(user.workspace_id, activeStoreId);
+    const requestId = restoreRequest.current + 1;
+    restoreRequest.current = requestId;
     const savedSettings = loadSettings(user.workspace_id, activeStoreId);
     setSettings(savedSettings);
     setLiveProducts([]);
-    setBatchId(createBatchId());
-  }, [activeStoreId, user]);
+    setRestoredWorkbenchKey(null);
+    void loadWorkbenchSnapshot(sessionKey)
+      .then((snapshot) => {
+        if (restoreRequest.current !== requestId) {
+          return;
+        }
+        if (snapshot) {
+          setBatchId(snapshot.batchId);
+          setLiveProducts(restoreProductImageUrls(snapshot.products));
+        } else {
+          setBatchId(createBatchId());
+          setLiveProducts([]);
+        }
+        setRestoredWorkbenchKey(sessionKey);
+      })
+      .catch(() => {
+        if (restoreRequest.current !== requestId) {
+          return;
+        }
+        setBatchId(createBatchId());
+        setLiveProducts([]);
+        setRestoredWorkbenchKey(sessionKey);
+        notify("warning", "未能恢复上次工作台", "已为当前店铺打开一个新的空批次。");
+      });
+  }, [activeStoreId, backendConnected, notify, user]);
+
+  useEffect(() => {
+    if (!user || !backendConnected) {
+      return;
+    }
+    const sessionKey = workbenchSessionKey(user.workspace_id, activeStoreId);
+    if (restoredWorkbenchKey !== sessionKey) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveWorkbenchSnapshot(sessionKey, {
+        version: 1,
+        batchId,
+        products: liveProducts,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {
+        notify("warning", "工作台自动保存失败", "请暂时不要刷新或关闭当前页面。");
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeStoreId,
+    backendConnected,
+    batchId,
+    liveProducts,
+    notify,
+    restoredWorkbenchKey,
+    user,
+  ]);
 
   useEffect(() => {
     const storeAssets = stores.find((store) => store.id === activeStoreId)?.merchant_assets;
@@ -250,14 +320,6 @@ export default function App() {
     window.location.hash = view === "overview" ? "#/overview" : `#/${view}`;
     setActiveView(view);
   };
-
-  const notify = useCallback((tone: ToastMessage["tone"], title: string, detail?: string) => {
-    const id = Date.now() + Math.round(Math.random() * 1000);
-    setToasts((current) => [...current, { id, tone, title, detail }]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((message) => message.id !== id));
-    }, 5000);
-  }, []);
 
   const handleAlibabaOAuthResult = useCallback(
     (result: AlibabaOAuthMessage["result"], reason: string | null) => {
@@ -463,6 +525,7 @@ export default function App() {
       setStores([]);
       setActiveStoreId(null);
       setLiveProducts([]);
+      setRestoredWorkbenchKey(null);
       setSettingsOpen(false);
     }
   };
@@ -558,7 +621,7 @@ export default function App() {
         />
       ) : activeView === "workbench" ? (
         <WorkbenchPage
-          key={dataMode}
+          key={`${dataMode}:${batchId}`}
           batchId={batchId}
           activeStore={visibleStores.find((store) => store.id === visibleActiveStoreId) ?? null}
           capabilities={capabilities}
