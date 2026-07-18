@@ -577,11 +577,31 @@ async def get_category_publish_capabilities(
     client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
     language: str = "zh_cn",
 ) -> AlibabaProductTypeCapabilities:
-    response = await _alibaba_top_call(
-        client,
-        "alibaba.icbu.product.type.available.get",
-        {"type_request": {"cat_id": category_id, "language": language}},
-    )
+    if not get_settings().alibaba_enable_top_capability_check:
+        return AlibabaProductTypeCapabilities(
+            support_post_whole_sale=True,
+            support_post_sourcing=True,
+            available=False,
+            warning="Alibaba 交易能力预检已关闭；最终以创建草稿校验结果为准。",
+        )
+    try:
+        response = await _alibaba_top_call(
+            client,
+            "alibaba.icbu.product.type.available.get",
+            {"type_request": {"cat_id": category_id, "language": language}},
+        )
+    except HTTPException as exc:
+        if exc.status_code != 502:
+            raise
+        # This legacy TOP capability endpoint is not enabled for every ICBU app.
+        # Its failure must not prevent category/schema selection; the final draft
+        # validation remains the authoritative platform check.
+        return AlibabaProductTypeCapabilities(
+            support_post_whole_sale=True,
+            support_post_sourcing=True,
+            available=False,
+            warning=f"发布能力预检暂不可用：{exc.detail}",
+        )
     return AlibabaProductTypeCapabilities(
         support_post_whole_sale=_find_response_bool(response, "support_post_whole_sale"),
         support_post_sourcing=_find_response_bool(response, "support_post_sourcing"),

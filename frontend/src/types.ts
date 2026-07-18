@@ -438,6 +438,8 @@ export type AlibabaProductTypeCapabilities = {
   support_post_whole_sale: boolean;
   support_post_sourcing: boolean;
   trace_id?: string | null;
+  available?: boolean;
+  warning?: string | null;
 };
 
 export type AlibabaCategoryRecommendation = {

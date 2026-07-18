@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     )
     alibaba_append_operation_to_url: bool = False
     alibaba_timeout_seconds: float = 30
+    # The legacy TOP capability probe is optional and disabled by default. The
+    # live category Schema and draft validation are authoritative for publishing.
+    alibaba_enable_top_capability_check: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "ALIBABA_ENABLE_TOP_CAPABILITY_CHECK",
+            "ALIBABA_TOP_CAPABILITY_CHECK",
+        ),
+    )
     alibaba_top_api_base_url: str = "https://eco.taobao.com/router/rest"
     alibaba_oauth_authorize_url: str = Field(
         default="https://openapi-auth.alibaba.com/oauth/authorize",

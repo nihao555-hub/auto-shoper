@@ -319,6 +319,8 @@ class AlibabaProductTypeCapabilities(BaseModel):
     support_post_whole_sale: bool
     support_post_sourcing: bool
     trace_id: str | None = None
+    available: bool = True
+    warning: str | None = None
 
 
 class SchemaParseRequest(BaseModel):

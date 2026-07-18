@@ -372,7 +372,11 @@ def test_local_video_upload_enforces_https_format_and_size(
         app.dependency_overrides.clear()
 
 
-def test_category_publish_capabilities_use_official_top_shape() -> None:
+def test_category_publish_capabilities_use_official_top_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "backend.app.routes.get_settings",
+        lambda: Settings(alibaba_enable_top_capability_check=True),
+    )
     app.dependency_overrides[get_alibaba_top_client] = fake_alibaba_top_client
     try:
         client = TestClient(app)
@@ -385,11 +389,49 @@ def test_category_publish_capabilities_use_official_top_shape() -> None:
             "support_post_whole_sale": True,
             "support_post_sourcing": False,
             "trace_id": "trace-capability-1",
+            "available": True,
+            "warning": None,
         }
         assert fake_alibaba_top.calls[-1] == (
             "alibaba.icbu.product.type.available.get",
             {"type_request": {"cat_id": "2115", "language": "zh_cn"}},
         )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_category_publish_capabilities_degrade_when_legacy_top_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.app.routes.get_settings",
+        lambda: Settings(alibaba_enable_top_capability_check=True),
+    )
+    class FailingAlibabaTopClient:
+        async def call(
+            self,
+            method: str,
+            parameters: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            raise AlibabaAPIError(
+                "Alibaba TOP API error: Invalid app Key; code=isv.appkey-not-exists"
+            )
+
+    async def failing_client() -> AsyncIterator[FailingAlibabaTopClient]:
+        yield FailingAlibabaTopClient()
+
+    app.dependency_overrides[get_alibaba_top_client] = failing_client
+    try:
+        response = TestClient(app).get(
+            "/api/v1/alibaba/categories/2115/publish-capabilities",
+            params={"language": "zh_cn"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["available"] is False
+        assert payload["support_post_whole_sale"] is True
+        assert payload["support_post_sourcing"] is True
+        assert "Invalid app Key" in payload["warning"]
     finally:
         app.dependency_overrides.clear()
 

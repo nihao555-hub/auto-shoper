@@ -5713,9 +5713,19 @@ function WbInspector({
             <div className="wb-transaction-type">
               <div>
                 <strong>商品交易类型</strong>
-                <small>按买家实际成交方式选择；这会影响价格、库存和发布规则。</small>
+                <small>
+                  {product.publishCapabilities.available === false
+                    ? "Alibaba 暂未返回能力预检；请按实际成交方式选择，最终以创建草稿校验为准。"
+                    : "按买家实际成交方式选择；这会影响价格、库存和发布规则。"}
+                </small>
               </div>
               <div className="wb-transaction-type-options" role="radiogroup">
+                {product.publishCapabilities.available === false ? (
+                  <div className="wb-category-warning">
+                    能力预检暂不可用，当前保留系统默认交易类型：
+                    {product.transactionType === "sourcing" ? "询盘品" : "在线批发下单品"}
+                  </div>
+                ) : null}
                 {product.publishCapabilities.support_post_sourcing ? (
                   <label className={product.transactionType === "sourcing" ? "is-selected" : ""}>
                     <input
@@ -9177,6 +9187,9 @@ function getTransactionTypeErrors(product: ProductRecord): string[] {
   const capabilities = product.publishCapabilities;
   if (!capabilities) {
     return product.isDemo ? [] : ["当前类目的交易类型能力未加载"];
+  }
+  if (capabilities.available === false) {
+    return [];
   }
   const available = [
     capabilities.support_post_sourcing ? "sourcing" : "",
