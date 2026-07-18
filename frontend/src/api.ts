@@ -29,7 +29,11 @@ import type {
   StoreSettings,
 } from "./types";
 
-const configuredApiRoot = import.meta.env.VITE_API_ROOT ?? "/api/v1";
+const configuredApiRoot =
+  import.meta.env.VITE_API_ROOT ??
+  (window.location.pathname.startsWith("/auto-shoper/")
+    ? "/auto-shoper-api/api/v1"
+    : "/api/v1");
 const API_ROOT = configuredApiRoot.startsWith("http")
   ? configuredApiRoot
   : new URL(configuredApiRoot, window.location.origin).toString().replace(/\/$/, "");
