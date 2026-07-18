@@ -655,9 +655,34 @@ async def get_product(
 @router.get("/alibaba/products/{product_id}/score")
 async def get_product_score(
     product_id: str,
-    client: Annotated[AlibabaClient, Depends(get_alibaba_client)],
+    client: Annotated[AlibabaTopClient, Depends(get_alibaba_top_client)],
 ) -> dict[str, Any]:
-    return await _alibaba_call(client, "product_score", {"product_id": product_id})
+    # Alibaba's score API requires the obfuscated product_id returned by the
+    # TOP product-list API, while publish/detail APIs expose the numeric id.
+    listing = await _alibaba_top_call(
+        client,
+        "alibaba.icbu.product.list",
+        {"id": product_id, "current_page": 1, "page_size": 30, "language": "ENGLISH"},
+    )
+    result = listing.get("result", {}) if isinstance(listing, dict) else {}
+    products = result.get("products", []) if isinstance(result, dict) else []
+    if isinstance(products, dict):
+        products = products.get("alibaba_product_brief_response", [])
+    obfuscated_id = next(
+        (
+            str(item.get("product_id"))
+            for item in products
+            if isinstance(item, dict) and item.get("product_id")
+        ),
+        None,
+    )
+    if not obfuscated_id:
+        raise HTTPException(status_code=502, detail="Alibaba 未返回评分所需的混淆商品 ID")
+    return await _alibaba_top_call(
+        client,
+        OPERATIONS["product_score"].operation,
+        {"product_id": obfuscated_id},
+    )
 
 
 @router.get("/alibaba/products/{product_id}/inventory")

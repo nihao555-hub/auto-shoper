@@ -81,7 +81,7 @@ OPERATIONS = {
     ),
     "product_score": AlibabaOperation(
         key="product_score",
-        operation="/icbu/product/score/get",
+        operation="alibaba.icbu.product.score.get",
         purpose="查询商品质量分",
         safety="可自动执行",
     ),
