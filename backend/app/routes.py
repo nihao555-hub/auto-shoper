@@ -87,6 +87,7 @@ from backend.app.models import (
     SchemaGuidanceResult,
     SchemaParseRequest,
     SchemaParseResult,
+    SchemaValidationIssue,
     WorkbenchSnapshotRequest,
     WorkbenchSnapshotResult,
 )
@@ -100,6 +101,7 @@ from backend.app.services.categories import (
 from backend.app.services.field_policy import (
     effective_listing_fields,
     get_listing_field,
+    listing_quality_errors,
     validate_product_fields,
 )
 from backend.app.services.field_tasks import (
@@ -1846,7 +1848,19 @@ def _prepare_official_listing(
         invalid_defaults.append("category_id")
     values = _schema_values(parsed.fields, effective)
     schema = build_schema_xml(request.schema_data, values)
-    ready = validation.ready_to_publish and not category_mismatch and schema.ready_to_submit
+    quality_errors = listing_quality_errors(effective)
+    quality_issues = [
+        SchemaValidationIssue(field=field, rule=rule, message=message)
+        for rule, message in quality_errors
+        for field in (["productTitle"] if rule == "title_attribute_conflict" else ["detailImage"])
+    ]
+    schema_errors = [*schema.errors, *quality_issues]
+    ready = (
+        validation.ready_to_publish
+        and not category_mismatch
+        and schema.ready_to_submit
+        and not quality_errors
+    )
     return OfficialListingPreparationResult(
         ready_to_publish=ready,
         ready_to_draft=ready,
@@ -1858,7 +1872,7 @@ def _prepare_official_listing(
         manual_confirmation_fields=manual_fields,
         checklist=build_official_checklist(effective, required_fields),
         xml=schema.xml if schema.ready_to_submit else None,
-        schema_errors=schema.errors,
+        schema_errors=schema_errors,
         schema_warnings=schema.warnings,
     )
 

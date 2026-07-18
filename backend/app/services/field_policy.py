@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from backend.app.models import (
@@ -277,6 +278,51 @@ def get_listing_field(
         if _compact_field_name(name) == target:
             return field
     return None
+
+
+def listing_quality_errors(fields: dict[str, DraftField]) -> list[tuple[str, str]]:
+    """Return hard blockers for Alibaba's title/attribute and image rules."""
+    title_field = next(
+        (field for name, field in fields.items() if _compact_field_name(name) in {"producttitle", "subject", "title"}),
+        None,
+    )
+    title = str(title_field.value or "").lower() if title_field else ""
+    errors: list[tuple[str, str]] = []
+
+    def token_value(tokens: tuple[str, ...]) -> str:
+        for name, field in fields.items():
+            compact = _compact_field_name(name)
+            if any(token in compact for token in tokens) and field.value not in (None, "", [], {}):
+                value = field.value
+                if isinstance(value, list):
+                    return " ".join(str(item) for item in value).lower()
+                return str(value).lower()
+        return ""
+
+    material = token_value(("material", "caizhi"))
+    if "cotton" in title and material and "cotton" not in material:
+        errors.append(("title_attribute_conflict", "标题包含 Cotton，但材质属性未包含 Cotton"))
+    sheets = re.search(r"(\d+)\s*sheets?", title)
+    pages = token_value(("innerpages", "pages", "yeshu", "zhangshu"))
+    if sheets and pages and sheets.group(1) not in pages:
+        errors.append(("title_attribute_conflict", f"标题包含 {sheets.group(1)} Sheets，但页数属性为 {pages}"))
+    size = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:in|inch|cm)", title)
+    size_value = token_value(("size", "chicun"))
+    if size and size_value and size.group(1) not in size_value and size.group(2) not in size_value:
+        errors.append(("title_attribute_conflict", "标题包含尺寸，但尺寸属性未匹配"))
+
+    detail = get_listing_field(fields, "detailImage")
+    # 只有阿里当前类目 Schema 返回了 detailImage 字段时才校验分类；
+    # 旧类目/兼容流程可能没有该字段，不能因为新规则破坏原有草稿流程。
+    if detail is not None:
+        groups = detail.value if isinstance(detail.value, list) else []
+        classified = any(
+            isinstance(group, dict) and str(group.get("gallery", "")) in {"200", "300"}
+            for group in groups
+        )
+        if not classified:
+            errors.append(("detail_image_classification", "详情图片必须标记为细节图或场景图"))
+    return errors
 
 
 def _field_or_descendant_present(
