@@ -702,7 +702,11 @@ const localizedDetailImageValue = (value: unknown, text: string): unknown => {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, item]) => [
         key,
-        key === "generalText" ? text : localizedDetailImageValue(item, text),
+        key === "generalText"
+          ? text
+          : key === "gallery" && String(item) === "350"
+            ? "200"
+            : localizedDetailImageValue(item, text),
       ]),
     );
   }

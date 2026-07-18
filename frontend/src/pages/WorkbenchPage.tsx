@@ -9112,6 +9112,8 @@ function getFactErrors(product: ProductRecord): string[] {
     errors.push(...getPriceModeErrors(product));
     errors.push(...getSemiManagedErrors(product));
     errors.push(...getComplianceErrors(product));
+    errors.push(...getTitleAttributeConsistencyErrors(product));
+    errors.push(...getDetailImageClassificationErrors(product));
     errors.push(
       ...product.images.flatMap((image) =>
         (image.qualityIssues ?? [])
@@ -9140,6 +9142,44 @@ function getFactErrors(product: ProductRecord): string[] {
     errors.push("商品标题缺失");
   }
   return errors;
+}
+
+function getTitleAttributeConsistencyErrors(product: ProductRecord): string[] {
+  const title = product.title.toLowerCase();
+  const fields = getAllSchemaFields(product);
+  const valueFor = (pattern: RegExp): string => {
+    const field = fields.find((item) => pattern.test(`${item.field} ${item.name ?? ""}`.toLowerCase()));
+    return field ? schemaScalarText(getSchemaFieldValue(product, field)).toLowerCase() : "";
+  };
+  const errors: string[] = [];
+  const material = valueFor(/material|材质/);
+  if (title.includes("cotton") && material && !material.includes("cotton")) {
+    errors.push("标题包含 Cotton，但材质属性未包含 Cotton，请统一标题与属性");
+  }
+  const sheets = title.match(/(\d+)\s*sheets?/i)?.[1];
+  const pages = valueFor(/inner.?pages|pages|页数|张数/);
+  if (sheets && pages && !pages.includes(sheets)) {
+    errors.push(`标题包含 ${sheets} Sheets，但页数属性为“${pages}”，请统一标题与属性`);
+  }
+  const size = title.match(/(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(in|inch|cm)/i);
+  const sizeValue = valueFor(/(^|[.])size|尺寸/);
+  if (size && sizeValue && !sizeValue.includes(size[1]) && !sizeValue.includes(size[2])) {
+    errors.push("标题包含尺寸，但尺寸属性未匹配，请统一标题与属性");
+  }
+  return errors;
+}
+
+function getDetailImageClassificationErrors(product: ProductRecord): string[] {
+  const detailField = product.schemaFields?.detailImage?.value;
+  if (!Array.isArray(detailField) || detailField.length === 0) {
+    return ["详情图片尚未配置，请至少选择一组详情图"]; 
+  }
+  const classified = detailField.some((group) => {
+    if (!group || typeof group !== "object") return false;
+    const gallery = String((group as Record<string, unknown>).gallery ?? "");
+    return gallery === "200" || gallery === "300";
+  });
+  return classified ? [] : ["详情图片尚未选择图片类型，请标记为细节图或场景图"]; 
 }
 
 function getSkuErrors(product: ProductRecord): string[] {
@@ -9806,7 +9846,9 @@ function schemaImageValue(field: SchemaFieldGuidance, product: ProductRecord): u
   if (text.includes("detailimage")) {
     return [
       {
-        gallery: "350",
+        // Alibaba detailImage gallery: 200=Detail shot, 300=Scene image.
+        // Use Detail shot by default so the platform does not treat the group as “Other product images”.
+        gallery: "200",
         images: images.map((image) => ({
           imageURL: image.url,
           generalText: product.title,
