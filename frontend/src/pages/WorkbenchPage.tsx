@@ -2867,6 +2867,7 @@ export function WorkbenchPage({
               imagePlanBusy={imagePlanBusy}
               onRefreshImagePlan={() => void refreshImagePlan()}
               onOpenImageInputs={() => {
+                setMaxUnlockedStep((current) => Math.max(current, 2));
                 setStep(2);
                 setInspectorOpen(true);
               }}
@@ -5580,6 +5581,9 @@ function WbInspector({
   const supportsMainVideo = allSchemaFields.some(isMainVideoSchemaField);
   const supportsDetailVideo = allSchemaFields.some(isDetailVideoSchemaField);
   const requiredSchemaFields = getRequiredSchemaFields(product);
+  const userRequiredSchemaFields = requiredSchemaFields.filter(
+    (field) => !isImageSchemaField(field),
+  );
   const requiredSchemaFieldIds = new Set(product.schemaGuidance?.required_field_ids ?? []);
   const taskByField = new Map((product.fieldTasks ?? []).map((task) => [task.field_path, task]));
   const responsibilityCounts = {
@@ -5617,12 +5621,29 @@ function WbInspector({
     }
     return true;
   });
-  const repeatableGroupEntries = [...repeatableGroups.entries()];
-  const primarySchemaFields = inputSchemaFields.filter((field) =>
-    requiredSchemaFieldIds.has(field.field),
+  const repeatableGroupEntries = [...repeatableGroups.entries()].filter(([, fields]) => {
+    // 图片详情 Schema 由“商品图片 / AI 智能套图”统一管理，不向用户暴露
+    // detailImage、gallery、images、imageURL、generalText 等底层组结构。
+    if (fields.length > 0 && fields.every(isImageSchemaField)) {
+      return false;
+    }
+    const internalOnly = fields.length > 0 && fields.every(isInternalLogisticsField);
+    return !internalOnly || fields.some((field) => hasRepeatableSchemaFieldValue(product, field));
+  });
+  const primarySchemaFields = inputSchemaFields.filter(
+    (field) => requiredSchemaFieldIds.has(field.field) && isUserVisibleSchemaField(field, product),
   );
   const advancedSchemaFields = inputSchemaFields.filter(
-    (field) => !requiredSchemaFieldIds.has(field.field),
+    (field) =>
+      !requiredSchemaFieldIds.has(field.field) &&
+      isUserVisibleSchemaField(field, product) &&
+      (!isInternalLogisticsField(field) || hasSchemaValue(getSchemaFieldValue(product, field))),
+  );
+  const conditionalSchemaFields = advancedSchemaFields.filter(
+    (field) => Boolean(field.conditional_disable?.length),
+  );
+  const optionalSchemaFieldsForDisplay = advancedSchemaFields.filter(
+    (field) => !field.conditional_disable?.length,
   );
   const primaryRepeatableGroups = repeatableGroupEntries.filter(([groupPath]) =>
     requiredSchemaFieldIds.has(groupPath),
@@ -5630,7 +5651,19 @@ function WbInspector({
   const advancedRepeatableGroups = repeatableGroupEntries.filter(
     ([groupPath]) => !requiredSchemaFieldIds.has(groupPath),
   );
-  const missingRequiredSchemaCount = requiredSchemaFields.filter((field) =>
+  const displayPrimaryRepeatableGroups = primaryRepeatableGroups
+    .map(([groupPath, fields]) => [
+      groupPath,
+      fields.filter((field) => isUserVisibleSchemaField(field, product)),
+    ] as [string, SchemaFieldGuidance[]])
+    .filter(([, fields]) => fields.length > 0);
+  const displayAdvancedRepeatableGroups = advancedRepeatableGroups
+    .map(([groupPath, fields]) => [
+      groupPath,
+      fields.filter((field) => isUserVisibleSchemaField(field, product)),
+    ] as [string, SchemaFieldGuidance[]])
+    .filter(([, fields]) => fields.length > 0);
+  const missingRequiredSchemaCount = userRequiredSchemaFields.filter((field) =>
     field.repeatable_group || field.repeatable_groups?.length
       ? !hasRepeatableSchemaFieldValue(product, field)
       : !hasSchemaValue(getSchemaFieldValue(product, field)),
@@ -5649,8 +5682,8 @@ function WbInspector({
   );
   const directMissingCount =
     missingEssentialSchemaFields.length + missingEssentialRepeatableGroups.length;
-  const optionalSchemaFields = advancedSchemaFields.filter(
-    (field) => !isSchemaFieldDisabled(product, field),
+  const optionalSchemaFields = optionalSchemaFieldsForDisplay.filter((field) =>
+    isUserVisibleSchemaField(field, product),
   );
   const missingOptionalSchemaFields = optionalSchemaFields.filter(
     (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
@@ -5792,7 +5825,7 @@ function WbInspector({
                 {directMissingCount ? `待填 ${directMissingCount} 项` : "已完成"}
               </span>
             </div>
-            {renderRepeatableGroups(primaryRepeatableGroups)}
+            {renderRepeatableGroups(displayPrimaryRepeatableGroups)}
             {renderSchemaFields(essentialSchemaFields, "essential")}
           </section>
         ) : null}
@@ -6526,7 +6559,7 @@ function WbInspector({
           <section className="wb-inspector-section wb-schema-required">
             <div className="wb-schema-heading">
               <h3>
-                当前类目必填（{requiredSchemaFields.length}，待填 {missingRequiredSchemaCount}）
+                当前类目必填（{userRequiredSchemaFields.length}，待填 {missingRequiredSchemaCount}）
               </h3>
             </div>
             {missingRequiredSchemaCount === 0 ? (
@@ -6545,7 +6578,7 @@ function WbInspector({
                   项选填或条件字段
                 </summary>
                 <div className="wb-schema-optional-summary">
-                  <strong>建议完善但不阻碍上品</strong>
+                  <strong>第二区 / 第三区：按条件显示或选填</strong>
                   <span>
                     {missingOptionalSchemaFields.length === 0
                       ? "当前类目的可选字段已处理"
@@ -6562,7 +6595,14 @@ function WbInspector({
                     </span>
                   ) : null}
                 </div>
-                <details className="wb-schema-matrix">
+                {conditionalSchemaFields.length ? (
+                  <section className="wb-field-group wb-field-group-conditional">
+                    <h4>第二区：条件必填信息</h4>
+                    <p className="wb-schema-policy">仅在当前价格模式、经营模式或物流设置触发时填写。</p>
+                    {renderSchemaFields(conditionalSchemaFields, "conditional")}
+                  </section>
+                ) : null}
+                <details className="wb-schema-matrix" hidden>
                   <summary>
                     查看全部 {allSchemaFields.length} 个字段与责任（必填{" "}
                     {requiredSchemaFields.length}）
@@ -6619,8 +6659,12 @@ function WbInspector({
                       })}
                   </div>
                 </details>
-                {renderRepeatableGroups(advancedRepeatableGroups)}
-                {renderSchemaFields(advancedSchemaFields, "advanced")}
+                <section className="wb-field-group wb-field-group-optional">
+                  <h4>第三区：类目非必填信息</h4>
+                  <p className="wb-schema-policy">完善后有助于提升商品质量，但不会阻碍创建草稿。</p>
+                  {renderRepeatableGroups(displayAdvancedRepeatableGroups)}
+                  {renderSchemaFields(optionalSchemaFieldsForDisplay, "optional")}
+                </section>
               </details>
             ) : null}
             <p className="wb-schema-note">
@@ -7606,7 +7650,7 @@ function BoxPackagingControl({
                   )
                 }
               />
-              <span>{option.display_name || option.value}</span>
+              <span>{translateSchemaOptionLabel(option.display_name || option.value)}</span>
             </label>
             {current ? (
               <div className="wb-field wb-field-split">
@@ -7703,6 +7747,9 @@ function SchemaAttributedValueControl({
   const source = multiple ? (Array.isArray(value) ? value : []) : [value];
   const rows = (source.length ? source : [""]).map(schemaAttributedValue);
   const valueAttributes = field.value_attributes ?? [];
+  const visibleValueAttributes = valueAttributes.filter(
+    (attribute) => !isInternalSchemaValueAttribute(attribute),
+  );
   const update = (index: number, next: { value: string; attributes: Record<string, string> }) => {
     const nextRows = rows.map((row, rowIndex) => (rowIndex === index ? next : row));
     onChange(multiple ? nextRows.filter((row) => row.value) : nextRows[0]);
@@ -7728,7 +7775,7 @@ function SchemaAttributedValueControl({
               <option value="">请选择</option>
               {field.options.map((option) => (
                 <option key={option.value} value={option.value} disabled={option.valid === false}>
-                  {option.display_name || option.value}
+                  {translateSchemaOptionLabel(option.display_name || option.value)}
                 </option>
               ))}
             </select>
@@ -7742,7 +7789,7 @@ function SchemaAttributedValueControl({
             />
           )}
           <div className="wb-schema-attributes">
-            {valueAttributes.map((attribute) => (
+            {visibleValueAttributes.map((attribute) => (
               <label key={attribute}>
                 <span>Alibaba 值属性：{attribute}</span>
                 <input
@@ -9576,6 +9623,12 @@ function translateSchemaText(value: string): string {
     "shipping template": "运费模板",
     "commodity code": "商品编码",
     "supply id": "供应商货号",
+    "logisticssku.skuld": "物流 SKU 编码",
+    "logisticssku.weight": "物流包装重量（kg）",
+    "sku long": "SKU 长度（cm）",
+    "sku wide": "SKU 宽度（cm）",
+    "sku high": "SKU 高度（cm）",
+    "box gauge sku": "箱规 SKU",
     "product specification component": "商品规格组合",
     "quantity price": "阶梯价格",
     "quantity": "数量",
@@ -9590,7 +9643,23 @@ function translateSchemaText(value: string): string {
 }
 
 function translateSchemaOptionLabel(value: string): string {
-  const normalized = value.trim().toLowerCase();
+  const raw = value.trim();
+  // Alibaba 箱规/ SKU 选项有时直接返回内部串，统一转换为用户可读标签。
+  if (raw.includes("id:") && raw.includes("name:")) {
+    const parts = Object.fromEntries(
+      raw.split(";").map((item) => {
+        const index = item.indexOf(":");
+        return index > -1 ? [item.slice(0, index).trim().toLowerCase(), item.slice(index + 1).trim()] : ["", ""];
+      }),
+    );
+    const name = parts.name || "未命名规格";
+    const dimensions = [parts.length, parts.width, parts.height]
+      .filter(Boolean)
+      .join(" × ");
+    const weight = parts.weight ? ` · ${parts.weight} kg` : "";
+    return dimensions ? `${name}（${dimensions} cm${weight}）` : name;
+  }
+  const normalized = raw.toLowerCase();
   const labels: Record<string, string> = {
     other: "其他",
     paper: "纸质",
@@ -9606,7 +9675,7 @@ function translateSchemaOptionLabel(value: string): string {
     "range pricing": "FOB 区间报价",
     "merchant_own_template": "商家自有运费模板",
   };
-  return labels[normalized] ?? value;
+  return labels[normalized] ?? raw;
 }
 
 function schemaFieldSearchText(field: SchemaFieldGuidance): string {
@@ -9763,15 +9832,52 @@ function isBoxPackagingField(field: SchemaFieldGuidance): boolean {
   return schemaFieldSearchText(field).includes("boxpackaging");
 }
 
+function isInternalLogisticsField(field: SchemaFieldGuidance): boolean {
+  const text = schemaFieldSearchText(field);
+  return (
+    text.includes("logisticssku") ||
+    text.includes("skulong") ||
+    text.includes("skuwide") ||
+    text.includes("skuhigh") ||
+    text.includes("boxgaugesku")
+  );
+}
+
 function isImageSchemaField(field: SchemaFieldGuidance): boolean {
   const text = schemaFieldSearchText(field);
   return (
     text.includes("scimages") ||
     text.includes("detailimage") ||
+    text.includes("gallery") ||
+    text.includes("imageurl") ||
+    text.includes("generaltext") ||
+    text.includes("images") ||
     text.includes("productimage") ||
     text.includes("产品图片") ||
     text.includes("商品图片")
   );
+}
+
+function isInternalSchemaValueAttribute(attribute: string): boolean {
+  const normalized = attribute.trim().toLowerCase();
+  return ["inputvalue", "img", "remark", "srcvalue", "warehousecode"].includes(normalized);
+}
+
+function isUserVisibleSchemaField(field: SchemaFieldGuidance, product: ProductRecord): boolean {
+  if (field.supported === false || isSchemaFieldDisabled(product, field)) {
+    return false;
+  }
+  if (isImageSchemaField(field) || isTitleSchemaField(field) || isVideoSchemaField(field)) {
+    return false;
+  }
+  if (field.responsibility !== "merchant") {
+    return false;
+  }
+  const text = schemaFieldSearchText(field);
+  if (["inputvalue", "srcvalue", "warehousecode", "logisticssku", "boxgaugesku"].some((token) => text.includes(token))) {
+    return false;
+  }
+  return true;
 }
 
 function hasSchemaValue(value: unknown): boolean {

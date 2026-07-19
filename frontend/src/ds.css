@@ -2638,6 +2638,30 @@ tr.is-failed .bt-store small {
   background: var(--ds-surface-muted);
 }
 
+/* 必填信息与生图输入需要足够宽度，独立成全屏编辑视图，避免在右侧窄栏中误操作。 */
+.wb-page.has-inspector .wb-inspector {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  width: 100vw;
+  height: 100vh;
+  border-left: 0;
+  background: var(--ds-surface-muted);
+  box-shadow: 0 18px 60px rgb(20 24 32 / 18%);
+}
+
+.wb-page.has-inspector .wb-inspector-header {
+  padding: 18px max(28px, calc((100vw - 1120px) / 2));
+}
+
+.wb-page.has-inspector .wb-inspector-scroll {
+  box-sizing: border-box;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 24px 32px 72px;
+  gap: 12px;
+}
+
 .wb-inspector-header {
   display: flex;
   align-items: center;
