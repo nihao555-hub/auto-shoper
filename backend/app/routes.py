@@ -78,6 +78,7 @@ from backend.app.models import (
     ProductImageCandidate,
     ProductImageGenerationRequest,
     ProductImageGenerationResponse,
+    ProductImageGenerationTaskResponse,
     ProductImagePlanResponse,
     ProductValidationRequest,
     ProductValidationResult,
@@ -139,6 +140,9 @@ from backend.app.services.schema_values import (
 )
 
 router = APIRouter(prefix="/api/v1")
+
+# 生图任务在后台串行执行，避免用户等待或一次请求触发多个高负载任务。
+_image_generation_tasks: dict[str, ProductImageGenerationTaskResponse] = {}
 logger = logging.getLogger(__name__)
 
 
@@ -1659,7 +1663,7 @@ async def plan_product_images(
 
 @router.post(
     "/products/{product_id}/generate-images",
-    response_model=ProductImageGenerationResponse,
+    response_model=ProductImageGenerationTaskResponse,
 )
 async def generate_product_images(
     product_id: str,
@@ -1667,7 +1671,7 @@ async def generate_product_images(
     request: Annotated[str, Form(...)],
     references: Annotated[list[UploadFile] | None, File()] = None,
     reference: Annotated[UploadFile | None, File()] = None,
-) -> ProductImageGenerationResponse:
+) -> ProductImageGenerationTaskResponse:
     try:
         parsed = ProductImageGenerationRequest.model_validate_json(request)
     except ValueError as exc:
@@ -1701,7 +1705,7 @@ async def generate_product_images(
     existing_slots = set(parsed.existing_slots)
     slots = [slot for slot in resolve_slots(parsed.slots) if slot not in existing_slots]
 
-    async def generate_slot(slot: ImageSlot) -> ProductImageCandidate:
+    async def generate_slot(slot: ImageSlot, image_client: AIClient) -> ProductImageCandidate:
         template = SLOT_TEMPLATES[slot]
         plan = build_slot_plan(template, parsed)
         if not plan.can_generate:
@@ -1714,7 +1718,7 @@ async def generate_product_images(
                 error=f"缺少生成所需信息：{missing_labels}，请先补齐后再生成。",
             )
         try:
-            result = await ai_client.edit_product_image(
+            result = await image_client.edit_product_image(
                 reference_payloads,
                 build_slot_prompt(template, parsed),
                 "1024x1024",
@@ -1736,10 +1740,44 @@ async def generate_product_images(
         except (AIProviderError, HTTPError, ValueError, TypeError) as exc:
             return ProductImageCandidate(slot=slot, label=template.label, error=str(exc))
 
-    # Image providers are substantially more capacity-sensitive than text APIs. Generate
-    # slots sequentially to avoid a merchant action creating a burst of large edit jobs.
-    candidates = [await generate_slot(slot) for slot in slots]
-    return ProductImageGenerationResponse(product_id=product_id, candidates=list(candidates))
+    task_id = uuid4().hex
+    task = ProductImageGenerationTaskResponse(task_id=task_id, product_id=product_id, status="queued")
+    _image_generation_tasks[task_id] = task
+
+    async def run_task() -> None:
+        _image_generation_tasks[task_id] = task.model_copy(update={"status": "running"})
+        image_client: AIClient | None = None
+        try:
+            # 图片服务容量敏感，按图种串行执行，避免一次操作制造并发高峰。
+            # 请求级依赖会在接口返回后关闭，因此生产环境后台任务必须拥有独立客户端。
+            # 测试替身则沿用注入客户端，避免破坏可控的接口测试。
+            image_client = ai_client if type(ai_client) is not AIClient else AIClient(get_settings())
+            candidates = [await generate_slot(slot, image_client) for slot in slots]
+            _image_generation_tasks[task_id] = task.model_copy(
+                update={"status": "completed", "candidates": list(candidates)}
+            )
+        except Exception as exc:  # 后台任务不能让异常丢失，前端可见且可重试
+            logging.exception("image generation task failed: %s", task_id)
+            _image_generation_tasks[task_id] = task.model_copy(
+                update={"status": "failed", "error": str(exc)}
+            )
+        finally:
+            if image_client is not None:
+                await image_client.close()
+
+    asyncio.create_task(run_task())
+    return task
+
+
+@router.get(
+    "/products/{product_id}/generate-images/{task_id}",
+    response_model=ProductImageGenerationTaskResponse,
+)
+async def get_product_image_generation_task(product_id: str, task_id: str) -> ProductImageGenerationTaskResponse:
+    task = _image_generation_tasks.get(task_id)
+    if task is None or task.product_id != product_id:
+        raise HTTPException(status_code=404, detail="找不到该生图任务")
+    return task
 
 
 @router.post("/images/generate-from-product")

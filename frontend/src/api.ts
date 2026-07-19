@@ -20,7 +20,7 @@ import type {
   ListingMetrics,
   ListingTemplate,
   ProductContentTranslationResponse,
-  ProductImageGenerationResponse,
+  ProductImageGenerationTaskResponse,
   ProductImagePlanResponse,
   ProductRecord,
   PublishJobStatus,
@@ -282,19 +282,29 @@ export const generateProductImages = async (
   product: ProductRecord,
   references: File[],
   options?: ProductImageOptions,
-): Promise<ProductImageGenerationResponse> => {
+): Promise<ProductImageGenerationTaskResponse> => {
   const body = new FormData();
   for (const reference of references) {
     body.append("references", reference);
   }
   body.append("request", JSON.stringify(buildImageRequestPayload(product, options)));
-  return parseResponse<ProductImageGenerationResponse>(
+  return parseResponse<ProductImageGenerationTaskResponse>(
     await apiFetch(`${API_ROOT}/products/${encodeURIComponent(product.id)}/generate-images`, {
       method: "POST",
       body,
     }),
   );
 };
+
+export const getProductImageGenerationTask = async (
+  productId: string,
+  taskId: string,
+): Promise<ProductImageGenerationTaskResponse> =>
+  parseResponse<ProductImageGenerationTaskResponse>(
+    await apiFetch(
+      `${API_ROOT}/products/${encodeURIComponent(productId)}/generate-images/${encodeURIComponent(taskId)}`,
+    ),
+  );
 
 export const uploadPhotoBankImage = async (
   file: File,
@@ -709,7 +719,7 @@ const localizedDetailImageValue = (value: unknown, text: string): unknown => {
         key === "generalText"
           ? text
           : key === "gallery" && String(item) === "350"
-            ? "200"
+            ? "300"
             : localizedDetailImageValue(item, text),
       ]),
     );

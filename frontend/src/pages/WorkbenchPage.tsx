@@ -57,6 +57,7 @@ import {
   findPhotoBankUrl,
   findSchemaData,
   generateProductImages,
+  getProductImageGenerationTask,
   getBatchPublishStatus,
   getAsyncFieldOptions,
   getCategoryPublishCapabilities,
@@ -507,6 +508,11 @@ export function WorkbenchPage({
   const [targetLanguageCode, setTargetLanguageCode] = useState("");
   const [translationBusy, setTranslationBusy] = useState(false);
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false);
+  const [imageGenerationTask, setImageGenerationTask] = useState<{
+    productId: string;
+    taskId: string;
+    status: "queued" | "running" | "completed" | "failed";
+  } | null>(null);
   const [imageCandidates, setImageCandidates] = useState<ProductImageCandidate[]>([]);
   const [imagePlan, setImagePlan] = useState<ImageSlotPlan[]>([]);
   const [imagePlanBusy, setImagePlanBusy] = useState(false);
@@ -1567,7 +1573,7 @@ export function WorkbenchPage({
 
   useEffect(() => {
     if (
-      step !== 2 ||
+      (step !== 1 && step !== 2) ||
       !activeProduct ||
       activeProduct.isDemo ||
       plannedImageProductsRef.current.has(activeProduct.id)
@@ -1577,6 +1583,55 @@ export function WorkbenchPage({
     plannedImageProductsRef.current.add(activeProduct.id);
     void refreshImagePlan();
   }, [activeProduct, refreshImagePlan, step]);
+
+  // 生图在后台执行，用户可继续填写类目和交易资料；仅在任务完成时回填候选图。
+  useEffect(() => {
+    if (!imageGenerationTask || imageGenerationTask.productId !== activeProduct?.id) {
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const result = await getProductImageGenerationTask(
+          imageGenerationTask.productId,
+          imageGenerationTask.taskId,
+        );
+        if (cancelled) return;
+        setImageGenerationTask({
+          productId: result.product_id,
+          taskId: result.task_id,
+          status: result.status,
+        });
+        if (result.status === "completed") {
+          setImageCandidates(result.candidates);
+          setImageGenerationBusy(false);
+          const successCount = result.candidates.filter((candidate) => candidate.image_url).length;
+          notify(
+            successCount ? "success" : "error",
+            successCount ? "候选图片已生成" : "生图未返回图片",
+            successCount ? `${successCount} 个图种已生成，请确认后加入图库。` : "可稍后重试或使用人工上传。",
+          );
+          setImageGenerationTask(null);
+        } else if (result.status === "failed") {
+          setImageGenerationBusy(false);
+          notify("error", "生图任务失败", result.error || "可稍后重试或使用人工上传。");
+          setImageGenerationTask(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setImageGenerationBusy(false);
+          notify("error", "生图状态读取失败", error instanceof Error ? error.message : "请稍后重试。");
+          setImageGenerationTask(null);
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeProduct?.id, getProductImageGenerationTask, imageGenerationTask, notify]);
 
   const updateImageInput = (key: string, value: string) => {
     setProvidedImageInputs((current) => ({ ...current, [key]: value }));
@@ -1624,15 +1679,13 @@ export function WorkbenchPage({
         existingSlots: addedImageSlots,
         userInputs: providedImageInputs,
       });
-      setImageCandidates(response.candidates);
-      const successCount = response.candidates.filter((candidate) => candidate.image_url).length;
-      notify(
-        successCount ? "success" : "error",
-        successCount ? "候选图片已生成" : "生图未返回图片",
-        successCount
-          ? `${successCount} 个图种返回候选，确认后可逐个加入图库。`
-          : "请检查失败图种的原因后重试。",
-      );
+      setImageGenerationTask({
+        productId: response.product_id,
+        taskId: response.task_id,
+        status: response.status,
+      });
+      notify("info", "生图任务已开始", "你可以继续填写商品资料，生成完成后系统会提醒你确认。 ");
+      setImageGenerationBusy(false);
     } catch (error) {
       notify("error", "生图请求失败", error instanceof Error ? error.message : "请稍后重试。");
     } finally {
@@ -2188,6 +2241,17 @@ export function WorkbenchPage({
         (product.stage === "error" && Boolean(product.draftProductId)),
     );
     if (!publishConfirmed || !targets.length || !translationComplete) {
+      return;
+    }
+    if (
+      imageGenerationTask &&
+      targets.some((product) => product.id === imageGenerationTask.productId)
+    ) {
+      notify(
+        "warning",
+        "图片补齐任务尚未完成",
+        "系统正在后台生成候选图，请稍后确认；如该图片不是阿里必填项，也可以返回商品资料选择人工图片。",
+      );
       return;
     }
     if (targets.some((product) => !product.isDemo) && blockForTemplate()) {
@@ -2798,7 +2862,15 @@ export function WorkbenchPage({
               onMainImageChange={setMainImage}
               imageCandidates={imageCandidates}
               imageGenerationBusy={imageGenerationBusy}
-              onGenerateImages={() => void generateImagesForProduct()}
+              imageGenerationTaskStatus={imageGenerationTask?.status ?? null}
+              imagePlan={imagePlan}
+              imagePlanBusy={imagePlanBusy}
+              onRefreshImagePlan={() => void refreshImagePlan()}
+              onOpenImageInputs={() => {
+                setStep(2);
+                setInspectorOpen(true);
+              }}
+              onGenerateImages={(slots) => void generateImagesForProduct(slots)}
               onAddGeneratedImage={addGeneratedImage}
               onAddGeneratedImages={() => addGeneratedImages(imageCandidates)}
             />
@@ -3716,6 +3788,11 @@ function AiStep({
   onMainImageChange,
   imageCandidates,
   imageGenerationBusy,
+  imageGenerationTaskStatus,
+  imagePlan,
+  imagePlanBusy,
+  onRefreshImagePlan,
+  onOpenImageInputs,
   onGenerateImages,
   onAddGeneratedImage,
   onAddGeneratedImages,
@@ -3730,7 +3807,12 @@ function AiStep({
   onMainImageChange: (productId: string, imageId: string) => void;
   imageCandidates: ProductImageCandidate[];
   imageGenerationBusy: boolean;
-  onGenerateImages: () => void;
+  imageGenerationTaskStatus: "queued" | "running" | "completed" | "failed" | null;
+  imagePlan: ImageSlotPlan[];
+  imagePlanBusy: boolean;
+  onRefreshImagePlan: () => void;
+  onOpenImageInputs: () => void;
+  onGenerateImages: (slots?: ImageSlot[]) => void;
   onAddGeneratedImage: (candidate: ProductImageCandidate) => void;
   onAddGeneratedImages: () => void;
 }) {
@@ -3897,7 +3979,7 @@ function AiStep({
                         <button
                           type="button"
                           className="button button-secondary"
-                          onClick={onGenerateImages}
+                          onClick={() => onGenerateImages()}
                           disabled={imageGenerationBusy}
                         >
                           {imageGenerationBusy ? (
@@ -3921,6 +4003,58 @@ function AiStep({
                           加入全部成功图
                         </button>
                       </div>
+                    </div>
+                    {imageGenerationTaskStatus ? (
+                      <div className="wb-image-task-status" role="status">
+                        <CircleNotch size={15} className="spin" />
+                        {imageGenerationTaskStatus === "queued"
+                          ? "图片补齐任务已排队，您可以继续填写资料"
+                          : "图片补齐任务进行中，完成后会提示确认"}
+                      </div>
+                    ) : null}
+                    <div className="wb-image-gap-panel">
+                      <div>
+                        <strong>图片完整度检查</strong>
+                        <span>
+                          {imagePlan.length
+                            ? `系统发现 ${imagePlan.length} 类图片可补齐；是否生成由你确认。`
+                            : "上传图片后，点击检查即可知道还缺哪些图片。"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={onRefreshImagePlan}
+                        disabled={imagePlanBusy}
+                      >
+                        {imagePlanBusy ? "检查中" : "检查图片缺口"}
+                      </button>
+                      {imagePlan.length ? (
+                        <div className="wb-image-gap-list">
+                          {imagePlan.map((slot) => (
+                            <div key={slot.slot} className="wb-image-gap-item">
+                              <span>
+                                <b>{slot.label}</b>
+                                <small>{slot.missing_user_inputs.length ? "需要先填写真实信息" : slot.purpose}</small>
+                              </span>
+                              {slot.missing_user_inputs.length ? (
+                                <button type="button" className="wb-link" onClick={onOpenImageInputs}>
+                                  填写信息
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="wb-link"
+                                  onClick={() => onGenerateImages([slot.slot])}
+                                  disabled={imageGenerationBusy || Boolean(imageGenerationTaskStatus)}
+                                >
+                                  确认生成
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                     {imageCandidates.length ? (
                       <div className="ai-image-candidate-grid">
@@ -3968,7 +4102,7 @@ function AiStep({
                       <button
                         type="button"
                         className="ai-image-empty"
-                        onClick={onGenerateImages}
+                        onClick={() => onGenerateImages()}
                         disabled={imageGenerationBusy}
                       >
                         <MagicWand size={20} />
@@ -5515,6 +5649,18 @@ function WbInspector({
   );
   const directMissingCount =
     missingEssentialSchemaFields.length + missingEssentialRepeatableGroups.length;
+  const optionalSchemaFields = advancedSchemaFields.filter(
+    (field) => !isSchemaFieldDisabled(product, field),
+  );
+  const missingOptionalSchemaFields = optionalSchemaFields.filter(
+    (field) => !hasSchemaValue(getSchemaFieldValue(product, field)),
+  );
+  const missingOptionalAiFields = missingOptionalSchemaFields.filter(
+    (field) => field.responsibility === "ai_candidate",
+  );
+  const missingOptionalHumanFields = missingOptionalSchemaFields.filter(
+    (field) => field.responsibility !== "ai_candidate",
+  );
 
   const renderRepeatableGroups = (entries: Array<[string, SchemaFieldGuidance[]]>) =>
     entries.map(([groupPath, fields]) => (
@@ -6390,11 +6536,32 @@ function WbInspector({
               </div>
             ) : null}
             {advancedSchemaFields.length || advancedRepeatableGroups.length ? (
-              <details className="wb-inspector-optional wb-schema-advanced">
+              <details
+                className="wb-inspector-optional wb-schema-advanced"
+                open={missingOptionalSchemaFields.length > 0}
+              >
                 <summary>
                   高级编辑：{advancedSchemaFields.length + advancedRepeatableGroups.length}
                   项选填或条件字段
                 </summary>
+                <div className="wb-schema-optional-summary">
+                  <strong>建议完善但不阻碍上品</strong>
+                  <span>
+                    {missingOptionalSchemaFields.length === 0
+                      ? "当前类目的可选字段已处理"
+                      : `还有 ${missingOptionalSchemaFields.length} 项未填写`}
+                  </span>
+                  {missingOptionalAiFields.length ? (
+                    <span className="is-ai_candidate">
+                      AI 可先给建议：{missingOptionalAiFields.length} 项，确认后即可使用
+                    </span>
+                  ) : null}
+                  {missingOptionalHumanFields.length ? (
+                    <span className="is-merchant">
+                      需要真实资料：{missingOptionalHumanFields.length} 项，可按需补充
+                    </span>
+                  ) : null}
+                </div>
                 <details className="wb-schema-matrix">
                   <summary>
                     查看全部 {allSchemaFields.length} 个字段与责任（必填{" "}
@@ -7038,7 +7205,7 @@ function MultiComplexRows({
             const inputId = `multi-${groupPath}-${rowIndex}-${field.field}`;
             return (
               <label key={field.field} htmlFor={inputId}>
-                <span>{field.name || relativePath.at(-1)}</span>
+                <span>{schemaFieldLabel(field) || translateSchemaText(relativePath.at(-1) ?? "")}</span>
                 {field.supported === false ? (
                   <span className="wb-schema-inline-error">
                     {field.support_message || "该字段暂时无法安全填写"}
@@ -7182,7 +7349,7 @@ function SchemaValueControl({
                 }
               />
               <span>
-                {option.display_name || option.value}
+                {translateSchemaOptionLabel(option.display_name || option.value)}
                 {option.valid === false ? "（当前不可用）" : ""}
               </span>
             </label>
@@ -7201,7 +7368,7 @@ function SchemaValueControl({
         <option value="">请选择</option>
         {field.options.map((option) => (
           <option key={option.value} value={option.value} disabled={option.valid === false}>
-            {option.display_name || option.value}
+            {translateSchemaOptionLabel(option.display_name || option.value)}
             {option.valid === false ? "（当前不可用）" : ""}
           </option>
         ))}
@@ -9359,8 +9526,9 @@ function getSemiManagedErrors(product: ProductRecord): string[] {
 }
 
 function schemaFieldLabel(field: SchemaFieldGuidance): string {
-  if (field.name?.trim()) {
-    return field.name.trim();
+  const raw = field.name?.trim() || "";
+  if (raw) {
+    return translateSchemaText(raw);
   }
   const text = schemaFieldSearchText(field);
   if (text.includes("fobrangemin")) {
@@ -9379,6 +9547,66 @@ function schemaFieldLabel(field: SchemaFieldGuidance): string {
     return "价格模式";
   }
   return field.field;
+}
+
+/** 将 Alibaba Schema 的英文展示名翻译成用户可理解的中文；提交值仍保留原始值。 */
+function translateSchemaText(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const labels: Record<string, string> = {
+    "place of origin": "产地",
+    "model number": "型号",
+    "brand name": "品牌",
+    "cover material": "封面材质",
+    "inner pages": "内页数量",
+    "painting paper type": "画纸类型",
+    "paper type": "纸张类型",
+    "color": "颜色",
+    "style": "风格",
+    "usage": "用途",
+    "binding": "装订方式",
+    "unit": "计量单位",
+    "sell product by": "销售计量方式",
+    "price setting": "价格模式",
+    "single piece price": "单件价格",
+    "single piece price (usd)": "单件价格（美元）",
+    "sample price (usd)": "样品价格（美元）",
+    "inventory": "库存",
+    "moq": "最小起订量",
+    "shipping method": "运费方式",
+    "shipping template": "运费模板",
+    "commodity code": "商品编码",
+    "supply id": "供应商货号",
+    "product specification component": "商品规格组合",
+    "quantity price": "阶梯价格",
+    "quantity": "数量",
+    "weight": "重量",
+    "volume and weight (including logistics packaging)": "体积和重量（含物流包装）",
+    "details of the picture": "商品图片",
+    "scene image": "场景图",
+    "detail shot": "细节图",
+    "other product images": "其他商品图片",
+  };
+  return labels[normalized] ?? value;
+}
+
+function translateSchemaOptionLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const labels: Record<string, string> = {
+    other: "其他",
+    paper: "纸质",
+    fabric: "布料",
+    leather: "皮革",
+    plastic: "塑料",
+    china: "中国",
+    unit: "按件",
+    sets: "套装",
+    "set/sets": "套/组",
+    "tiered pricing by quantity": "按数量阶梯定价",
+    "sku pricing": "SKU 分别定价",
+    "range pricing": "FOB 区间报价",
+    "merchant_own_template": "商家自有运费模板",
+  };
+  return labels[normalized] ?? value;
 }
 
 function schemaFieldSearchText(field: SchemaFieldGuidance): string {
@@ -9711,7 +9939,13 @@ function syncProductSchemaFields(product: ProductRecord, settings: StoreSettings
   for (const field of fieldsToSync.values()) {
     if (isImageSchemaField(field)) {
       const text = schemaFieldSearchText(field);
-      if (!text.includes("scimages") && hasSchemaValue(schemaFields[field.field]?.value)) {
+      const existingImageValue = schemaFields[field.field]?.value;
+      const keepExistingDetailImages =
+        text.includes("detailimage") && hasValidDetailImageValue(existingImageValue);
+      if (text.includes("scimages") && hasSchemaValue(existingImageValue)) {
+        continue;
+      }
+      if (text.includes("detailimage") && keepExistingDetailImages) {
         continue;
       }
       const imageValue = schemaImageValue(field, product);
@@ -9844,11 +10078,18 @@ function schemaImageValue(field: SchemaFieldGuidance, product: ProductRecord): u
     );
   }
   if (text.includes("detailimage")) {
+    const galleryField = getAllSchemaFields(product).find(
+      (candidate) => candidate.field.toLowerCase() === "detailimage.gallery",
+    );
+    const detailShot = galleryField?.options.find((option) =>
+      `${option.display_name ?? ""} ${option.attributes?.cnName ?? ""}`.toLowerCase().includes("detail"),
+    );
+    const gallery = detailShot?.value ?? "300";
     return [
       {
-        // Alibaba detailImage gallery: 200=Detail shot, 300=Scene image.
-        // Use Detail shot by default so the platform does not treat the group as “Other product images”.
-        gallery: "200",
+        // Alibaba detailImage gallery: 200=Scene image, 300=Detail shot.
+        // Use the live Schema's Detail shot option by default.
+        gallery,
         images: images.map((image) => ({
           imageURL: image.url,
           generalText: product.title,
@@ -9860,6 +10101,30 @@ function schemaImageValue(field: SchemaFieldGuidance, product: ProductRecord): u
     value: image.url,
     attributes: { fileId: image.fileId },
   }));
+}
+
+function hasValidDetailImageValue(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.length) {
+    return false;
+  }
+  return value.some((group) => {
+    if (!group || typeof group !== "object") {
+      return false;
+    }
+    const record = group as Record<string, unknown>;
+    const gallery = String(record.gallery ?? "");
+    const images = record.images;
+    return (
+      ["120", "200", "300", "350"].includes(gallery) &&
+      Array.isArray(images) &&
+      images.some(
+        (image) =>
+          image &&
+          typeof image === "object" &&
+          String((image as Record<string, unknown>).imageURL ?? "").trim().length > 0,
+      )
+    );
+  });
 }
 
 function factErrorLabel(key: keyof ProductRecord["facts"]): string {

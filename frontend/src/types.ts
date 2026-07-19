@@ -533,6 +533,14 @@ export type ProductImageGenerationResponse = {
   candidates: ProductImageCandidate[];
 };
 
+export type ProductImageGenerationTaskResponse = {
+  task_id: string;
+  product_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  candidates: ProductImageCandidate[];
+  error?: string | null;
+};
+
 export type ProductImagePlanResponse = {
   product_id: string;
   target_language: "en_US";

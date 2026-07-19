@@ -317,7 +317,13 @@ def listing_quality_errors(fields: dict[str, DraftField]) -> list[tuple[str, str
     if detail is not None:
         groups = detail.value if isinstance(detail.value, list) else []
         classified = any(
-            isinstance(group, dict) and str(group.get("gallery", "")) in {"200", "300"}
+            isinstance(group, dict)
+            and str(group.get("gallery", "")) in {"200", "300"}
+            and isinstance(group.get("images"), list)
+            and any(
+                isinstance(image, dict) and str(image.get("imageURL", "")).strip()
+                for image in group.get("images", [])
+            )
             for group in groups
         )
         if not classified:

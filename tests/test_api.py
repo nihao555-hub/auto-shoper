@@ -1,4 +1,5 @@
 import base64
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -540,6 +541,14 @@ def test_generate_product_images_uses_reference_image_to_image() -> None:
         )
         assert response.status_code == 200
         body = response.json()
+        assert body["status"] == "queued"
+        task_id = body["task_id"]
+        for _ in range(30):
+            body = client.get(f"/api/v1/products/p1/generate-images/{task_id}").json()
+            if body["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.01)
+        assert body["status"] == "completed"
         slots = [candidate["slot"] for candidate in body["candidates"]]
         assert slots == ["main", "detail"]
         assert all(candidate["requires_confirmation"] for candidate in body["candidates"])
@@ -566,6 +575,11 @@ def test_generate_product_images_accepts_single_reference_field() -> None:
             },
         )
         assert response.status_code == 200
+        task_id = response.json()["task_id"]
+        for _ in range(30):
+            if client.get(f"/api/v1/products/p1/generate-images/{task_id}").json()["status"] == "completed":
+                break
+            time.sleep(0.01)
         assert fake_ai.received_reference_count == 1
     finally:
         app.dependency_overrides.clear()
@@ -594,6 +608,11 @@ def test_generate_product_images_falls_back_to_primary_when_multi_disabled(
             },
         )
         assert response.status_code == 200
+        task_id = response.json()["task_id"]
+        for _ in range(30):
+            if client.get(f"/api/v1/products/p1/generate-images/{task_id}").json()["status"] == "completed":
+                break
+            time.sleep(0.01)
         # Two references uploaded, but only the primary one reaches the model.
         assert fake_ai.received_reference_count == 1
     finally:

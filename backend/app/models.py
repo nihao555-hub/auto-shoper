@@ -245,6 +245,14 @@ class ProductImageGenerationResponse(BaseModel):
     candidates: list[ProductImageCandidate]
 
 
+class ProductImageGenerationTaskResponse(BaseModel):
+    task_id: str
+    product_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    candidates: list[ProductImageCandidate] = Field(default_factory=list)
+    error: str | None = None
+
+
 class ProductImagePlanResponse(BaseModel):
     product_id: str
     target_language: Literal["en_US"] = "en_US"
