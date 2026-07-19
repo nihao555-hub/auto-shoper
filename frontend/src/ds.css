@@ -3724,6 +3724,23 @@ tr.is-failed .bt-store small {
   line-height: 1.4;
 }
 
+.wb-category-profile-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ds-info) 7%, var(--ds-surface));
+  color: var(--ds-text-2);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.wb-category-profile-note svg {
+  flex: 0 0 auto;
+  color: var(--ds-info);
+}
+
 .wb-category-picker {
   display: grid;
   gap: 7px;

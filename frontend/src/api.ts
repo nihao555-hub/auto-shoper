@@ -40,11 +40,13 @@ const API_ROOT = configuredApiRoot.startsWith("http")
 
 export class ApiError extends Error {
   status: number;
+  detail: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, detail?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -56,8 +58,10 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
     return (await response.json()) as T;
   }
   let detail = `请求失败 (${response.status})`;
+  let rawDetail: unknown;
   try {
     const payload = (await response.json()) as { detail?: string | { message?: string } };
+    rawDetail = payload.detail;
     if (typeof payload.detail === "string") {
       detail = payload.detail;
     } else if (payload.detail?.message) {
@@ -66,7 +70,7 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
   } catch {
     detail = response.statusText || detail;
   }
-  throw new ApiError(detail, response.status);
+  throw new ApiError(detail, response.status, rawDetail);
 };
 
 export const getCapabilities = async (): Promise<CapabilityResponse> =>
